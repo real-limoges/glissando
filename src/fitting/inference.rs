@@ -6,7 +6,7 @@ use ndarray::{Array1, Array2};
 use rand::rng;
 
 
-pub(crate) fn sample_posterior(
+pub fn sample_posterior(
     beta_hat: &Coefficients,
     v_beta: &CovarianceMatrix,
     n_samples: usize,

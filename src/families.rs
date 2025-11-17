@@ -86,7 +86,7 @@ impl Distribution for Gaussian {
             _ => panic!("Unknown parameter: {}", param),
         }
     }
-    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String,(f64,f64)> {
+    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<&'static str, (f64, f64)> {
         let mu = params["mu"];
         let sigma = params["sigma"];
         let sigma_sq = sigma.powi(2);

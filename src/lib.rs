@@ -1,3 +1,4 @@
+#![recursion_limit = "1024"]
 #![allow(dead_code, unused_variables, unused_imports)]
 mod error;
 mod fitting;
@@ -19,7 +20,7 @@ use families::Distribution;
 use ndarray::{Array, Array1};
 use polars::prelude::{DataFrame, PolarsError};
 use std::collections::HashMap;
-use crate::fitting::ModelParameter;
+// use crate::fitting::ModelParameter;
 
 #[derive(Debug)]
 pub struct FittedParameter {
@@ -32,7 +33,7 @@ pub struct FittedParameter {
 
 #[derive(Debug)]
 pub struct GamlssModel {
-    pub models: HashMap<String, ModelParameter>,
+    pub models: HashMap<String, FittedParameter>,
 }
 
 impl GamlssModel {
@@ -63,10 +64,11 @@ impl GamlssModel {
 
     // I know that the sampling is going to change quite radically, so I'm just commenting this
     // out for right now
-    // pub fn posterior_samples(&self, n_samples: usize) -> Vec<Coefficients> {
-    //     fitting::inference::sample_posterior(&self.coefficients, &self.covariance, n_samples)
-    //         .into_iter()
-    //         .map(Coefficients)
-    //         .collect()
-    // }
+    pub fn posterior_samples(&self, n_samples: usize) -> Vec<Coefficients> {
+        todo!();
+        // fitting::inference::sample_posterior(&self.coefficients, &self.covariance, n_samples)
+        //     .into_iter()
+        //     .map(Coefficients)
+        //     .collect()
+    }
 }

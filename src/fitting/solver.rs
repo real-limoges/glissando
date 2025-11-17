@@ -1,5 +1,5 @@
 use argmin::solver::linesearch::MoreThuenteLineSearch;
-use argmin::solver::quasinewton::LBFGS;
+// use argmin::solver::quasinewton::LBFGS;
 use crate::Term;
 use crate::families::{Link, Distribution, Gaussian};
 use argmin::core::Gradient;
@@ -9,14 +9,13 @@ use ndarray_linalg::{Inverse, Solve, UPLO};
 use argmin::core::{CostFunction, Error, Executor};
 use polars::prelude::{DataFrame};
 
-pub(crate) const MAX_PIRLS_ITER: usize = 25;
 pub(crate) const PIRLS_TOLERANCE: f64 = 1e-6;
 
 pub(crate) struct GamlssCost<'a, D: Distribution> {
     pub(crate) x_matrix: &'a ModelMatrix,
-    pub(crate) y_vector: &'a Array1<f64>,
+    pub(crate) z: &'a Array1<f64>,
+    pub(crate) w: &'a Array1<f64>,
     pub(crate) penalty_matrices: &'a Vec<PenaltyMatrix>,
-    pub(crate) distribution: &'a D,
 }
 
 impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
@@ -26,22 +25,19 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         let lambdas = param.mapv(f64::exp);
 
-        let (beta, _, _, edf) = run_pirls(
+        let (beta, _, edf) = fit_pwls(
             self.x_matrix,
-            self.y_vector,
-            self.distribution,
+            self.z,
+            self.w,
             self.penalty_matrices,
             &lambdas,
-        ).map_err(Error::new)?;
+        ).map_err(|e| Error::new(e))?;
 
-        let n = self.y_vector.len() as f64;
-        let eta = self.x_matrix.dot(&beta.0);
-        let mu = eta.mapv(|e| self.distribution.link().inv_link(e));
-        let variance = mu.mapv(|m| self.distribution.variance(m));
+        let n = self.z.len() as f64;
 
-        let residuals = self.y_vector - &mu;
-        let pearson_residuals = &residuals / variance.mapv(f64::sqrt);
-        let rss = pearson_residuals.mapv(|r| r.powi(2)).sum();
+        let fitted_z = self.x_model.dot(&beta);
+        let residuals_z = self.z - &fitted_z;
+        let rss = (&residuals_z * &residuals_z * self.w).sum();
 
         let denominator = (n - edf).powi(2);
         if denominator.abs() < 1e-10 {
@@ -78,21 +74,19 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
 
 pub(crate) fn run_optimization<D>(
     x_model: &ModelMatrix,
-    y: &Array1<f64>,
-    penalty_matrices: &Vec<PenaltyMatrix>,
-    distributional: &D,
+    z: &Array1<f64>,
+    w: &Array1<f64>,
+    penalty_matrices: &Vec<PenaltyMatrix>
 ) -> Result<Array1<f64>, GamlssError> {
     let cost_function = GamlssCost {
         x_matrix: &x_model,
-        y_vector: y,
-        penalty_matrices: &penalty_matrices,
-        distribution: &D
+        z,
+        w,
+        penalty_matrices: &penalty_matrices
     };
 
     let initial_log_lambdas = LogLambdas(Array1::<f64>::zeros(penalty_matrices.len()));
-    let linesearch = MoreThuenteLineSearch::new();
-    let m = 7;
-    let solver = LBFGS::new(linesearch, m);
+    let solver = Lbfgs::new();
 
     let res = Executor::new(cost_function, solver)
         .configure(|state| state.param(initial_log_lambdas).max_iters(100))
@@ -104,13 +98,13 @@ pub(crate) fn run_optimization<D>(
     Ok(best_lambdas)
 }
 
-pub(crate) fn run_pirls<D: Distribution>(
-    x_matrix: &Array2<f64>,
-    y_vector: &Array1<f64>,
-    distribution: &D,
+pub(crate) fn fit_pwls(
+    x_matrix: &ModelMatrix,
+    z: &Array1<f64>,
+    w_diag: &Array1<f64>,
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>
-) -> Result<(Coefficients, Array1<f64>, CovarianceMatrix, f64), GamlssError> {
+) -> Result<(Coefficients, CovarianceMatrix, f64), GamlssError> {
     // lifted some pirls code out of a numerical analysis book
 
     let (n_obs, n_coeffs) = x_matrix.dim();
@@ -120,40 +114,18 @@ pub(crate) fn run_pirls<D: Distribution>(
         s_lambda.scaled_add(lambdas[i], s_j);
     }
 
-    let mut beta = Coefficients(Array1::<f64>::zeros(n_coeffs));
-    let y_mean = y_vector.mean().unwrap_or(0.5).max(0.01);
+    let w = Array2::<f64>::from_diag(&w_diag);
 
-    let mut eta = Array1::<f64>::from_elem(n_obs, distribution.link().link(y_mean));
-    let mut w_diag = Array1::<f64>::zeros(n_obs);
-    let mut z = Array1::<f64>::zeros(n_obs);
+    let x_t_w = x_matrix.t().dot(&w);
+    let lhs = x_t_w.dot(x_matrix.0) + &s_lambda;
+    let rhs = x_t_w.dot(&z);
 
-    // the actual PIRLS
-    for _iter in 0..MAX_PIRLS_ITER {
-        let mu = eta.mapv(|e| distribution.link().inv_link(e));
-        for i in 0..n_obs {
-            let (z_i, w_ii) = distribution.working_response_and_weights(y_vector[i], eta[i], mu[i]);
-            z[i] = z_i;
-            w_diag[i] = w_ii;
-        }
-        let w = Array2::<f64>::from_diag(&w_diag);
+    let beta = Coefficients(lhs.solve(&rhs)?);
 
-        let x_t_w = x_matrix.t().dot(&w);
-        let lhs = x_t_w.dot(x_matrix) + &s_lambda;
-        let rhs = x_t_w.dot(&z);
+    let v_beta_unscaled = CovarianceMatrix(lhs.inv()?);
 
-        let new_beta = Coefficients(lhs.solve(&rhs)?);
+    let x_t_w_x = x_t_w.dot(&x_matrix.0);
+    let edf = v_beta_unscaled.dot(&x_t_w_x).diag().sum();
 
-        let diff = (&new_beta.0 - &beta.0).mapv(f64::abs).sum();
-
-        if diff < PIRLS_TOLERANCE {
-            let v_beta_unscaled = CovarianceMatrix(lhs.inv()?);
-            let x_t_w_x_final = x_t_w.dot(x_matrix);
-            let edf = v_beta_unscaled.dot(&x_t_w_x_final).diag().sum();
-
-            return Ok((new_beta, w_diag, v_beta_unscaled, edf));
-        }
-        beta = new_beta;
-        eta = x_matrix.dot(&beta.0);
-    }
-    Err(GamlssError::Convergence(MAX_PIRLS_ITER))
+    Ok((beta, v_beta_unscaled, edf))
 }

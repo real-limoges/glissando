@@ -1,5 +1,5 @@
 [package]
-name = "real_rusty_gam"
+name = "gamlss_rs"
 version = "0.1.0"
 edition = "2024"
 
