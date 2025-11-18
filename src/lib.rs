@@ -6,7 +6,7 @@ pub mod families;
 mod splines;
 mod types;
 mod terms;
-
+pub mod preprocessing;
 
 // for end user
 pub use error::GamlssError;
@@ -22,18 +22,18 @@ use polars::prelude::{DataFrame, PolarsError};
 use std::collections::HashMap;
 // use crate::fitting::ModelParameter;
 
-#[derive(Debug)]
-pub struct FittedParameter {
-    pub coefficients: Coefficients,
-    pub covariance: CovarianceMatrix,
-    pub terms: Vec<Term>,
-    pub eta: Array1<f64>,
-    pub fitted_values: Array1<f64>,
-}
+// #[derive(Debug)]
+// pub struct FittedParameter {
+//     pub coefficients: Coefficients,
+//     pub covariance: CovarianceMatrix,
+//     pub terms: Vec<Term>,
+//     pub eta: Array1<f64>,
+//     pub fitted_values: Array1<f64>,
+// }
 
 #[derive(Debug)]
 pub struct GamlssModel {
-    pub models: HashMap<String, FittedParameter>,
+    pub models: HashMap<String, fitting::FittedParameter>,
 }
 
 impl GamlssModel {
@@ -47,9 +47,11 @@ impl GamlssModel {
         let y_series = data.column(y_name)
             .map_err(|e| GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e)))?;
 
-        let y_vec = y_series.f64()?
-            .to_ndarray()?
-            .to_shape(y_series.len())?;
+        let binding = y_series.f64()?
+            .to_ndarray()?;
+        let y_vec = binding
+            .to_shape(y_series.len())
+            .map_err(|e| GamlssError::Shape(e.to_string()))?;
 
         let y_vector = Array1::from_vec(y_vec.to_vec());
 

@@ -14,6 +14,8 @@ use ndarray::{Array1, Array2};
 use polars::prelude::DataFrame;
 use std::collections::HashMap;
 
+use crate::preprocessing;
+
 
 const MAX_GAMLSS_ITER: usize = 10;
 
@@ -63,6 +65,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let start_val = if models.is_empty() {
             y.mean().unwrap_or(0.1)
         } else {
+            // todo("probably want to have a smarter init")
             0.1
         };
 
@@ -81,48 +84,48 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             edf: 0.0,
         });
 
-        for _cycle in 0..MAX_GAMLSS_ITER {
-            let mut max_diff = 0.0;
+    for _cycle in 0..MAX_GAMLSS_ITER {
+        let mut max_diff = 0.0;
 
-            for param_name in family.parameters() {
-                let param_key = param_name.to_string();
-                let mut current_params = HashMap::new();
+        for param_name in family.parameters() {
+            let param_key = param_name.to_string();
+            let mut current_params = HashMap::new();
 
-                for (name, model) in &models {
-                    let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-                    current_params.insert(name.clone(), fitted_values);
+            for (name, model) in &models {
+                let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
+                current_params.insert(name.clone(), fitted_values);
+            }
+
+            let mut deriv_u = Array1::zeros(n_obs);
+            let mut deriv_w = Array1::zeros(n_obs);
+
+            for i in 0..n_obs {
+                let mut obs_params = HashMap::new();
+                for (name, value) in &current_params {
+                    obs_params.insert(name.clone(), value[i]);
                 }
 
-                let mut deriv_u = Array1::zeros(n_obs);
-                let mut deriv_w = Array1::zeros(n_obs);
+                let all_derivs = family.derivatives(y[i], &obs_params);
+                let (u, w) = all_derivs.get(*param_name)
+                    .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found in model", param_name)))?;
+                deriv_u[i] = *u;
+                deriv_w[i] = *w;
+            }
 
-                for i in 0..n_obs {
-                    let mut obs_params = HashMap::new();
-                    for (name, value) in &current_params {
-                        obs_params.insert(name.clone(), value[i]);
-                    }
+            let model = models.get_mut(&param_key).unwrap();
 
-                    let all_derivs = family.derivatives(y[i], &obs_params);
-                    let (u, w) = all_derivs.get(*param_name)
-                        .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found in model", param_name)))?;
-                    deriv_u[i] = *u;
-                    deriv_w[i] = *w;
-                }
+            // I'm forcing the matrix to be positive definite here for the solver
+            let safe_w = deriv_w.mapv(|w| w.max(1e-8));
 
-                let model = models.get_mut(&param_key).unwrap();
+            let z = &model.eta + (&deriv_u / &safe_w);
+            let w = safe_w;
 
-                // I'm forcing the matrix to be positive definite here for the solver
-                let safe_w = deriv_w.mapv(|w| w.max(1e-8));
-
-                let z = &model.eta + (&deriv_u / &safe_w);
-                let w = safe_w;
-
-                let best_lambdas = run_optimization::<D>(
-                    &model.x_matrix,
-                    &z,
-                    &w,
-                    &model.penalty_matrices
-                )?;
+            let best_lambdas = run_optimization::<D>(
+                &model.x_matrix,
+                &z,
+                &w,
+                &model.penalty_matrices
+            )?;
 
                 let (new_beta, cov_matrix, edf) = fit_pwls(
                     &model.x_matrix,

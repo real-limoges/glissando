@@ -33,8 +33,13 @@ impl From<argmin::core::Error> for GamlssError {
         GamlssError::Optimization(e.to_string())
     }
 }
-impl From<ShapeError> for GamlssError {
-    fn from(err: ShapeError) -> Self {
+// impl From<ShapeError> for GamlssError {
+//     fn from(err: ShapeError) -> Self {
+//         GamlssError::Shape(err.to_string())
+//     }
+// }
+impl From<ndarray::ShapeError> for GamlssError {
+    fn from(err: ndarray::ShapeError) -> Self {
         GamlssError::Shape(err.to_string())
     }
 }

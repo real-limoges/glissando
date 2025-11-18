@@ -65,7 +65,7 @@ impl Distribution for Poisson {
         let deriv_u = y - mu;
         let deriv_w = mu;
 
-        HashMap::from([("mu", (deriv_u, deriv_w))])
+        HashMap::from([("mu".to_string(), (deriv_u, deriv_w))])
     }
 }
 
@@ -86,7 +86,7 @@ impl Distribution for Gaussian {
             _ => panic!("Unknown parameter: {}", param),
         }
     }
-    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<&'static str, (f64, f64)> {
+    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<std::string::String, (f64, f64)> {
         let mu = params["mu"];
         let sigma = params["sigma"];
         let sigma_sq = sigma.powi(2);
@@ -94,11 +94,12 @@ impl Distribution for Gaussian {
         let u_mu = (y - mu) / sigma_sq;
         let w_mu = 1.0 / sigma_sq;
 
-        let u_sigma = ((y - mu).powi(2) - sigma ^ 2) / sigma_sq;
+        let u_sigma = ((y - mu).powi(2) - sigma.powi(2)) / sigma_sq;
         let w_sigma = 2.0;
 
-        HashMap::from([("mu", (u_mu, w_mu)),
-            ("sigma", (sigma, u_sigma)),
+        HashMap::from(
+            [("mu".to_string(), (u_mu, w_mu)),
+            ("sigma".to_string(), (sigma, u_sigma)),
         ])
     }
 }
