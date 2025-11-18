@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use ndarray::Array1;
+use statrs::function::gamma::digamma;
 
 // ----- These traits help make sure the actual distributions are implemented correctly
 // ----- I have chosen Poisson and Normal/Gaussian, because they are easy.
@@ -86,7 +87,7 @@ impl Distribution for Gaussian {
             _ => panic!("Unknown parameter: {}", param),
         }
     }
-    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<std::string::String, (f64, f64)> {
+    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
         let mu = params["mu"];
         let sigma = params["sigma"];
         let sigma_sq = sigma.powi(2);
@@ -122,10 +123,34 @@ impl Distribution for StudentT {
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String,(f64,f64)> {
-        let _mu = params["mu"];
-        let _sigma = params["sigma"];
-        let _nu = params["nu"];
+        let mu = params["mu"];
+        let sigma = params["sigma"];
+        let nu = params["nu"];
+
+        let z = (y - mu) / sigma;
+        let z_sq = z.powi(2);
+        let w_robust = (nu + 1.0) / (nu + z_sq);
+
+        // mu
+        let u_mu = (w_robust * z) / sigma;
+        let w_mu = (nu + 1.0) / ((nu + 3.0) * sigma.powi(2));
+        // sigma
+        let u_sigma = (w_robust * z_sq) - 1.0;
+        let w_sigma = (2.0 * w_robust) / (nu + 3.0)
+        // nu
+        let d1 = digamma((nu + 1.0) / 2.0);
+        let d2 = digamma(nu / 2.0);
+        let term3 = (1.0 + z_sq / nu).ln();
+        let term4 = (w_robust * z - 1.0) / nu;
+
+        // todo("I need a trigamma!")
 
         todo!("Will fill in derivatives later!")
     }
+}
+
+fn trigamma(x: f64) -> f64 {
+    // trigamma stub
+    let mut x = x;
+    let mut result = 0.0;
 }

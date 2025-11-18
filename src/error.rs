@@ -38,8 +38,8 @@ impl From<argmin::core::Error> for GamlssError {
 //         GamlssError::Shape(err.to_string())
 //     }
 // }
-impl From<ndarray::ShapeError> for GamlssError {
-    fn from(err: ndarray::ShapeError) -> Self {
+impl From<ShapeError> for GamlssError {
+    fn from(err: ShapeError) -> Self {
         GamlssError::Shape(err.to_string())
     }
 }
