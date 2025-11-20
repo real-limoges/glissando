@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use ndarray::Array1;
 use statrs::function::gamma::digamma;
+use crate::math::trigamma;
 
 // ----- These traits help make sure the actual distributions are implemented correctly
 // ----- I have chosen Poisson and Normal/Gaussian, because they are easy.
@@ -134,23 +135,31 @@ impl Distribution for StudentT {
         // mu
         let u_mu = (w_robust * z) / sigma;
         let w_mu = (nu + 1.0) / ((nu + 3.0) * sigma.powi(2));
+        
         // sigma
         let u_sigma = (w_robust * z_sq) - 1.0;
-        let w_sigma = (2.0 * w_robust) / (nu + 3.0)
+        let w_sigma = (2.0 * w_robust) / (nu + 3.0);
+        
         // nu
         let d1 = digamma((nu + 1.0) / 2.0);
         let d2 = digamma(nu / 2.0);
         let term3 = (1.0 + z_sq / nu).ln();
         let term4 = (w_robust * z - 1.0) / nu;
 
-        // todo("I need a trigamma!")
+        let dl_dnu = 0.5 * (d1 - d2 - term3 + term4);
+        let u_nu = dl_dnu * nu;
 
-        todo!("Will fill in derivatives later!")
+        let t1 = trigamma(nu / 2.0);
+        let t2 = trigamma((nu + 1.0) / 2.0);
+        let t3 = (2.0 * (nu + 3.0)) / (nu * (nu + 1.0));
+
+        let i_nu = 0.25 * (t1 - t2 - t3);
+        let w_nu = (i_nu * nu.powi(2)).abs().max(1e-6);
+
+        HashMap::from([
+            ("mu".to_string(), (u_mu, w_mu)),
+            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("nu".to_string(), (u_nu, w_nu)),
+        ])
     }
-}
-
-fn trigamma(x: f64) -> f64 {
-    // trigamma stub
-    let mut x = x;
-    let mut result = 0.0;
 }

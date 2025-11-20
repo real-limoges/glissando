@@ -7,6 +7,7 @@ mod splines;
 mod types;
 mod terms;
 pub mod preprocessing;
+mod math;
 
 // for end user
 pub use error::GamlssError;
