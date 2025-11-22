@@ -4,8 +4,8 @@ use ndarray::Array1;
 use statrs::function::gamma::digamma;
 use crate::math::trigamma;
 
-// ----- These traits help make sure the actual distributions are implemented correctly
-// ----- I have chosen Poisson and Normal/Gaussian, because they are easy.
+// These traits help make sure the actual distributions are implemented correctly
+// I implemented Poisson, Gaussian and StudentT - each more complex than the last
 pub trait Link: Debug + Send + Sync {
     fn link(&self, mu:f64) -> f64;
     fn inv_link(&self, eta:f64) -> f64;
@@ -44,8 +44,6 @@ pub trait Distribution: Debug + Send + Sync {
 
 
 // Distributions
-
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Poisson;
 impl Poisson {
@@ -78,6 +76,7 @@ impl Gaussian {
 }
 
 impl Distribution for Gaussian {
+    // Gaussian has two parameters: mu and sigma. Mu is the mean, sigma is the standard deviation.
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma"]
     }
@@ -99,9 +98,9 @@ impl Distribution for Gaussian {
         let u_sigma = ((y - mu).powi(2) - sigma.powi(2)) / sigma_sq;
         let w_sigma = 2.0;
 
-        HashMap::from(
-            [("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (sigma, u_sigma)),
+        HashMap::from([
+            ("mu".to_string(), (u_mu, w_mu)),
+            ("sigma".to_string(), (sigma, u_sigma))
         ])
     }
 }
@@ -112,6 +111,8 @@ impl StudentT {
     pub fn new() -> Self { Self }
 }
 impl Distribution for StudentT {
+    // StudentT has three parameters: mu, sigma and nu.
+    // Mu is the mean, sigma is the standard deviation and nu is the degrees of freedom.
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma", "nu"]
     }

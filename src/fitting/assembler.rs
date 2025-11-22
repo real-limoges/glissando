@@ -23,9 +23,9 @@ fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f
     let ndarray_data = f64_chunked_array.to_ndarray()?;
     let arr = ndarray_data
         .to_shape(n_obs)
-        .map_err(|e| GamlssError::Shape(e.to_string()))?;
+        .map_err(|e| GamlssError::Shape(e.to_string()));
 
-    Ok(Array1::<f64>::from(arr.to_vec()))
+    Ok(Array1::<f64>::from(arr?.to_vec()))
 
 }
 
