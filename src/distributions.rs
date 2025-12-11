@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::fmt::Debug;
+use crate::math::trigamma;
 use ndarray::Array1;
 use statrs::function::gamma::digamma;
-use crate::math::trigamma;
+use std::collections::HashMap;
+use std::fmt::Debug;
 
 // These traits help make sure the actual distributions are implemented correctly
 // I implemented Poisson, Gaussian and StudentT - each more complex than the last
 pub trait Link: Debug + Send + Sync {
-    fn link(&self, mu:f64) -> f64;
-    fn inv_link(&self, eta:f64) -> f64;
+    fn link(&self, mu: f64) -> f64;
+    fn inv_link(&self, eta: f64) -> f64;
 }
 
 // Concrete Links
@@ -16,10 +16,10 @@ pub trait Link: Debug + Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityLink;
 impl Link for IdentityLink {
-    fn link(&self, mu:f64) -> f64 {
+    fn link(&self, mu: f64) -> f64 {
         mu
     }
-    fn inv_link(&self, eta:f64) -> f64 {
+    fn inv_link(&self, eta: f64) -> f64 {
         eta
     }
 }
@@ -27,27 +27,27 @@ impl Link for IdentityLink {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogLink;
 impl Link for LogLink {
-    fn link(&self, mu:f64) -> f64 {
+    fn link(&self, mu: f64) -> f64 {
         mu.ln().max(-30.0)
     }
-    fn inv_link(&self, eta:f64) -> f64 {
+    fn inv_link(&self, eta: f64) -> f64 {
         eta.min(30.0).exp()
     }
 }
 
-
 pub trait Distribution: Debug + Send + Sync {
     fn parameters(&self) -> &[&'static str];
     fn default_link(&self, param: &str) -> Box<dyn Link>;
-    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String,(f64,f64)>;
+    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)>;
 }
-
 
 // Distributions
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Poisson;
 impl Poisson {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Distribution for Poisson {
@@ -57,7 +57,7 @@ impl Distribution for Poisson {
     fn default_link(&self, param: &str) -> Box<dyn Link> {
         match param {
             "mu" => Box::new(LogLink),
-            _ => panic!("Unknown parameter: {}", param)
+            _ => panic!("Unknown parameter: {}", param),
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
@@ -72,7 +72,9 @@ impl Distribution for Poisson {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gaussian;
 impl Gaussian {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Distribution for Gaussian {
@@ -100,7 +102,7 @@ impl Distribution for Gaussian {
 
         HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (sigma, u_sigma))
+            ("sigma".to_string(), (sigma, u_sigma)),
         ])
     }
 }
@@ -108,7 +110,9 @@ impl Distribution for Gaussian {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StudentT;
 impl StudentT {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 impl Distribution for StudentT {
     // StudentT has three parameters: mu, sigma and nu.
@@ -124,37 +128,49 @@ impl Distribution for StudentT {
             _ => panic!("Unknown parameter: {}", param),
         }
     }
-    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String,(f64,f64)> {
-        let mu = params["mu"];
-        let sigma = params["sigma"];
-        let nu = params["nu"];
+    fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
+        // nu is set to 10 to prevent a panic
+        let mu = params.get("mu").copied().unwrap_or(0.0);
+        let sigma = params.get("sigma").copied().unwrap_or(1.0);
+        let nu = params.get("nu").copied().unwrap_or(10.0);
 
         let z = (y - mu) / sigma;
         let z_sq = z.powi(2);
         let w_robust = (nu + 1.0) / (nu + z_sq);
 
+        // so the pattern here is to find u and w for each parameter
+        // then combine them into a HashMap. Nu is a bit tricky.
+
         // mu
         let u_mu = (w_robust * z) / sigma;
-        let w_mu = (nu + 1.0) / ((nu + 3.0) * sigma.powi(2));
-        
+        let w_mu = (nu + 1.0) / (sigma.powi(2) * (nu + 3.0));
+
         // sigma
-        let u_sigma = (w_robust * z_sq) - 1.0;
-        let w_sigma = (2.0 * w_robust) / (nu + 3.0);
-        
+        let u_sigma = w_robust * z_sq - 1.0;
+        let w_sigma = (2.0 * nu) / (nu + 3.0);
+
         // nu
+        // dl/dnu
         let d1 = digamma((nu + 1.0) / 2.0);
         let d2 = digamma(nu / 2.0);
         let term3 = (1.0 + z_sq / nu).ln();
-        let term4 = (w_robust * z - 1.0) / nu;
+        let term4 = (w_robust * z_sq - 1.0) / nu;
 
         let dl_dnu = 0.5 * (d1 - d2 - term3 + term4);
+
+        // log link chain rule: dl/d_eta = dl/dnu * nu
         let u_nu = dl_dnu * nu;
 
+        // Expected Information for Nu
+        // I wrote the trigamma because I couldn't find it elsewhere
         let t1 = trigamma(nu / 2.0);
         let t2 = trigamma((nu + 1.0) / 2.0);
         let t3 = (2.0 * (nu + 3.0)) / (nu * (nu + 1.0));
 
         let i_nu = 0.25 * (t1 - t2 - t3);
+
+        // log link chain rule: W_eta = I_nu * nu^2
+        // positive definiteness
         let w_nu = (i_nu * nu.powi(2)).abs().max(1e-6);
 
         HashMap::from([

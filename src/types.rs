@@ -1,9 +1,12 @@
-use argmin_math::ArgminScaledSub;
-use ndarray::{Array1, Array2};
-use ndarray::prelude::*;
-use std::ops::{Add, Deref, DerefMut, Sub};
 use argmin::core::ArgminError;
-use argmin_math::{ArgminAdd, ArgminSub, ArgminMul, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminSignum, ArgminZeroLike, ArgminDot, ArgminScaledAdd};
+use argmin_math::ArgminScaledSub;
+use argmin_math::{
+    ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminScaledAdd,
+    ArgminSignum, ArgminSub, ArgminZeroLike,
+};
+use ndarray::prelude::*;
+use ndarray::{Array1, Array2};
+use std::ops::{Add, Deref, DerefMut, Sub};
 
 // ----- Newtypes for Safety (Vectors)
 #[derive(Debug, Clone)]
@@ -58,11 +61,19 @@ macro_rules! impl_argmin_math_for_vector_wrapper {
 
         impl ArgminMinMax for $t {
             fn min(x: &Self, y: &Self) -> Self {
-                Self(ndarray::Zip::from(&x.0).and(&y.0).map_collect(|a, b| a.min(*b)))
+                Self(
+                    ndarray::Zip::from(&x.0)
+                        .and(&y.0)
+                        .map_collect(|a, b| a.min(*b)),
+                )
             }
 
             fn max(x: &Self, y: &Self) -> Self {
-                Self(ndarray::Zip::from(&x.0).and(&y.0).map_collect(|a, b| a.max(*b)))
+                Self(
+                    ndarray::Zip::from(&x.0)
+                        .and(&y.0)
+                        .map_collect(|a, b| a.max(*b)),
+                )
             }
         }
 
@@ -117,11 +128,8 @@ macro_rules! impl_argmin_math_for_vector_wrapper {
     };
 }
 
-
 impl_argmin_math_for_vector_wrapper!(Coefficients);
 impl_argmin_math_for_vector_wrapper!(LogLambdas);
-
-
 
 // ----- Newtypes for Safety (Matrices)
 #[derive(Debug, Clone)]

@@ -1,23 +1,23 @@
 #![recursion_limit = "1024"]
 #![allow(dead_code, unused_variables, unused_imports)]
+pub mod distributions;
 mod error;
 mod fitting;
-pub mod families;
-mod splines;
-mod types;
-mod terms;
-pub mod preprocessing;
 mod math;
+pub mod preprocessing;
+mod splines;
+mod terms;
+mod types;
 
 // for end user
 pub use error::GamlssError;
 // pub mod families;
-pub use terms::{Term, Smooth};
+pub use terms::{Smooth, Term};
 pub use types::*;
 
 //
 
-use families::Distribution;
+use distributions::Distribution;
 use ndarray::{Array, Array1};
 use polars::prelude::{DataFrame, PolarsError};
 use std::collections::HashMap;
@@ -38,27 +38,24 @@ pub struct GamlssModel {
 }
 
 impl GamlssModel {
-    pub fn fit<D: Distribution> (
+    pub fn fit<D: Distribution>(
         data: &DataFrame,
         y_name: &str,
         formula: &HashMap<String, Vec<Term>>,
         family: &D,
     ) -> Result<Self, GamlssError> {
+        let y_series = data.column(y_name).map_err(|e| {
+            GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e))
+        })?;
 
-        let y_series = data.column(y_name)
-            .map_err(|e| GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e)))?;
-
-        let binding = y_series.f64()?
-            .to_ndarray()?;
+        let binding = y_series.f64()?.to_ndarray()?;
         let y_vec = binding
             .to_shape(y_series.len())
             .map_err(|e| GamlssError::Shape(e.to_string()))?;
 
         let y_vector = Array1::from_vec(y_vec.to_vec());
 
-        let fitted_models = fitting::fit_gamlss(
-            data, &y_vector, formula, family
-        )?;
+        let fitted_models = fitting::fit_gamlss(data, &y_vector, formula, family)?;
 
         Ok(Self {
             models: fitted_models,

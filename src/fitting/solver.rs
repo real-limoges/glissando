@@ -1,14 +1,14 @@
-use argmin::solver::linesearch::MoreThuenteLineSearch;
+use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
 use crate::Term;
-use crate::families::{Link, Distribution, Gaussian};
+use crate::distributions;
+use crate::distributions::{Distribution, Gaussian, Link};
 use argmin::core::Gradient;
-use super::{GamlssError, ModelMatrix, PenaltyMatrix, Coefficients, CovarianceMatrix, LogLambdas};
+use argmin::core::{CostFunction, Error, Executor};
+use argmin::solver::linesearch::MoreThuenteLineSearch;
+use argmin::solver::quasinewton::LBFGS;
 use ndarray::prelude::*;
 use ndarray_linalg::{Inverse, Solve};
-use argmin::core::{CostFunction, Error, Executor};
-use polars::prelude::{DataFrame};
-use argmin::solver::quasinewton::LBFGS;
-use crate::families;
+use polars::prelude::DataFrame;
 use std::marker::PhantomData;
 
 const H: f64 = 1.49e-8;
@@ -36,7 +36,8 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
             self.w,
             self.penalty_matrices,
             &lambdas,
-        ).map_err(|e| Error::new(e))?;
+        )
+        .map_err(|e| Error::new(e))?;
 
         let n = self.z.len() as f64;
 
@@ -81,13 +82,13 @@ pub(crate) fn run_optimization<D: Distribution>(
     x_model: &ModelMatrix,
     z: &Array1<f64>,
     w: &Array1<f64>,
-    penalty_matrices: &Vec<PenaltyMatrix>
+    penalty_matrices: &Vec<PenaltyMatrix>,
 ) -> Result<Array1<f64>, GamlssError> {
     let cost_function: GamlssCost<'_, D> = GamlssCost::<D> {
         x_matrix: x_model,
         z,
         w,
-        penalty_matrices: penalty_matrices,
+        penalty_matrices,
         _marker: PhantomData,
     };
 
@@ -110,7 +111,7 @@ pub(crate) fn fit_pwls(
     z: &Array1<f64>,
     w_diag: &Array1<f64>,
     penalty_matrices: &[PenaltyMatrix],
-    lambdas: &Array1<f64>
+    lambdas: &Array1<f64>,
 ) -> Result<(Coefficients, CovarianceMatrix, f64), GamlssError> {
     // lifted some pirls code out of a numerical analysis book
 
@@ -130,12 +131,10 @@ pub(crate) fn fit_pwls(
     let lhs = x_t_w.dot(x) + &s_lambda;
     let rhs = x_t_w.dot(z);
 
-    let beta_arr = lhs.solve(&rhs)
-        .map_err(GamlssError::Linalg);
+    let beta_arr = lhs.solve(&rhs).map_err(GamlssError::Linalg);
     let beta = Coefficients(beta_arr?);
 
-    let inv_lhs = lhs.inv()
-        .map_err(GamlssError::Linalg)?;
+    let inv_lhs = lhs.inv().map_err(GamlssError::Linalg)?;
 
     let v_beta_unscaled = CovarianceMatrix(inv_lhs);
 

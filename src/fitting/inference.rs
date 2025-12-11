@@ -1,17 +1,15 @@
-use rand_distr::{Distribution, StandardNormal};
-use rand::Rng;
 use super::{Coefficients, CovarianceMatrix};
-use ndarray_linalg::{Cholesky, UPLO};
 use ndarray::{Array1, Array2};
+use ndarray_linalg::{Cholesky, UPLO};
+use rand::Rng;
 use rand::rng;
-
+use rand_distr::{Distribution, StandardNormal};
 
 pub fn sample_posterior(
     beta_hat: &Coefficients,
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Vec<Array1<f64>> {
-
     let l_factor = match &v_beta.0.cholesky(UPLO::Lower) {
         Ok(cholesky) => cholesky,
         Err(_) => return vec![],
@@ -26,9 +24,8 @@ pub(crate) fn sample_from_cholesky(
     mean: &Array1<f64>,
     l_factor: &Array2<f64>,
     n_samples: usize,
-    rng: &mut impl Rng
+    rng: &mut impl Rng,
 ) -> Vec<Array1<f64>> {
-
     let dim = mean.len();
 
     (0..n_samples)

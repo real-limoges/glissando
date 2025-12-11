@@ -2,9 +2,7 @@
 pub enum Term {
     // 3 types of Terms. A constant (Intercept), a Linear, and a Smooth
     Intercept,
-    Linear {
-        col_name: String,
-    },
+    Linear { col_name: String },
     Smooth(Smooth),
 }
 

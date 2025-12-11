@@ -1,15 +1,15 @@
-use polars::prelude::ChunkUnique;
-use ndarray::concatenate;
+use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::ModelMatrix;
-use super::{GamlssError, Smooth, Term, PenaltyMatrix};
 use crate::splines::{create_basis_matrix, create_penalty_matrix, kronecker_product};
-use ndarray::{s, stack, Array1, Array2, Axis};
-use polars::prelude::{DataFrame, DataType, IntoSeries, NamedFrom, PolarsError, Series};
+use ndarray::concatenate;
+use ndarray::{Array1, Array2, Axis, s, stack};
 use polars::chunked_array::ChunkedArray;
-
+use polars::prelude::ChunkUnique;
+use polars::prelude::{DataFrame, DataType, IntoSeries, NamedFrom, PolarsError, Series};
 
 fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f64>, GamlssError> {
-    let series = data.column(name)
+    let series = data
+        .column(name)
         .map_err(|e| GamlssError::Input(format!("Column '{}' not found: {}", name, e)))?;
 
     let f64_series = if series.dtype() != &DataType::Float64 {
@@ -26,16 +26,21 @@ fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f
         .map_err(|e| GamlssError::Shape(e.to_string()));
 
     Ok(Array1::<f64>::from(arr?.to_vec()))
-
 }
 
-fn assemble_smooth(data: &DataFrame, n_obs: usize, smooth: &Smooth
+fn assemble_smooth(
+    data: &DataFrame,
+    n_obs: usize,
+    smooth: &Smooth,
 ) -> Result<(Array2<f64>, Vec<PenaltyMatrix>), GamlssError> {
     // each smooth has its own arm of the match
 
     match smooth {
         Smooth::PSpline1D {
-            col_name, n_splines, degree, penalty_order
+            col_name,
+            n_splines,
+            degree,
+            penalty_order,
         } => {
             // super straight forward flow
             let x_col = get_col_as_f64(data, col_name, n_obs)?;
@@ -46,11 +51,14 @@ fn assemble_smooth(data: &DataFrame, n_obs: usize, smooth: &Smooth
         }
 
         Smooth::TensorProduct {
-            col_name_1, n_splines_1, penalty_order_1,
-            col_name_2, n_splines_2, penalty_order_2,
-            degree
+            col_name_1,
+            n_splines_1,
+            penalty_order_1,
+            col_name_2,
+            n_splines_2,
+            penalty_order_2,
+            degree,
         } => {
-
             //  First set up both sidees of the product
             let x1 = get_col_as_f64(data, col_name_1, n_obs)?;
             let b1 = create_basis_matrix(&x1, *n_splines_1, *degree);
@@ -81,8 +89,11 @@ fn assemble_smooth(data: &DataFrame, n_obs: usize, smooth: &Smooth
 
             let penalty_1 = kronecker_product(&s1, &i_k2);
             let penalty_2 = kronecker_product(&i_k1, &s2);
-            Ok((basis, vec![PenaltyMatrix(penalty_1), PenaltyMatrix(penalty_2)]))
-        },
+            Ok((
+                basis,
+                vec![PenaltyMatrix(penalty_1), PenaltyMatrix(penalty_2)],
+            ))
+        }
 
         Smooth::RandomEffect { col_name } => {
             let series = data.column(col_name)?;
@@ -92,11 +103,10 @@ fn assemble_smooth(data: &DataFrame, n_obs: usize, smooth: &Smooth
             let n_groups = id_codes.n_unique()?;
             let mut basis = Array2::<f64>::zeros((n_obs, n_groups));
 
-            let id_col_ndarray = id_codes.to_ndarray()?
+            let id_col_ndarray = id_codes
+                .to_ndarray()?
                 .into_shape_with_order(n_obs)
-                .map_err(|err| {
-                    GamlssError::ComputationError(err.to_string())
-                })?;
+                .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
 
             for i in 0..n_obs {
                 let group_id = id_col_ndarray[i] as usize;
@@ -123,14 +133,16 @@ pub(crate) fn assemble_model_matrices(
     for term in terms.iter() {
         match term {
             Term::Intercept => {
-                let part = Array1::ones(n_obs).into_shape((n_obs, 1))
+                let part = Array1::ones(n_obs)
+                    .into_shape((n_obs, 1))
                     .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }
             Term::Linear { col_name } => {
                 let x_col_vec = get_col_as_f64(data, col_name, n_obs)?;
-                let part = x_col_vec.into_shape((n_obs, 1))
+                let part = x_col_vec
+                    .into_shape((n_obs, 1))
                     .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
@@ -161,12 +173,14 @@ pub(crate) fn assemble_model_matrices(
         .map(|(start_index, block)| {
             let mut s_j = PenaltyMatrix(Array2::<f64>::zeros((total_coeffs, total_coeffs)));
             let n = block.ncols();
-            s_j.slice_mut(s![start_index..start_index + n, start_index..start_index + n])
-                .assign(&block);
+            s_j.slice_mut(s![
+                start_index..start_index + n,
+                start_index..start_index + n
+            ])
+            .assign(&block);
             s_j
         })
         .collect::<Vec<_>>();
 
     Ok((x_model, penalty_matrices, total_coeffs))
 }
-

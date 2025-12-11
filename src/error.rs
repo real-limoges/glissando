@@ -1,6 +1,6 @@
 use ndarray::ShapeError;
-use thiserror::Error;
 use polars::prelude::PolarsError;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GamlssError {
