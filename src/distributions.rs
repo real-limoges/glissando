@@ -143,7 +143,7 @@ impl Distribution for StudentT {
 
         // mu
         let u_mu = (w_robust * z) / sigma;
-        let w_mu = (nu + 1.0) / (sigma.powi(2) * (nu + 3.0));
+        let w_mu = w_robust / sigma.powi(2);
 
         // sigma
         let u_sigma = w_robust * z_sq - 1.0;
