@@ -97,12 +97,12 @@ impl Distribution for Gaussian {
         let u_mu = (y - mu) / sigma_sq;
         let w_mu = 1.0 / sigma_sq;
 
-        let u_sigma = ((y - mu).powi(2) - sigma.powi(2)) / sigma_sq;
+        let u_sigma = ((y - mu).powi(2) - sigma_sq) / sigma_sq;
         let w_sigma = 2.0;
 
         HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (sigma, u_sigma)),
+            ("sigma".to_string(), (u_sigma, w_sigma)),
         ])
     }
 }

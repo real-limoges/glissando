@@ -25,7 +25,7 @@ fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f
         .to_shape(n_obs)
         .map_err(|e| GamlssError::Shape(e.to_string()));
 
-    Ok(Array1::<f64>::from(arr?.to_vec()))
+    Ok(Array1::<f64>::from(arr?.to_vec()).to_owned())
 }
 
 fn assemble_smooth(
@@ -51,12 +51,8 @@ fn assemble_smooth(
         }
 
         Smooth::TensorProduct {
-            col_name_1,
-            n_splines_1,
-            penalty_order_1,
-            col_name_2,
-            n_splines_2,
-            penalty_order_2,
+            col_name_1, n_splines_1, penalty_order_1,
+            col_name_2, n_splines_2, penalty_order_2,
             degree,
         } => {
             //  First set up both sidees of the product
@@ -80,7 +76,7 @@ fn assemble_smooth(
                     &row1.insert_axis(Axis(0)).to_owned(),
                     &row2.insert_axis(Axis(0)).to_owned(),
                 );
-                basis.row_mut(i).assign(&row_out);
+                basis.row_mut(i).assign(&row_out.row(0));
             }
 
             // this pushes them out the penalties into matrices

@@ -18,6 +18,11 @@ pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
 
 pub fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     let n_obs = x.len();
+
+    if n_splines <= degree {
+        return Array2::<f64>::zeros((n_obs, n_splines));
+    }
+
     let knots = select_knots(x, n_splines, degree);
     let mut basis_matrix = Array2::<f64>::zeros((n_obs, n_splines));
 
@@ -42,8 +47,11 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
     let min_val = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
     let max_val = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
 
-    let num_total_knots = n_splines + degree + 1;
-    let num_interior_knots = num_total_knots - 2 * (degree + 1);
+    let safe_n_splines = n_splines.max(degree + 1);
+    let num_total_knots = safe_n_splines + degree + 1;
+
+    let num_interior_knots = num_total_knots.saturating_sub(2 * (degree + 1));
+
     let mut knots = Vec::with_capacity(num_total_knots);
 
     for _ in 0..=degree {
@@ -55,10 +63,16 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
         sorted_x.retain(|v| !v.is_nan());
         sorted_x.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
 
-        for i in 1..=num_interior_knots {
-            let quantile = i as f64 / (num_interior_knots + 1) as f64;
-            let index = (quantile * (sorted_x.len() - 1) as f64).round() as usize;
-            knots.push(sorted_x[index]);
+        if !sorted_x.is_empty() {
+            for i in 1..=num_interior_knots {
+                let quantile = i as f64 / (num_interior_knots + 1) as f64;
+                let idx = (quantile * (sorted_x.len() - 1) as f64).round() as usize;
+                knots.push(sorted_x[idx]);
+            }
+        } else {
+            for _ in 0..=num_interior_knots {
+                knots.push(min_val);
+            }
         }
     }
 
@@ -69,7 +83,6 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
     while knots.len() < num_total_knots {
         knots.push(max_val);
     }
-
     knots
 }
 
@@ -86,12 +99,14 @@ fn find_knot_span(x: f64, degree: usize, n_splines: usize, knots: &[f64]) -> usi
         return degree;
     }
     let idx = knots.partition_point(|&k| k <= x);
-    (idx - 1).max(degree)
+    let safe_idx = idx.saturating_sub(1);
+    safe_idx.max(degree).min(n_splines - 1)
 }
 
 fn evaluate_basis_functions(x: f64, i: usize, degree: usize, knots: &[f64]) -> Vec<f64> {
     let mut basis = vec![0.0; degree + 1];
     basis[0] = 1.0;
+
     let mut left = vec![0.0; degree + 1];
     let mut right = vec![0.0; degree + 1];
 
@@ -99,11 +114,16 @@ fn evaluate_basis_functions(x: f64, i: usize, degree: usize, knots: &[f64]) -> V
         let mut saved = 0.0;
         for r in 0..j {
             // some sanity checks because i keep going out of bounds
-            if (i + 1 - j + r) < knots.len() && (i + r + 1) < knots.len() {
-                left[j] = x - knots[i + 1 - j + r];
-                right[j] = knots[i + r + 1] - x;
+            // added more checks
+            let left_idx = (i + 1).saturating_sub(j).saturating_add(r);
+            let right_idx = i + r + 1;
+
+            if right_idx < knots.len() {
+                left[j] = x - knots[left_idx];
+                right[j] = knots[right_idx] - x;
+
                 let denom = right[r + 1] + left[j - r];
-                if denom.abs() > 1e-10 {
+                if denom.abs() > 1e-12 {
                     let term = basis[r] / denom;
                     basis[r] = saved + right[r + 1] * term;
                     saved = left[j - r] * term;
