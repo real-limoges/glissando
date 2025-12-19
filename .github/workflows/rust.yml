@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
 
 jobs:
   build:
@@ -24,7 +25,9 @@ jobs:
             pkg-config \
             libssl-dev \
             libzstd-dev \
-            liblz4-dev
+            liblz4-dev \
+            libopenblas-dev \
+            gfortran
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
