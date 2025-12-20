@@ -2,7 +2,7 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod distributions;
 mod error;
-mod fitting;
+pub mod fitting;
 mod math;
 pub mod preprocessing;
 mod splines;

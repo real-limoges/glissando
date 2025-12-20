@@ -1,14 +1,14 @@
-mod assembler;
-mod solver;
-mod inference;
+pub mod assembler;
+pub mod inference;
+pub mod solver;
 
 use self::assembler::assemble_model_matrices;
-use self::solver::{run_optimization, fit_pwls};
 pub use self::inference::sample_posterior;
+use self::solver::{fit_pwls, run_optimization};
 
-use super::error::GamlssError;
 use super::distributions::{Distribution, Link};
-use super::terms::{Term, Smooth};
+use super::error::GamlssError;
+use super::terms::{Smooth, Term};
 use super::types::*;
 use ndarray::{Array1, Array2};
 use polars::prelude::DataFrame;
@@ -43,7 +43,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     data: &DataFrame,
     y: &Array1<f64>,
     formula: &HashMap<String, Vec<Term>>,
-    family: &D
+    family: &D,
 ) -> Result<HashMap<String, FittedParameter>, GamlssError> {
     let n_obs = y.len();
     let mut models: HashMap<String, FittingParameter> = HashMap::new();
@@ -53,11 +53,13 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     // =========================================================
     for param_name in family.parameters() {
         let param_name_str = param_name.to_string();
-        let terms = formula.get(&param_name_str)
-            .ok_or_else(|| GamlssError::Input(format!("Formula missing for parameter {}", param_name)))?;
+        let terms = formula.get(&param_name_str).ok_or_else(|| {
+            GamlssError::Input(format!("Formula missing for parameter {}", param_name))
+        })?;
         let link = family.default_link(param_name);
 
-        let (x_model, penalty_matrices, total_coeffs) = assemble_model_matrices(data, n_obs, terms)?;
+        let (x_model, penalty_matrices, total_coeffs) =
+            assemble_model_matrices(data, n_obs, terms)?;
 
         // --- SMART INITIALIZATION (Fixing the Bugs) ---
         // 1. Determine Start Value on RESPONSE Scale (Physical units)
@@ -88,17 +90,20 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let eta = Array1::from_elem(n_obs, eta_start);
         let lambdas = Array1::<f64>::ones(penalty_matrices.len());
 
-        models.insert(param_name_str, FittingParameter {
-            terms: terms.clone(),
-            link,
-            x_matrix: x_model,
-            penalty_matrices,
-            beta,
-            eta,
-            lambdas,
-            covariance: None,
-            edf: 0.0,
-        });
+        models.insert(
+            param_name_str,
+            FittingParameter {
+                terms: terms.clone(),
+                link,
+                x_matrix: x_model,
+                penalty_matrices,
+                beta,
+                eta,
+                lambdas,
+                covariance: None,
+                edf: 0.0,
+            },
+        );
     } // <--- Initialization Loop Ends Here
 
     // =========================================================
@@ -128,8 +133,9 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 }
 
                 let all_derivs = family.derivatives(y[i], &obs_params);
-                let (u, w) = all_derivs.get(*param_name)
-                    .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", param_name)))?;
+                let (u, w) = all_derivs.get(*param_name).ok_or_else(|| {
+                    GamlssError::Input(format!("No derivation for {} found", param_name))
+                })?;
                 deriv_u[i] = *u;
                 deriv_w[i] = *w;
             }
@@ -149,19 +155,15 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             let w = safe_w;
 
             // Fit Sub-model
-            let best_lambdas = run_optimization::<D>(
-                &model.x_matrix,
-                &z,
-                &w,
-                &model.penalty_matrices
-            )?;
+            let best_lambdas =
+                run_optimization::<D>(&model.x_matrix, &z, &w, &model.penalty_matrices)?;
 
             let (new_beta, cov_matrix, edf) = fit_pwls(
                 &model.x_matrix,
                 &z,
                 &w,
                 &model.penalty_matrices,
-                &best_lambdas
+                &best_lambdas,
             )?;
 
             let diff = (&new_beta.0 - &model.beta.0).mapv(f64::abs).sum();

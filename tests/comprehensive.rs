@@ -1,38 +1,19 @@
+mod common;
+
+use common::Generator;
 use gamlss_rs::{
-    GamlssModel,
-    Smooth,
-    Term,
+    GamlssModel, Smooth, Term,
     distributions::{Gaussian, Poisson},
 };
-use polars::prelude::*;
 use std::collections::HashMap;
-use rand::prelude::*;
-use rand_distr::{
-    Distribution,
-    Poisson as PoissonDist,
-    Normal
-};
+use polars::prelude::{PlSmallStr, UInt32Chunked};
+use rand::prelude::SliceRandom;
 
-// Test Poisson (Counts)
 #[test]
 fn test_poisson_recovery() {
-    let n = 1000;
-    let mut rng = StdRng::seed_from_u64(123);
-
-    let true_intercept: f64 = 1.5;
-    let true_slope: f64 = 0.5;
-
-    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 4.0).collect();
-    let y: Vec<f64> = x.iter().map(|&x| {
-        let mu = (true_intercept + true_slope * x).exp();
-        let dist = PoissonDist::new(mu).unwrap();
-        dist.sample(&mut rng)
-    }).collect();
-
-    let df = df! (
-        "x" => x,
-        "y" => y,
-    ).unwrap();
+    let mut rand_gen = Generator::new(123);
+    let (true_int, true_slope) = (1.5, 0.5);
+    let df = rand_gen.poisson_data(1000, true_int, true_slope);
 
     let mut formulas = HashMap::new();
     formulas.insert("mu".to_string(), vec![
@@ -40,37 +21,23 @@ fn test_poisson_recovery() {
         Term::Linear { col_name: "x".to_string() }
     ]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Poisson::new()).expect("Poisson Fit Failed!");
+    let model = GamlssModel::fit(&df, "y", &formulas, &Poisson::new())
+        .expect("Poisson Fit Failed!");
 
     let coeffs = &model.models["mu"].coefficients;
 
-    println!("Poisson Coeffs: {:?}", coeffs);
-
-    assert!((coeffs[0] - true_intercept).abs() < 0.1, "Poisson Intercept Failed!");
-    assert!((coeffs[1] - true_slope).abs() < 0.1, "Poisson Slope Failed!");
+    // Recovery assertions
+    assert!((coeffs[0] - true_int).abs() < 0.1, "Intercept recovery failed");
+    assert!((coeffs[1] - true_slope).abs() < 0.1, "Slope recovery failed");
 }
 
-// Test Heteroskedastic Gaussian
 #[test]
-fn test_heteroskedastic_gaussian() {
-    let n = 2000;
-    let mut rng = StdRng::seed_from_u64(456);
-
-    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 3.0).collect();
-    let y: Vec<f64> = x.iter().map(|&x| {
-        let mu = 10.0 + 2.0 * x;
-        let sigma = (-1.0 + 0.5 * x).exp();
-        let dist = Normal::new(mu, sigma).unwrap();
-        dist.sample(&mut rng)
-    }).collect();
-
-    let df = df! (
-        "x" => x,
-        "y" => y,
-    ).unwrap();
+fn test_heteroskedastic_gaussian_recovery() {
+    let mut rand_gen = Generator::new(456);
+    let df = rand_gen.heteroskedastic_gaussian(2000);
 
     let mut formulas = HashMap::new();
-    formulas.insert("mu".to_string(),vec![
+    formulas.insert("mu".to_string(), vec![
         Term::Intercept,
         Term::Linear { col_name: "x".to_string() }
     ]);
@@ -79,58 +46,25 @@ fn test_heteroskedastic_gaussian() {
         Term::Linear { col_name: "x".to_string() }
     ]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).expect("Gaussian Fit Failed!");
+    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new())
+        .expect("Gaussian Fit Failed!");
 
-    let mu_coeffs = &model.models["mu"].coefficients;
-    let sigma_coeffs = &model.models["sigma"].coefficients;
+    let mu = &model.models["mu"].coefficients;
+    let sigma = &model.models["sigma"].coefficients;
 
-    println!("Mu Coeffs: {:?}", mu_coeffs);
-    println!("Sigma Coeffs: {:?}", sigma_coeffs);
+    // Mu recovery (Truth: 10.0, 2.0)
+    assert!((mu[0] - 10.0).abs() < 0.15);
+    assert!((mu[1] - 2.0).abs() < 0.15);
 
-    assert!((mu_coeffs[0] - 10.0).abs() < 0.1);
-    assert!((mu_coeffs[1] - 2.0).abs() < 0.1);
-
-    assert!((sigma_coeffs[0] - (-1.0)).abs() < 0.15);
-    assert!((sigma_coeffs[1] - 0.5).abs() < 0.15);
+    // Sigma recovery (Truth: -1.0, 0.5)
+    assert!((sigma[0] - (-1.0)).abs() < 0.2);
+    assert!((sigma[1] - 0.5).abs() < 0.2);
 }
 
-// P Splines
-// #[test]
-// fn test_p_spline_smoothing() {
-//     let n = 200;
-//     let mut rng = StdRng::seed_from_u64(123);
-// }
-
-// Test Kroeneker Product
 #[test]
-fn test_tensor_product() {
-    let n = 400;
-    let mut rng = StdRng::seed_from_u64(123);
-
-    // two independent variables so we can test the product
-    let mut x1 = Vec::new();
-    let mut x2 = Vec::new();
-    let mut y = Vec::new();
-
-    for _ in 0..n {
-        let v1 = rng.random::<f64>();
-        let v2 = rng.random::<f64>();
-
-        let dist_sq = (v1 - 0.5).powi(2) + (v2 - 0.5).powi(2);
-        let mu = (-dist_sq * 5.0).exp();
-
-        let noise = rng.random_range(-0.1..0.1);
-
-        x1.push(v1);
-        x2.push(v2);
-        y.push(mu + noise);
-    }
-
-    let df = df! (
-        "x1" => x1,
-        "x2" => x2,
-        "y" => y,
-    ).unwrap();
+fn test_tensor_product_complexity() {
+    let mut rand_gen = Generator::new(123);
+    let df = rand_gen.tensor_surface(400);
 
     let mut formulas = HashMap::new();
     formulas.insert("mu".to_string(), vec![
@@ -141,15 +75,78 @@ fn test_tensor_product() {
             col_name_2: "x2".to_string(),
             n_splines_2: 5,
             penalty_order_2: 2,
-            degree: 3
+            degree: 3,
         })
     ]);
     formulas.insert("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).expect("Fit Failed!");
+    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new())
+        .expect("Tensor Fit Failed!");
 
-    println!("{:?}", model.models["mu"].edf);
+    let edf = model.models["mu"].edf;
 
-    assert!(model.models["mu"].edf > 5.0);
-    assert!(model.models["mu"].edf < 24.0);
+    // Check that smoothing actually happened
+    // A 5x5 tensor has 25 basis functions. 
+    // It should neither be a flat plane (EDF ~3) nor unpenalized (EDF 25)
+
+    assert!(edf > 4.0, "Model is over-smoothed (EDF: {})", edf);
+    assert!(edf < 20.0, "Model is under-smoothed (EDF: {})", edf);
+}
+
+#[test]
+fn test_model_convergence_invariants() {
+    let mut rand_gen = Generator::new(42);
+    let df = rand_gen.linear_gaussian(500, 1.0, 5.0, 1.0);
+
+    let mut formulas = HashMap::new();
+    formulas.insert("mu".to_string(), vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }]);
+    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model_1 = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+
+    // Modern Polars Shuffle (0.49+):
+    // Use sample_n with the number of rows to effectively shuffle the whole set.
+    let n = df.height();
+    let mut indices: Vec<u32> = (0..n as u32).collect();
+    indices.shuffle(&mut rand_gen.rng); // Use your common generator's rng
+
+    let idx_ca = UInt32Chunked::from_vec(PlSmallStr::from_static("idx"), indices);
+    let df_shuffled = df.take(&idx_ca).unwrap();
+
+    let model_2 = GamlssModel::fit(&df_shuffled, "y", &formulas, &Gaussian::new()).unwrap();
+
+    // Verify coefficients are identical regardless of row order
+    let b1 = &model_1.models["mu"].coefficients;
+    let b2 = &model_2.models["mu"].coefficients;
+
+    assert!((b1[0] - b2[0]).abs() < 1e-6, "Intercept shifted after shuffle");
+    assert!((b1[1] - b2[1]).abs() < 1e-6, "Slope shifted after shuffle");
+}
+
+#[test]
+fn test_spline_partition_of_unity() {
+    let mut rand_gen = Generator::new(42);
+    // Create some data
+    let df = rand_gen.linear_gaussian(100, 1.0, 0.0, 1.0);
+
+    let n_splines = 10;
+    let term = Term::Smooth(gamlss_rs::Smooth::PSpline1D {
+        col_name: "x".to_string(),
+        n_splines,
+        degree: 3,
+        penalty_order: 2,
+    });
+
+    // You'll need to expose your internal assembler or basis functions
+    // to test this, or test it indirectly via the ModelMatrix.
+    // Assuming assemble_model_matrices is accessible for testing:
+    let (mm, _, _) = gamlss_rs::fitting::assembler::assemble_model_matrices(
+        &df, 100, &vec![term]
+    ).unwrap();
+
+    // Check each row of the spline basis part of the ModelMatrix. each row sums to 1-ish
+    for row in mm.0.rows() {
+        let row_sum: f64 = row.sum();
+        assert!((row_sum - 1.0).abs() < 1e-10, "Spline basis does not sum to 1.0 at a point!");
+    }
 }

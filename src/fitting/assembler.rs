@@ -51,8 +51,12 @@ fn assemble_smooth(
         }
 
         Smooth::TensorProduct {
-            col_name_1, n_splines_1, penalty_order_1,
-            col_name_2, n_splines_2, penalty_order_2,
+            col_name_1,
+            n_splines_1,
+            penalty_order_1,
+            col_name_2,
+            n_splines_2,
+            penalty_order_2,
             degree,
         } => {
             //  First set up both sidees of the product
@@ -117,7 +121,7 @@ fn assemble_smooth(
     }
 }
 
-pub(crate) fn assemble_model_matrices(
+pub fn assemble_model_matrices(
     data: &DataFrame,
     n_obs: usize,
     terms: &[Term],
