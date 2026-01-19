@@ -37,7 +37,7 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
             self.penalty_matrices,
             &lambdas,
         )
-        .map_err(|e| Error::new(e))?;
+        .map_err(Error::new)?;
 
         let n = self.z.len() as f64;
 

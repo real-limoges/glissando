@@ -16,6 +16,5 @@ pub fn trigamma(x: f64) -> f64 {
         + (1.0 / 42.0) * inv_x2.powi(3) * inv_x
         - (1.0 / 30.0) * inv_x2.powi(4) * inv_x;
 
-    let return_val = expansion + result;
-    return_val
+    expansion + result
 }

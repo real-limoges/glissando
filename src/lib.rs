@@ -10,7 +10,7 @@ mod terms;
 mod types;
 
 pub use error::GamlssError;
-pub use fitting::FitDiagnostics;
+pub use fitting::{FitConfig, FitDiagnostics};
 pub use terms::{Smooth, Term};
 pub use types::*;
 
@@ -33,6 +33,16 @@ impl GamlssModel {
         formula: &HashMap<String, Vec<Term>>,
         family: &D,
     ) -> Result<Self, GamlssError> {
+        Self::fit_with_config(data, y_name, formula, family, FitConfig::default())
+    }
+
+    pub fn fit_with_config<D: Distribution>(
+        data: &DataFrame,
+        y_name: &str,
+        formula: &HashMap<String, Vec<Term>>,
+        family: &D,
+        config: FitConfig,
+    ) -> Result<Self, GamlssError> {
         validate_inputs(data, y_name, formula, family)?;
 
         let y_series = data.column(y_name).map_err(|e| {
@@ -46,7 +56,8 @@ impl GamlssModel {
 
         let y_vector = Array1::from_vec(y_vec.to_vec());
 
-        let (fitted_models, diagnostics) = fitting::fit_gamlss(data, &y_vector, formula, family)?;
+        let (fitted_models, diagnostics) =
+            fitting::fit_gamlss(data, &y_vector, formula, family, &config)?;
 
         Ok(Self {
             models: fitted_models,

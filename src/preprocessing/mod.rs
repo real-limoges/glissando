@@ -40,7 +40,11 @@ pub fn validate_inputs<D: Distribution>(
         return Err(GamlssError::EmptyData);
     }
 
-    let available_columns: HashSet<&str> = data.get_column_names().into_iter().collect();
+    let available_columns: HashSet<String> = data
+        .get_column_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
 
     if !available_columns.contains(y_name) {
         return Err(GamlssError::MissingColumn {
@@ -75,11 +79,11 @@ pub fn validate_inputs<D: Distribution>(
     }
 
     for col in &referenced_columns {
-        let series = data.column(*col).map_err(|_| GamlssError::MissingColumn {
+        let series = data.column(col).map_err(|_| GamlssError::MissingColumn {
             column: col.to_string(),
         })?;
 
-        if series.dtype().is_numeric() {
+        if series.dtype().is_primitive_numeric() {
             validate_column_finite(data, col)?;
         }
     }
@@ -88,9 +92,11 @@ pub fn validate_inputs<D: Distribution>(
 }
 
 fn validate_column_finite(data: &DataFrame, col_name: &str) -> Result<(), GamlssError> {
-    let series = data.column(col_name).map_err(|_| GamlssError::MissingColumn {
-        column: col_name.to_string(),
-    })?;
+    let series = data
+        .column(col_name)
+        .map_err(|_| GamlssError::MissingColumn {
+            column: col_name.to_string(),
+        })?;
 
     let casted = match series.cast(&DataType::Float64) {
         Ok(s) => s,
