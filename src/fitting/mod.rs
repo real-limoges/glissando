@@ -14,7 +14,30 @@ use ndarray::{Array1, Array2};
 use polars::prelude::DataFrame;
 use std::collections::HashMap;
 
-const MAX_GAMLSS_ITER: usize = 20;
+const DEFAULT_MAX_ITER: usize = 20;
+const DEFAULT_TOLERANCE: f64 = 1e-6;
+
+#[derive(Debug, Clone)]
+pub struct FitConfig {
+    pub max_iterations: usize,
+    pub tolerance: f64,
+}
+
+impl Default for FitConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: DEFAULT_MAX_ITER,
+            tolerance: DEFAULT_TOLERANCE,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FitDiagnostics {
+    pub converged: bool,
+    pub iterations: usize,
+    pub final_change: f64,
+}
 
 #[derive(Debug)]
 pub struct FittedParameter {
@@ -44,7 +67,8 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     y: &Array1<f64>,
     formula: &HashMap<String, Vec<Term>>,
     family: &D,
-) -> Result<HashMap<String, FittedParameter>, GamlssError> {
+    config: &FitConfig,
+) -> Result<(HashMap<String, FittedParameter>, FitDiagnostics), GamlssError> {
     let n_obs = y.len();
     let mut models: HashMap<String, FittingParameter> = HashMap::new();
 
@@ -56,7 +80,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let terms = formula.get(&param_name_str).ok_or_else(|| {
             GamlssError::Input(format!("Formula missing for parameter {}", param_name))
         })?;
-        let link = family.default_link(param_name);
+        let link = family.default_link(param_name)?;
 
         let (x_model, penalty_matrices, total_coeffs) =
             assemble_model_matrices(data, n_obs, terms)?;
@@ -109,20 +133,22 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     // =========================================================
     // 2. GAMLSS CYCLE PHASE
     // =========================================================
-    for _cycle in 0..MAX_GAMLSS_ITER {
+    let mut converged = false;
+    let mut final_iteration = 0;
+    let mut final_change = f64::MAX;
+
+    for cycle in 0..config.max_iterations {
         let mut max_diff = 0.0;
 
         for param_name in family.parameters() {
             let param_key = param_name.to_string();
             let mut current_params = HashMap::new();
 
-            // Snapshot current state
             for (name, model) in &models {
                 let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
                 current_params.insert(name.clone(), fitted_values);
             }
 
-            // Calculate derivatives
             let mut deriv_u = Array1::zeros(n_obs);
             let mut deriv_w = Array1::zeros(n_obs);
 
@@ -140,21 +166,17 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 deriv_w[i] = *w;
             }
 
-            let model = models.get_mut(&param_key).unwrap();
+            let model = models.get_mut(&param_key).ok_or_else(|| {
+                GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
+            })?;
 
-            // FIX: Enforce minimum weight to prevent collapse/NaNs
-            // If weight is too small, the solver sees "no data" and returns prior (0).
             let safe_w = deriv_w.mapv(|w| w.max(1e-6));
-
-            // Calculate Working Response (z)
-            // Clamp the adjustment to prevent explosion in early iterations
             let adjustment = &deriv_u / &safe_w;
-            let safe_adjustment = adjustment.mapv(|v| v.max(-20.0).min(20.0));
+            let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
 
             let z = &model.eta + &safe_adjustment;
             let w = safe_w;
 
-            // Fit Sub-model
             let best_lambdas =
                 run_optimization::<D>(&model.x_matrix, &z, &w, &model.penalty_matrices)?;
 
@@ -178,7 +200,11 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             model.edf = edf;
         }
 
-        if max_diff < 1e-6 {
+        final_iteration = cycle + 1;
+        final_change = max_diff;
+
+        if max_diff < config.tolerance {
+            converged = true;
             break;
         }
     }
@@ -191,9 +217,16 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     for (name, model) in models {
         let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
 
+        let covariance = model.covariance.ok_or_else(|| {
+            GamlssError::Internal(format!(
+                "Covariance matrix not computed for parameter '{}'",
+                name
+            ))
+        })?;
+
         let fitted_param = FittedParameter {
             coefficients: model.beta,
-            covariance: model.covariance.expect("Covariance matrix not computed"),
+            covariance,
             terms: model.terms,
             lambdas: model.lambdas,
             eta: model.eta,
@@ -203,5 +236,11 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         final_results.insert(name, fitted_param);
     }
 
-    Ok(final_results)
+    let diagnostics = FitDiagnostics {
+        converged,
+        iterations: final_iteration,
+        final_change,
+    };
+
+    Ok((final_results, diagnostics))
 }

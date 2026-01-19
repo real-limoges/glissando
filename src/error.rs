@@ -24,6 +24,24 @@ pub enum GamlssError {
 
     #[error("ShapeError (Private): {0}")]
     ComputationError(String),
+
+    #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
+    UnknownParameter { distribution: String, param: String },
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+
+    #[error("Column '{column}' not found in DataFrame")]
+    MissingColumn { column: String },
+
+    #[error("Column '{column}' contains {count} non-finite values (NaN or Inf)")]
+    NonFiniteValues { column: String, count: usize },
+
+    #[error("Formula missing terms for distribution parameter '{param}'")]
+    MissingFormula { param: String },
+
+    #[error("Empty dataset: DataFrame has no rows")]
+    EmptyData,
 }
 
 impl From<argmin::core::Error> for GamlssError {
