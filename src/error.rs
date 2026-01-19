@@ -24,6 +24,12 @@ pub enum GamlssError {
 
     #[error("ShapeError (Private): {0}")]
     ComputationError(String),
+
+    #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
+    UnknownParameter { distribution: String, param: String },
+
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 impl From<argmin::core::Error> for GamlssError {

@@ -56,7 +56,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let terms = formula.get(&param_name_str).ok_or_else(|| {
             GamlssError::Input(format!("Formula missing for parameter {}", param_name))
         })?;
-        let link = family.default_link(param_name);
+        let link = family.default_link(param_name)?;
 
         let (x_model, penalty_matrices, total_coeffs) =
             assemble_model_matrices(data, n_obs, terms)?;
@@ -140,7 +140,9 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 deriv_w[i] = *w;
             }
 
-            let model = models.get_mut(&param_key).unwrap();
+            let model = models.get_mut(&param_key).ok_or_else(|| {
+                GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
+            })?;
 
             // FIX: Enforce minimum weight to prevent collapse/NaNs
             // If weight is too small, the solver sees "no data" and returns prior (0).
@@ -191,9 +193,16 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     for (name, model) in models {
         let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
 
+        let covariance = model.covariance.ok_or_else(|| {
+            GamlssError::Internal(format!(
+                "Covariance matrix not computed for parameter '{}'",
+                name
+            ))
+        })?;
+
         let fitted_param = FittedParameter {
             coefficients: model.beta,
-            covariance: model.covariance.expect("Covariance matrix not computed"),
+            covariance,
             terms: model.terms,
             lambdas: model.lambdas,
             eta: model.eta,
