@@ -9,32 +9,21 @@ mod splines;
 mod terms;
 mod types;
 
-// for end user
 pub use error::GamlssError;
-// pub mod families;
+pub use fitting::FitDiagnostics;
 pub use terms::{Smooth, Term};
 pub use types::*;
-
-//
 
 use distributions::Distribution;
 use ndarray::{Array, Array1};
 use polars::prelude::{DataFrame, PolarsError};
+use preprocessing::validate_inputs;
 use std::collections::HashMap;
-// use crate::fitting::ModelParameter;
-
-// #[derive(Debug)]
-// pub struct FittedParameter {
-//     pub coefficients: Coefficients,
-//     pub covariance: CovarianceMatrix,
-//     pub terms: Vec<Term>,
-//     pub eta: Array1<f64>,
-//     pub fitted_values: Array1<f64>,
-// }
 
 #[derive(Debug)]
 pub struct GamlssModel {
     pub models: HashMap<String, fitting::FittedParameter>,
+    pub diagnostics: FitDiagnostics,
 }
 
 impl GamlssModel {
@@ -44,6 +33,8 @@ impl GamlssModel {
         formula: &HashMap<String, Vec<Term>>,
         family: &D,
     ) -> Result<Self, GamlssError> {
+        validate_inputs(data, y_name, formula, family)?;
+
         let y_series = data.column(y_name).map_err(|e| {
             GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e))
         })?;
@@ -55,11 +46,16 @@ impl GamlssModel {
 
         let y_vector = Array1::from_vec(y_vec.to_vec());
 
-        let fitted_models = fitting::fit_gamlss(data, &y_vector, formula, family)?;
+        let (fitted_models, diagnostics) = fitting::fit_gamlss(data, &y_vector, formula, family)?;
 
         Ok(Self {
             models: fitted_models,
+            diagnostics,
         })
+    }
+
+    pub fn converged(&self) -> bool {
+        self.diagnostics.converged
     }
 
     // I know that the sampling is going to change quite radically, so I'm just commenting this
