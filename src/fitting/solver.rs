@@ -188,7 +188,6 @@ fn fit_pwls_with_grad_info(
     let x_t_w_z = x_weighted.t().dot(&z_weighted);
 
     let lhs = &x_t_w_x + &s_lambda;
-    let rhs = x_t_w_z;
 
     let beta_arr = lhs.solve(&x_t_w_z).map_err(GamlssError::Linalg)?;
     let beta = Coefficients(beta_arr);
@@ -200,7 +199,8 @@ fn fit_pwls_with_grad_info(
     let residuals = z - &fitted;
     let rss = (&residuals * &residuals * w_diag).sum();
 
-    let edf = v_beta_unscaled.0.dot(&x_t_w_x).diag().sum();
+    // X'Wr = (√W·X)' * (√W·r) - needed for gradient computation
+    let x_t_w_r = x_weighted.t().dot(&(&residuals * &sqrt_w));
 
     Ok(PwlsGradientInfo {
         beta,

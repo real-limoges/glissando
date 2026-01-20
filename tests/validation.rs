@@ -21,8 +21,8 @@ fn test_missing_response_column() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, GamlssError::Input(_)),
-        "Expected Input error for missing response column, got {:?}",
+        matches!(err, GamlssError::MissingColumn { .. }),
+        "Expected MissingColumn error for missing response column, got {:?}",
         err
     );
 }
@@ -40,8 +40,8 @@ fn test_missing_formula_for_parameter() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, GamlssError::Input(_)),
-        "Expected Input error for missing formula, got {:?}",
+        matches!(err, GamlssError::MissingFormula { .. }),
+        "Expected MissingFormula error for missing formula, got {:?}",
         err
     );
 }
