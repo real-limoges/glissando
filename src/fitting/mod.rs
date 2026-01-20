@@ -149,7 +149,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             // Calculate Working Response (z)
             // Clamp the adjustment to prevent explosion in early iterations
             let adjustment = &deriv_u / &safe_w;
-            let safe_adjustment = adjustment.mapv(|v| v.max(-20.0).min(20.0));
+            let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
 
             let z = &model.eta + &safe_adjustment;
             let w = safe_w;
