@@ -60,8 +60,8 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
 
     if num_interior_knots > 0 {
         let mut sorted_x = x.to_vec();
-        sorted_x.retain(|v| !v.is_nan());
-        sorted_x.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted_x.retain(|v| v.is_finite());
+        sorted_x.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         if !sorted_x.is_empty() {
             for i in 1..=num_interior_knots {

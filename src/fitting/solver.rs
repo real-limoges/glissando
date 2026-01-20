@@ -139,7 +139,9 @@ pub(crate) fn run_optimization<D: Distribution>(
         .configure(|state| state.param(initial_log_lambdas).max_iters(100))
         .run()?;
 
-    let best_log_lambdas = res.state.best_param.unwrap();
+    let best_log_lambdas = res.state.best_param.ok_or_else(|| {
+        GamlssError::Optimization("Optimizer failed to find best parameters".to_string())
+    })?;
     let best_lambdas = best_log_lambdas.mapv(f64::exp);
 
     Ok(best_lambdas)
@@ -164,6 +166,7 @@ fn fit_pwls_with_grad_info(
     lambdas: &Array1<f64>,
 ) -> Result<PwlsGradientInfo, GamlssError> {
     let x = &x_matrix.0;
+
     let (_n_obs, n_coeffs) = x.dim();
 
     let mut s_lambda = Array2::<f64>::zeros((n_coeffs, n_coeffs));
@@ -171,14 +174,21 @@ fn fit_pwls_with_grad_info(
         s_lambda.scaled_add(lambdas[i], &s_j.0);
     }
 
+    // Use sqrt-weighted approach to avoid creating n×n diagonal matrix.
+    // X'WX = (√W·X)'(√W·X) and X'Wz = (√W·X)'(√W·z)
+    // This reduces memory from O(n²) to O(n·p).
     let sqrt_w = w_diag.mapv(f64::sqrt);
+
+    // Scale each row i of X by sqrt_w[i]
     let x_weighted = x * &sqrt_w.view().insert_axis(Axis(1));
     let z_weighted = z * &sqrt_w;
 
+    // X'WX and X'Wz without the n×n matrix
     let x_t_w_x = x_weighted.t().dot(&x_weighted);
     let x_t_w_z = x_weighted.t().dot(&z_weighted);
 
     let lhs = &x_t_w_x + &s_lambda;
+    let rhs = x_t_w_z;
 
     let beta_arr = lhs.solve(&x_t_w_z).map_err(GamlssError::Linalg)?;
     let beta = Coefficients(beta_arr);
@@ -190,8 +200,7 @@ fn fit_pwls_with_grad_info(
     let residuals = z - &fitted;
     let rss = (&residuals * &residuals * w_diag).sum();
 
-    // X'W * r for gradient
-    let x_t_w_r = x_weighted.t().dot(&(&residuals * &sqrt_w));
+    let edf = v_beta_unscaled.0.dot(&x_t_w_x).diag().sum();
 
     Ok(PwlsGradientInfo {
         beta,

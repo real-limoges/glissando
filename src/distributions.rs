@@ -1,3 +1,4 @@
+use crate::error::GamlssError;
 use crate::math::trigamma;
 use ndarray::Array1;
 use statrs::function::gamma::digamma;
@@ -37,8 +38,9 @@ impl Link for LogLink {
 
 pub trait Distribution: Debug + Send + Sync {
     fn parameters(&self) -> &[&'static str];
-    fn default_link(&self, param: &str) -> Box<dyn Link>;
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError>;
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)>;
+    fn name(&self) -> &'static str;
 }
 
 // Distributions
@@ -54,10 +56,13 @@ impl Distribution for Poisson {
     fn parameters(&self) -> &[&'static str] {
         &["mu"]
     }
-    fn default_link(&self, param: &str) -> Box<dyn Link> {
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Box::new(LogLink),
-            _ => panic!("Unknown parameter: {}", param),
+            "mu" => Ok(Box::new(LogLink)),
+            _ => Err(GamlssError::UnknownParameter {
+                distribution: self.name().to_string(),
+                param: param.to_string(),
+            }),
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
@@ -66,6 +71,9 @@ impl Distribution for Poisson {
         let deriv_w = mu;
 
         HashMap::from([("mu".to_string(), (deriv_u, deriv_w))])
+    }
+    fn name(&self) -> &'static str {
+        "Poisson"
     }
 }
 
@@ -82,11 +90,14 @@ impl Distribution for Gaussian {
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma"]
     }
-    fn default_link(&self, param: &str) -> Box<dyn Link> {
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Box::new(IdentityLink),
-            "sigma" => Box::new(LogLink),
-            _ => panic!("Unknown parameter: {}", param),
+            "mu" => Ok(Box::new(IdentityLink)),
+            "sigma" => Ok(Box::new(LogLink)),
+            _ => Err(GamlssError::UnknownParameter {
+                distribution: self.name().to_string(),
+                param: param.to_string(),
+            }),
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
@@ -105,6 +116,9 @@ impl Distribution for Gaussian {
             ("sigma".to_string(), (u_sigma, w_sigma)),
         ])
     }
+    fn name(&self) -> &'static str {
+        "Gaussian"
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -120,13 +134,19 @@ impl Distribution for StudentT {
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma", "nu"]
     }
-    fn default_link(&self, param: &str) -> Box<dyn Link> {
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Box::new(IdentityLink),
-            "sigma" => Box::new(LogLink),
-            "nu" => Box::new(LogLink),
-            _ => panic!("Unknown parameter: {}", param),
+            "mu" => Ok(Box::new(IdentityLink)),
+            "sigma" => Ok(Box::new(LogLink)),
+            "nu" => Ok(Box::new(LogLink)),
+            _ => Err(GamlssError::UnknownParameter {
+                distribution: self.name().to_string(),
+                param: param.to_string(),
+            }),
         }
+    }
+    fn name(&self) -> &'static str {
+        "StudentT"
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
         // nu is set to 10 to prevent a panic
