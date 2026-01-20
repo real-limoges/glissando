@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use polars::prelude::*;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal, Poisson};
@@ -15,23 +17,29 @@ impl Generator {
 
     pub fn poisson_data(&mut self, n: usize, intercept: f64, slope: f64) -> DataFrame {
         let x: Vec<f64> = (0..n).map(|i| (i as f64 / n as f64) * 4.0).collect();
-        let y: Vec<f64> = x.iter().map(|&x_val| {
-            let mu = (intercept + slope * x_val).exp();
-            let dist = Poisson::new(mu).unwrap();
-            dist.sample(&mut self.rng)
-        }).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&x_val| {
+                let mu = (intercept + slope * x_val).exp();
+                let dist = Poisson::new(mu).unwrap();
+                dist.sample(&mut self.rng)
+            })
+            .collect();
 
         df!("x" => x, "y" => y).unwrap()
     }
 
     pub fn heteroskedastic_gaussian(&mut self, n: usize) -> DataFrame {
         let x: Vec<f64> = (0..n).map(|i| (i as f64 / n as f64) * 3.0).collect();
-        let y: Vec<f64> = x.iter().map(|&x_val| {
-            let mu = 10.0 + 2.0 * x_val;
-            let sigma = (-1.0 + 0.5 * x_val).exp();
-            let dist = Normal::new(mu, sigma).unwrap();
-            dist.sample(&mut self.rng)
-        }).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&x_val| {
+                let mu = 10.0 + 2.0 * x_val;
+                let sigma = (-1.0 + 0.5 * x_val).exp();
+                let dist = Normal::new(mu, sigma).unwrap();
+                dist.sample(&mut self.rng)
+            })
+            .collect();
 
         df!("x" => x, "y" => y).unwrap()
     }
@@ -59,13 +67,22 @@ impl Generator {
         df!("x1" => x1, "x2" => x2, "y" => y).unwrap()
     }
 
-    pub fn linear_gaussian(&mut self, n: usize, slope: f64, intercept: f64, sigma: f64) -> DataFrame {
+    pub fn linear_gaussian(
+        &mut self,
+        n: usize,
+        slope: f64,
+        intercept: f64,
+        sigma: f64,
+    ) -> DataFrame {
         let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
-        let y: Vec<f64> = x.iter().map(|&x_val| {
-            let mu = intercept + slope * x_val;
-            let dist = Normal::new(mu, sigma).unwrap();
-            dist.sample(&mut self.rng)
-        }).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&x_val| {
+                let mu = intercept + slope * x_val;
+                let dist = Normal::new(mu, sigma).unwrap();
+                dist.sample(&mut self.rng)
+            })
+            .collect();
 
         df!("x" => x, "y" => y).unwrap()
     }

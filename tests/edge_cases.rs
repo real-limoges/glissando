@@ -1,0 +1,923 @@
+mod common;
+
+use common::Generator;
+use gamlss_rs::{
+    GamlssModel, Smooth, Term,
+    distributions::{Gaussian, Poisson, StudentT},
+};
+use polars::prelude::*;
+use rand::Rng;
+use std::collections::HashMap;
+
+#[test]
+fn test_poisson_with_smooth() {
+    let mut rng = Generator::new(42);
+
+    let n = 300;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 4.0).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (1.0 + 0.5 * xi.sin()).exp();
+            let dist = rand_distr::Poisson::new(mu).unwrap();
+            rng.rng.sample(dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 10,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Poisson::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    assert!(edf > 2.0, "EDF too low for nonlinear Poisson: {}", edf);
+    assert!(edf < 10.0, "EDF too high: {}", edf);
+}
+
+#[test]
+fn test_student_t_linear() {
+    let mut rng = Generator::new(123);
+
+    let n = 200;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = 5.0 + 2.0 * xi;
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(5.0).unwrap());
+            mu + t_sample * 0.5
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (mu_coeffs[0] - 5.0).abs() < 0.5,
+        "Intercept should be ~5, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 2.0).abs() < 0.5,
+        "Slope should be ~2, got {}",
+        mu_coeffs[1]
+    );
+}
+
+#[test]
+fn test_different_spline_configs() {
+    let mut rng = Generator::new(999);
+    let df = rng.linear_gaussian(200, 1.0, 5.0, 1.0);
+
+    for n_splines in [5, 10, 20] {
+        let mut formula = HashMap::new();
+        formula.insert(
+            "mu".to_string(),
+            vec![Term::Smooth(Smooth::PSpline1D {
+                col_name: "x".to_string(),
+                n_splines,
+                degree: 3,
+                penalty_order: 2,
+            })],
+        );
+        formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+        let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new());
+        assert!(model.is_ok(), "Failed with n_splines={}", n_splines);
+    }
+}
+
+#[test]
+fn test_penalty_order_1_vs_2() {
+    let mut rng = Generator::new(42);
+
+    let n = 200;
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| xi.sin() + rng.rng.random_range(-0.1..0.1))
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    // penalizes first differences
+    let mut formula1 = HashMap::new();
+    formula1.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 15,
+            degree: 3,
+            penalty_order: 1,
+        })],
+    );
+    formula1.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    // penalizes second differences - curvature
+    let mut formula2 = HashMap::new();
+    formula2.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 15,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula2.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model1 = GamlssModel::fit(&df, "y", &formula1, &Gaussian::new()).unwrap();
+    let model2 = GamlssModel::fit(&df, "y", &formula2, &Gaussian::new()).unwrap();
+
+    assert!(model1.models["mu"].edf > 2.0);
+    assert!(model2.models["mu"].edf > 2.0);
+}
+
+#[test]
+fn test_very_noisy_data() {
+    let mut rng = Generator::new(42);
+
+    let n = 500;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = 1.0 + 2.0 * xi;
+            mu + rng.rng.random_range(-5.0..5.0) // Large noise
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    // Should still recover approximate slope despite noise
+    let slope = model.models["mu"].coefficients[1];
+    assert!(
+        (slope - 2.0).abs() < 1.0,
+        "Slope should be roughly ~2 even with noise, got {}",
+        slope
+    );
+}
+
+#[test]
+fn test_perfect_linear_fit() {
+    // perfect linear relationship
+    let df = df!(
+        "x" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        "y" => [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0]
+    )
+    .unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    assert!(
+        coeffs[0].abs() < 1e-6,
+        "Intercept should be ~0, got {}",
+        coeffs[0]
+    );
+    assert!(
+        (coeffs[1] - 2.0).abs() < 1e-6,
+        "Slope should be exactly 2, got {}",
+        coeffs[1]
+    );
+}
+
+#[test]
+fn test_lambdas_positive() {
+    let mut rng = Generator::new(42);
+    let df = rng.linear_gaussian(200, 1.0, 5.0, 1.0);
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 10,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    // Smoothing parameters should be positive
+    for &lambda in model.models["mu"].lambdas.iter() {
+        assert!(lambda > 0.0, "Lambda should be positive, got {}", lambda);
+    }
+}
+
+#[test]
+fn test_covariance_symmetric() {
+    let mut rng = Generator::new(42);
+    let df = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    let cov = &model.models["mu"].covariance.0;
+    let (n, m) = cov.dim();
+
+    assert_eq!(n, m, "Covariance should be square");
+
+    for i in 0..n {
+        for j in 0..m {
+            let diff = (cov[[i, j]] - cov[[j, i]]).abs();
+            assert!(diff < 1e-10, "Covariance should be symmetric");
+        }
+    }
+}
+
+#[test]
+fn test_fitted_values_match_eta_transform() {
+    let mut rng = Generator::new(42);
+    let df = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    // For Gaussian with identity link, fitted_values should equal eta
+    let mu = &model.models["mu"];
+    for i in 0..mu.eta.len() {
+        let diff = (mu.fitted_values[i] - mu.eta[i]).abs();
+        assert!(diff < 1e-10, "For identity link, fitted should equal eta");
+    }
+
+    // For sigma with log link, fitted_values should equal exp(eta)
+    let sigma = &model.models["sigma"];
+    for i in 0..sigma.eta.len() {
+        let expected = sigma.eta[i].exp();
+        let diff = (sigma.fitted_values[i] - expected).abs();
+        assert!(diff < 1e-10, "For log link, fitted should equal exp(eta)");
+    }
+}
+
+#[test]
+fn test_random_effect_basic() {
+    let groups = vec!["A", "A", "A", "B", "B", "B", "C", "C", "C"];
+    let y = vec![1.0, 1.2, 0.8, 5.0, 5.1, 4.9, 3.0, 3.1, 2.9];
+
+    let df = df!(
+        "group" => groups,
+        "y" => y
+    )
+    .unwrap()
+    .lazy()
+    .with_column(col("group").cast(DataType::Categorical(None, Default::default())))
+    .collect()
+    .unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::RandomEffect {
+            col_name: "group".to_string(),
+        })],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    assert_eq!(
+        model.models["mu"].coefficients.len(),
+        3,
+        "Should have one coefficient per group"
+    );
+}
+
+#[test]
+fn test_wide_data_more_predictors() {
+    let mut rng = Generator::new(42);
+
+    let n = 100;
+    let x1: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>()).collect();
+    let x2: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>()).collect();
+    let x3: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>()).collect();
+    let x4: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>()).collect();
+
+    let y: Vec<f64> = (0..n)
+        .map(|i| 1.0 + x1[i] + 2.0 * x2[i] - x3[i] + 0.5 * x4[i] + rng.rng.random_range(-0.1..0.1))
+        .collect();
+
+    let df = df!(
+        "x1" => x1, "x2" => x2, "x3" => x3, "x4" => x4, "y" => y
+    )
+    .unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x1".to_string(),
+            },
+            Term::Linear {
+                col_name: "x2".to_string(),
+            },
+            Term::Linear {
+                col_name: "x3".to_string(),
+            },
+            Term::Linear {
+                col_name: "x4".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    assert_eq!(coeffs.len(), 5, "Should have 5 coefficients");
+
+    // check recovery
+    assert!((coeffs[1] - 1.0).abs() < 0.3, "x1 coef should be ~1");
+    assert!((coeffs[2] - 2.0).abs() < 0.3, "x2 coef should be ~2");
+    assert!((coeffs[3] - (-1.0)).abs() < 0.3, "x3 coef should be ~-1");
+    assert!((coeffs[4] - 0.5).abs() < 0.3, "x4 coef should be ~0.5");
+}
+
+// ============================================================================
+// Poisson Distribution Tests
+// ============================================================================
+
+#[test]
+fn test_poisson_multiple_predictors() {
+    let mut rng = Generator::new(555);
+
+    let n = 500;
+    let x1: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+    let x2: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+
+    // True model: log(mu) = 1.0 + 0.5*x1 - 0.3*x2
+    let y: Vec<f64> = (0..n)
+        .map(|i| {
+            let log_mu = 1.0 + 0.5 * x1[i] - 0.3 * x2[i];
+            let mu = log_mu.exp();
+            let dist = rand_distr::Poisson::new(mu).unwrap();
+            rng.rng.sample(dist)
+        })
+        .collect();
+
+    let df = df!("x1" => x1, "x2" => x2, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x1".to_string(),
+            },
+            Term::Linear {
+                col_name: "x2".to_string(),
+            },
+        ],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Poisson::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (coeffs[0] - 1.0).abs() < 0.15,
+        "Poisson intercept should be ~1.0, got {}",
+        coeffs[0]
+    );
+    assert!(
+        (coeffs[1] - 0.5).abs() < 0.15,
+        "Poisson x1 coef should be ~0.5, got {}",
+        coeffs[1]
+    );
+    assert!(
+        (coeffs[2] - (-0.3)).abs() < 0.15,
+        "Poisson x2 coef should be ~-0.3, got {}",
+        coeffs[2]
+    );
+}
+
+#[test]
+fn test_poisson_high_rate() {
+    // Test Poisson with high mean values (numerical stability)
+    let mut rng = Generator::new(777);
+
+    let n = 400;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model: log(mu) = 3.0 + 1.0*x => mu ranges from ~20 to ~109
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (3.0 + 1.0 * xi).exp();
+            let dist = rand_distr::Poisson::new(mu).unwrap();
+            rng.rng.sample(dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Poisson::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (coeffs[0] - 3.0).abs() < 0.15,
+        "High-rate Poisson intercept should be ~3.0, got {}",
+        coeffs[0]
+    );
+    assert!(
+        (coeffs[1] - 1.0).abs() < 0.15,
+        "High-rate Poisson slope should be ~1.0, got {}",
+        coeffs[1]
+    );
+}
+
+#[test]
+fn test_poisson_smooth_nonlinear() {
+    // Test Poisson with a nonlinear smooth relationship
+    let mut rng = Generator::new(888);
+
+    let n = 400;
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+
+    // True model: log(mu) = 2.0 + 0.5*sin(x)
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (2.0 + 0.5 * xi.sin()).exp();
+            let dist = rand_distr::Poisson::new(mu).unwrap();
+            rng.rng.sample(dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 12,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Poisson::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    // Should capture some curvature but not overfit
+    assert!(
+        edf > 3.0,
+        "Poisson smooth EDF too low for sinusoidal pattern: {}",
+        edf
+    );
+    assert!(edf < 10.0, "Poisson smooth EDF too high: {}", edf);
+}
+
+#[test]
+fn test_poisson_low_counts() {
+    // Test Poisson with very low counts (edge case)
+    let mut rng = Generator::new(111);
+
+    let n = 300;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+
+    // True model: log(mu) = -0.5 + 1.0*x => mu ranges from ~0.6 to ~1.6
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (-0.5 + 1.0 * xi).exp();
+            let dist = rand_distr::Poisson::new(mu).unwrap();
+            rng.rng.sample(dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Poisson::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    // Lower precision for low-count data
+    assert!(
+        (coeffs[0] - (-0.5)).abs() < 0.3,
+        "Low-count Poisson intercept should be ~-0.5, got {}",
+        coeffs[0]
+    );
+    assert!(
+        (coeffs[1] - 1.0).abs() < 0.3,
+        "Low-count Poisson slope should be ~1.0, got {}",
+        coeffs[1]
+    );
+}
+
+// ============================================================================
+// Student-t Distribution Tests
+// ============================================================================
+
+#[test]
+fn test_student_t_smooth_mu() {
+    // Test StudentT with smooth mu relationship
+    let mut rng = Generator::new(222);
+
+    let n = 500;
+    let nu = 5.0; // degrees of freedom
+    let sigma = 0.5;
+
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = 3.0 * xi.sin(); // sinusoidal mean
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(nu).unwrap());
+            mu + sigma * t_sample
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 15,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    assert!(
+        edf > 3.0,
+        "StudentT smooth mu EDF too low for sinusoidal: {}",
+        edf
+    );
+    assert!(edf < 15.0, "StudentT smooth mu EDF too high: {}", edf);
+}
+
+#[test]
+fn test_student_t_heteroskedastic() {
+    // Test StudentT with varying sigma
+    let mut rng = Generator::new(333);
+
+    let n = 800;
+    let nu = 6.0;
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 3.0).collect();
+
+    // True model:
+    // mu = 5.0 + 2.0*x
+    // log(sigma) = -1.0 + 0.5*x => sigma varies from ~0.37 to ~0.82
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = 5.0 + 2.0 * xi;
+            let sigma = (-1.0 + 0.5 * xi).exp();
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(nu).unwrap());
+            mu + sigma * t_sample
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert(
+        "sigma".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    let sigma_coeffs = &model.models["sigma"].coefficients;
+
+    // Check mu recovery
+    assert!(
+        (mu_coeffs[0] - 5.0).abs() < 0.5,
+        "StudentT hetero mu intercept should be ~5.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 2.0).abs() < 0.3,
+        "StudentT hetero mu slope should be ~2.0, got {}",
+        mu_coeffs[1]
+    );
+
+    // Check sigma recovery (log link)
+    assert!(
+        (sigma_coeffs[0] - (-1.0)).abs() < 0.4,
+        "StudentT hetero sigma intercept should be ~-1.0, got {}",
+        sigma_coeffs[0]
+    );
+    assert!(
+        (sigma_coeffs[1] - 0.5).abs() < 0.3,
+        "StudentT hetero sigma slope should be ~0.5, got {}",
+        sigma_coeffs[1]
+    );
+}
+
+#[test]
+fn test_student_t_heavy_tails() {
+    // Test StudentT with very low degrees of freedom (heavy tails)
+    let mut rng = Generator::new(444);
+
+    let n = 1000;
+    let true_nu = 3.0; // Heavy tails
+    let true_mu = 10.0;
+    let true_sigma = 1.0;
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = true_mu + 2.0 * xi;
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(true_nu).unwrap());
+            mu + true_sigma * t_sample
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let nu_coeff = model.models["nu"].coefficients[0];
+    let fitted_nu = nu_coeff.exp();
+
+    // Nu estimation is noisy but should be in reasonable range for heavy tails
+    assert!(
+        fitted_nu < 10.0,
+        "StudentT should detect heavy tails (low nu), got nu={}",
+        fitted_nu
+    );
+    assert!(
+        fitted_nu > 1.5,
+        "Fitted nu too low (unstable), got nu={}",
+        fitted_nu
+    );
+}
+
+#[test]
+fn test_student_t_multiple_predictors() {
+    // Test StudentT with multiple linear predictors
+    let mut rng = Generator::new(666);
+
+    let n = 600;
+    let nu = 5.0;
+    let sigma = 0.8;
+
+    let x1: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+    let x2: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+    let x3: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+
+    // True model: mu = 2.0 + 1.5*x1 - 0.8*x2 + 0.5*x3
+    let y: Vec<f64> = (0..n)
+        .map(|i| {
+            let mu = 2.0 + 1.5 * x1[i] - 0.8 * x2[i] + 0.5 * x3[i];
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(nu).unwrap());
+            mu + sigma * t_sample
+        })
+        .collect();
+
+    let df = df!("x1" => x1, "x2" => x2, "x3" => x3, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x1".to_string(),
+            },
+            Term::Linear {
+                col_name: "x2".to_string(),
+            },
+            Term::Linear {
+                col_name: "x3".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (coeffs[0] - 2.0).abs() < 0.4,
+        "StudentT intercept should be ~2.0, got {}",
+        coeffs[0]
+    );
+    assert!(
+        (coeffs[1] - 1.5).abs() < 0.3,
+        "StudentT x1 coef should be ~1.5, got {}",
+        coeffs[1]
+    );
+    assert!(
+        (coeffs[2] - (-0.8)).abs() < 0.3,
+        "StudentT x2 coef should be ~-0.8, got {}",
+        coeffs[2]
+    );
+    assert!(
+        (coeffs[3] - 0.5).abs() < 0.3,
+        "StudentT x3 coef should be ~0.5, got {}",
+        coeffs[3]
+    );
+}
+
+#[test]
+fn test_student_t_near_gaussian() {
+    // Test StudentT with high degrees of freedom (should behave like Gaussian)
+    let mut rng = Generator::new(999);
+
+    let n = 500;
+    let true_nu = 30.0; // High nu => nearly Gaussian
+    let true_mu_int = 5.0;
+    let true_mu_slope = 3.0;
+    let true_sigma = 1.0;
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = true_mu_int + true_mu_slope * xi;
+            let t_sample: f64 = rng.rng.sample(rand_distr::StudentT::new(true_nu).unwrap());
+            mu + true_sigma * t_sample
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    formula.insert("nu".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+
+    // With high nu, should recover parameters similar to Gaussian
+    assert!(
+        (mu_coeffs[0] - true_mu_int).abs() < 0.3,
+        "Near-Gaussian StudentT intercept should be ~{}, got {}",
+        true_mu_int,
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - true_mu_slope).abs() < 0.3,
+        "Near-Gaussian StudentT slope should be ~{}, got {}",
+        true_mu_slope,
+        mu_coeffs[1]
+    );
+
+    // Fitted nu should be reasonably high
+    let fitted_nu = model.models["nu"].coefficients[0].exp();
+    assert!(
+        fitted_nu > 10.0,
+        "Near-Gaussian StudentT should have high nu, got {}",
+        fitted_nu
+    );
+}
