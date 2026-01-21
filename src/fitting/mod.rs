@@ -62,6 +62,12 @@ pub struct FittingParameter {
     edf: f64,
 }
 
+/// Fits a GAMLSS model using the RS (Rigby-Stasinopoulos) algorithm.
+///
+/// The RS algorithm cycles through distribution parameters (μ, σ, ν, ...) fitting each
+/// as a penalized additive model while holding others fixed. Each parameter update uses
+/// penalized iteratively reweighted least squares (P-IRLS) with a working response z
+/// and working weights w derived from the distribution's score and Fisher information.
 pub(crate) fn fit_gamlss<D: Distribution>(
     data: &DataFrame,
     y: &Array1<f64>,
@@ -170,6 +176,12 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
             })?;
 
+            // Construct the working response (z) and weights (w) for P-IRLS.
+            // From Fisher scoring: z = η + W⁻¹ * u, where u = dl/dη (score) and W = E[-d²l/dη²].
+            // This linearizes the likelihood around the current η, letting us solve
+            // a weighted least squares problem: minimize Σ w_i(z_i - x_i'β)².
+            //
+            // Clamping prevents numerical issues from extreme residuals or near-zero weights.
             let safe_w = deriv_w.mapv(|w| w.max(1e-6));
             let adjustment = &deriv_u / &safe_w;
             let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
