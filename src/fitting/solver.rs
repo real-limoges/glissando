@@ -36,6 +36,14 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
     type Param = LogLambdas;
     type Output = f64;
 
+    /// Computes Generalized Cross-Validation (GCV) score for smoothing parameter selection.
+    ///
+    /// GCV approximates leave-one-out CV without refitting n times:
+    ///   GCV(λ) = n * RSS / (n - EDF)²
+    ///
+    /// where RSS is weighted residual sum of squares and EDF is effective degrees of freedom.
+    /// Minimizing GCV balances fit (low RSS) against complexity (high EDF).
+    /// We optimize in log-space (log λ) for numerical stability and unconstrained optimization.
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         let lambdas = param.mapv(f64::exp);
 
@@ -54,6 +62,7 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
         let residuals_z = self.z - &fitted_z;
         let rss = (&residuals_z * &residuals_z * self.w).sum();
 
+        // Guard against division by zero when EDF approaches n (overfit)
         let denominator = (n - edf).powi(2);
         if denominator.abs() < 1e-10 {
             return Ok(f64::MAX);
@@ -68,6 +77,10 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
     type Param = LogLambdas;
     type Gradient = LogLambdas;
 
+    /// Computes the gradient of GCV with respect to log(lambda) for quasi-Newton optimization.
+    ///
+    /// The key insight is that beta depends on lambda through the penalized normal equations.
+    /// See docs/mathematics.md for the full derivation of dRSS/dlambda and dEDF/dlambda.
     fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
         let lambdas = param.mapv(f64::exp);
         let n_penalties = lambdas.len();
@@ -106,10 +119,10 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
             let v_sj_v = v_sj.dot(&info.v_matrix);
             let d_edf = -v_sj_v.dot(&info.x_t_w_x).diag().sum();
 
-            // dGCV/dlambda_j = n * [dRSS * (n-EDF) + 2*RSS*dEDF] / (n-EDF)^3
+            // Quotient rule: dGCV/dlambda_j = n * [dRSS*(n-EDF) + 2*RSS*dEDF] / (n-EDF)^3
             let d_gcv = n * (d_rss * denom + 2.0 * info.rss * d_edf) / denom.powi(3);
 
-            // dGCV/dlog(lambda_j) = lambda_j * dGCV/dlambda_j
+            // Chain rule for log-space: d/d(log lambda) = lambda * d/dlambda
             grad_vec[j] = lambdas[j] * d_gcv;
         }
 
@@ -147,6 +160,14 @@ pub(crate) fn run_optimization<D: Distribution>(
     Ok(best_lambdas)
 }
 
+/// Solves the penalized weighted least squares problem:
+///   minimize  (z - X*beta)'W(z - X*beta) + sum_j lambda_j * beta'*S_j*beta
+///
+/// The solution satisfies the penalized normal equations:
+///   (X'WX + sum_j lambda_j*S_j) * beta = X'Wz
+///
+/// Returns coefficients beta, covariance matrix V = (X'WX + sum lambda*S)^-1, and
+/// effective degrees of freedom EDF = tr(V * X'WX).
 pub(crate) fn fit_pwls(
     x_matrix: &ModelMatrix,
     z: &Array1<f64>,
@@ -193,6 +214,10 @@ fn fit_pwls_with_grad_info(
     let beta = Coefficients(beta_arr);
 
     let v = lhs.inv().map_err(GamlssError::Linalg)?;
+
+    // EDF (effective degrees of freedom) measures model complexity.
+    // EDF = tr(H) where H = X(X'WX + sum lambda*S)^-1 X'W is the hat matrix.
+    // Equivalently, EDF = tr(V * X'WX). Ranges from 0 (lambda->inf) to p (lambda->0).
     let edf = v.dot(&x_t_w_x).diag().sum();
 
     let fitted = x.dot(&beta.0);
