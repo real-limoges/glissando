@@ -59,7 +59,9 @@ fn assemble_smooth(
             penalty_order_2,
             degree,
         } => {
-            //  First set up both sidees of the product
+            // Tensor product smooths model 2D surfaces f(x1, x2).
+            // The basis is the row-wise Kronecker product of the marginal bases.
+            // See docs/mathematics.md for the full formulation.
             let x1 = get_col_as_f64(data, col_name_1, n_obs)?;
             let b1 = create_basis_matrix(&x1, *n_splines_1, *degree);
             let s1 = create_penalty_matrix(*n_splines_1, *penalty_order_1);
@@ -72,7 +74,7 @@ fn assemble_smooth(
 
             let mut basis = Array2::<f64>::zeros((n_obs, n_coeffs_total));
 
-            // send the basis vectors into the blender
+            // Row-wise Kronecker: each row of basis = b1[i,:] kron b2[i,:]
             for i in 0..n_obs {
                 let row1 = b1.row(i);
                 let row2 = b2.row(i);
@@ -83,7 +85,9 @@ fn assemble_smooth(
                 basis.row_mut(i).assign(&row_out.row(0));
             }
 
-            // this pushes them out the penalties into matrices
+            // Tensor product penalties: S1 kron I2 penalizes roughness in x1 direction,
+            // I1 kron S2 penalizes roughness in x2 direction. Each gets its own lambda,
+            // allowing anisotropic smoothing (different smoothness in each direction).
             let i_k1 = Array2::<f64>::eye(*n_splines_1);
             let i_k2 = Array2::<f64>::eye(*n_splines_2);
 
@@ -96,6 +100,10 @@ fn assemble_smooth(
         }
 
         Smooth::RandomEffect { col_name } => {
+            // Random effects are implemented as ridge-penalized indicator variables.
+            // The basis matrix Z is n x G with Z[i,g] = 1 if observation i is in group g.
+            // The identity penalty S = I_G gives lambda * sum(alpha_g^2), shrinking
+            // group effects toward zero. This is equivalent to assuming alpha ~ N(0, 1/lambda).
             let series = data.column(col_name)?;
             let cat_series = series.categorical()?;
             let id_codes = cat_series.physical();
@@ -134,7 +142,7 @@ pub fn assemble_model_matrices(
         match term {
             Term::Intercept => {
                 let part = Array1::ones(n_obs)
-                    .into_shape((n_obs, 1))
+                    .into_shape_with_order((n_obs, 1))
                     .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
@@ -142,7 +150,7 @@ pub fn assemble_model_matrices(
             Term::Linear { col_name } => {
                 let x_col_vec = get_col_as_f64(data, col_name, n_obs)?;
                 let part = x_col_vec
-                    .into_shape((n_obs, 1))
+                    .into_shape_with_order((n_obs, 1))
                     .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;

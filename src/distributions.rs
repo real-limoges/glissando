@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 // These traits help make sure the actual distributions are implemented correctly
-// I implemented Poisson, Gaussian and StudentT - each more complex than the last
 pub trait Link: Debug + Send + Sync {
     fn link(&self, mu: f64) -> f64;
     fn inv_link(&self, eta: f64) -> f64;
@@ -66,6 +65,10 @@ impl Distribution for Poisson {
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
+        // Poisson log-likelihood: l = y*log(mu) - mu
+        // Score (dl/dmu): u = y/mu - 1 = (y - mu)/mu
+        // Fisher information: E[-d²l/dmu²] = 1/mu
+        // For IRLS with log link, working weight w = mu (since Var(Y) = mu)
         let mu = params["mu"];
         let deriv_u = y - mu;
         let deriv_w = mu;
@@ -101,6 +104,15 @@ impl Distribution for Gaussian {
         }
     }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
+        // Gaussian log-likelihood: l = -0.5*log(2*pi) - log(sigma) - (y-mu)^2/(2*sigma^2)
+        //
+        // For mu (identity link):
+        //   dl/dmu = (y-mu)/sigma^2,  Fisher info = 1/sigma^2
+        //
+        // For sigma (log link, so we work with eta = log(sigma)):
+        //   Chain rule gives u_sigma = [(y-mu)^2 - sigma^2] / sigma^2
+        //   Fisher info for eta: w = 2 (since Var[(Y-mu)^2/sigma^2] = 2 for normal)
+        // See docs/mathematics.md for full derivation.
         let mu = params["mu"];
         let sigma = params["sigma"];
         let sigma_sq = sigma.powi(2);
@@ -145,32 +157,32 @@ impl Distribution for StudentT {
             }),
         }
     }
-    fn name(&self) -> &'static str {
-        "StudentT"
-    }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
-        // nu is set to 10 to prevent a panic
+        // Student-t log-likelihood (location-scale parameterization).
+        // See docs/mathematics.md for the full derivation of all derivatives.
         let mu = params.get("mu").copied().unwrap_or(0.0);
         let sigma = params.get("sigma").copied().unwrap_or(1.0);
         let nu = params.get("nu").copied().unwrap_or(10.0);
 
         let z = (y - mu) / sigma;
         let z_sq = z.powi(2);
+
+        // w_robust = (nu+1)/(nu+z^2) appears in all derivatives.
+        // This "robustifying weight" downweights outliers (large |z|).
+        // As nu -> infinity, w_robust -> 1 and we recover Gaussian behavior.
         let w_robust = (nu + 1.0) / (nu + z_sq);
 
-        // so the pattern here is to find u and w for each parameter
-        // then combine them into a HashMap. Nu is a bit tricky.
-
-        // mu
+        // --- mu derivatives (identity link) ---
         let u_mu = (w_robust * z) / sigma;
         let w_mu = w_robust / sigma.powi(2);
 
-        // sigma
+        // --- sigma derivatives (log link) ---
+        // Chain rule: dl/d_eta = sigma * dl/d_sigma = w_robust*z^2 - 1
         let u_sigma = w_robust * z_sq - 1.0;
         let w_sigma = (2.0 * nu) / (nu + 3.0);
 
-        // nu
-        // dl/dnu
+        // --- nu derivatives (log link) ---
+        // The score involves digamma functions (derivative of log-gamma).
         let d1 = digamma((nu + 1.0) / 2.0);
         let d2 = digamma(nu / 2.0);
         let term3 = (1.0 + z_sq / nu).ln();
@@ -178,19 +190,18 @@ impl Distribution for StudentT {
 
         let dl_dnu = 0.5 * (d1 - d2 - term3 + term4);
 
-        // log link chain rule: dl/d_eta = dl/dnu * nu
+        // Chain rule for log link: u_eta = nu * dl/dnu
         let u_nu = dl_dnu * nu;
 
-        // Expected Information for Nu
-        // I wrote the trigamma because I couldn't find it elsewhere
+        // Fisher information for nu involves trigamma functions (second derivative of log-gamma).
         let t1 = trigamma(nu / 2.0);
         let t2 = trigamma((nu + 1.0) / 2.0);
         let t3 = (2.0 * (nu + 3.0)) / (nu * (nu + 1.0));
 
         let i_nu = 0.25 * (t1 - t2 - t3);
 
-        // log link chain rule: W_eta = I_nu * nu^2
-        // positive definiteness
+        // Floor at 1e-6 to ensure positive definiteness of the weight matrix.
+        // For log link: W_eta = I_nu * nu^2
         let w_nu = (i_nu * nu.powi(2)).abs().max(1e-6);
 
         HashMap::from([
@@ -199,4 +210,9 @@ impl Distribution for StudentT {
             ("nu".to_string(), (u_nu, w_nu)),
         ])
     }
+    fn name(&self) -> &'static str {
+        "StudentT"
+    }
 }
+
+// "Add Gamma, NB, and Binommial Distributions. Binomial is gonna be wweird
