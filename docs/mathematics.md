@@ -211,6 +211,52 @@ where $H = X(X^TWX + \lambda S)^{-1}X^TWX$ is the hat matrix.
 
 ---
 
+## 7. GCV Gradient for Smoothing Parameter Optimization
+
+The GCV score is minimized using L-BFGS optimization. The gradient with respect to $\log(\lambda_j)$ requires careful derivation.
+
+### Setup
+
+Let $V = (X^TWX + \sum_j \lambda_j S_j)^{-1}$ and $\hat{\beta}(\lambda) = V X^T W z$.
+
+### Key Derivatives
+
+**Derivative of $\beta$ with respect to $\lambda_j$:**
+$$
+\frac{\partial \hat{\beta}}{\partial \lambda_j} = -V S_j \hat{\beta}
+$$
+
+**Derivative of RSS:**
+$$
+\frac{\partial \text{RSS}}{\partial \lambda_j} = 2 (X^T W r)^T V S_j \hat{\beta}
+$$
+
+where $r = z - X\hat{\beta}$ are the residuals.
+
+**Derivative of EDF:**
+$$
+\frac{\partial \text{EDF}}{\partial \lambda_j} = -\text{tr}(V S_j V X^T W X)
+$$
+
+### Full GCV Gradient
+
+Using the quotient rule on $\text{GCV} = \frac{n \cdot \text{RSS}}{(n - \text{EDF})^2}$:
+
+$$
+\frac{\partial \text{GCV}}{\partial \lambda_j} = \frac{n}{(n - \text{EDF})^3} \left[ \frac{\partial \text{RSS}}{\partial \lambda_j}(n - \text{EDF}) + 2 \cdot \text{RSS} \cdot \frac{\partial \text{EDF}}{\partial \lambda_j} \right]
+$$
+
+### Chain Rule for Log-Space
+
+Since we optimize in log-space:
+$$
+\frac{\partial \text{GCV}}{\partial \log(\lambda_j)} = \lambda_j \cdot \frac{\partial \text{GCV}}{\partial \lambda_j}
+$$
+
+This ensures $\lambda_j > 0$ without explicit constraints.
+
+---
+
 ## References
 
 1. Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized additive models for location, scale and shape. *Journal of the Royal Statistical Society: Series C*, 54(3), 507-554.
