@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 // These traits help make sure the actual distributions are implemented correctly
-// I implemented Poisson, Gaussian and StudentT - each more complex than the last
 pub trait Link: Debug + Send + Sync {
     fn link(&self, mu: f64) -> f64;
     fn inv_link(&self, eta: f64) -> f64;
@@ -145,9 +144,6 @@ impl Distribution for StudentT {
             }),
         }
     }
-    fn name(&self) -> &'static str {
-        "StudentT"
-    }
     fn derivatives(&self, y: f64, params: &HashMap<String, f64>) -> HashMap<String, (f64, f64)> {
         // nu is set to 10 to prevent a panic
         let mu = params.get("mu").copied().unwrap_or(0.0);
@@ -199,4 +195,9 @@ impl Distribution for StudentT {
             ("nu".to_string(), (u_nu, w_nu)),
         ])
     }
+    fn name(&self) -> &'static str {
+        "StudentT"
+    }
 }
+
+// "Add Gamma, NB, and Binommial Distributions. Binomial is gonna be wweird
