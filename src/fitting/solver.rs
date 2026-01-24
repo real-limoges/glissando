@@ -125,12 +125,24 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
     }
 }
 
+/// Runs L-BFGS optimization to find optimal smoothing parameters (lambdas).
+///
+/// Uses warm-starting from previous lambdas when available for faster convergence.
+/// Skips optimization entirely when there are no penalty matrices.
 pub(crate) fn run_optimization<D: Distribution>(
     x_model: &ModelMatrix,
     z: &Array1<f64>,
     w: &Array1<f64>,
     penalty_matrices: &Vec<PenaltyMatrix>,
+    initial_lambdas: Option<&Array1<f64>>,
 ) -> Result<Array1<f64>, GamlssError> {
+    let n_penalties = penalty_matrices.len();
+
+    // Fast path: no penalties means no smoothing parameters to optimize
+    if n_penalties == 0 {
+        return Ok(Array1::zeros(0));
+    }
+
     let cost_function: GamlssCost<'_, D> = GamlssCost::<D> {
         x_matrix: x_model,
         z,
@@ -139,12 +151,30 @@ pub(crate) fn run_optimization<D: Distribution>(
         _marker: PhantomData,
     };
 
-    let initial_log_lambdas = LogLambdas(Array1::<f64>::zeros(penalty_matrices.len()));
+    // Warm-start from previous lambdas (in log-space) if available
+    let initial_log_lambdas = match initial_lambdas {
+        Some(prev) if prev.len() == n_penalties => LogLambdas(prev.mapv(|l| l.max(1e-10).ln())),
+        _ => LogLambdas(Array1::<f64>::zeros(n_penalties)),
+    };
+
+    // First, check if starting point is already good enough
+    let initial_cost = cost_function.cost(&initial_log_lambdas).unwrap_or(f64::MAX);
+
+    // If we have a warm start and the cost is very low, skip optimization
+    if initial_lambdas.is_some() && initial_cost < 1e-6 {
+        return Ok(initial_log_lambdas.mapv(f64::exp));
+    }
+
     let linesearch = MoreThuenteLineSearch::new();
     let solver = LBFGS::new(linesearch, 7);
 
     let res = Executor::new(cost_function, solver)
-        .configure(|state| state.param(initial_log_lambdas).max_iters(100))
+        .configure(|state| {
+            state
+                .param(initial_log_lambdas)
+                .max_iters(50)
+                .target_cost(1e-10) // Early exit if GCV is very small
+        })
         .run()?;
 
     let best_log_lambdas = res.state.best_param.ok_or_else(|| {

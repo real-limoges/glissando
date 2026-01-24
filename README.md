@@ -73,20 +73,26 @@ println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 
 ## Distributions
 
-| Distribution | Parameters | Default Links |
-|--------------|------------|---------------|
-| `Poisson` | mu | log |
-| `Gaussian` | mu, sigma | identity, log |
-| `StudentT` | mu, sigma, nu | identity, log, log |
+| Distribution | Parameters | Default Links | Use Case |
+|--------------|------------|---------------|----------|
+| `Poisson` | mu | log | Count data |
+| `Gaussian` | mu, sigma | identity, log | Continuous data |
+| `StudentT` | mu, sigma, nu | identity, log, log | Heavy-tailed continuous |
+| `Gamma` | mu, sigma | log, log | Positive continuous |
+| `NegativeBinomial` | mu, sigma | log, log | Overdispersed counts |
+| `Beta` | mu, phi | logit, log | Proportions (0, 1) |
 
 ### Usage
 
 ```rust
-use gamlss_rs::distributions::{Poisson, Gaussian, StudentT};
+use gamlss_rs::distributions::{Poisson, Gaussian, StudentT, Gamma, NegativeBinomial, Beta};
 
-let poisson = Poisson::new();   // Count data
-let gaussian = Gaussian::new(); // Continuous data
-let student_t = StudentT::new(); // Heavy-tailed continuous data
+let poisson = Poisson::new();             // Count data
+let gaussian = Gaussian::new();           // Continuous data
+let student_t = StudentT::new();          // Heavy-tailed continuous data
+let gamma = Gamma::new();                 // Positive continuous (e.g., durations)
+let neg_bin = NegativeBinomial::new();    // Overdispersed counts
+let beta = Beta::new();                   // Proportions/rates in (0, 1)
 ```
 
 ## Term Types
@@ -183,6 +189,49 @@ fitted_mu.eta             // Linear predictor values
 fitted_mu.edf             // Effective degrees of freedom
 fitted_mu.lambdas         // Smoothing parameters
 fitted_mu.terms           // The terms used in the formula
+```
+
+## Prediction
+
+Make predictions on new data:
+
+```rust
+// Predict on new data
+let new_df = df!(
+    "x" => [1.5, 2.5, 3.5]
+).unwrap();
+
+// Point predictions (returns fitted values for each parameter)
+let predictions = model.predict(&new_df)?;
+let mu_pred = &predictions["mu"];
+
+// Predictions with standard errors
+let (pred, se) = model.predict_with_se(&new_df)?;
+
+// Generate posterior samples for uncertainty quantification
+let samples = model.posterior_samples(&new_df, 1000)?;
+```
+
+## Model Diagnostics
+
+Access diagnostic information:
+
+```rust
+use gamlss_rs::diagnostics::{residuals, ResidualType};
+
+// Get residuals
+let response_resid = residuals(&model, &df, "y", ResidualType::Response)?;
+let pearson_resid = residuals(&model, &df, "y", ResidualType::Pearson)?;
+
+// Information criteria
+let aic = model.aic(&df, "y")?;
+let bic = model.bic(&df, "y")?;
+
+// Log-likelihood
+let loglik = model.log_likelihood(&df, "y")?;
+
+// Total effective degrees of freedom
+let total_edf = model.total_edf();
 ```
 
 ## Examples
@@ -282,6 +331,57 @@ formula.insert("sigma".to_string(), vec![Term::Intercept]);
 let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new())?;
 ```
 
+### Overdispersed Count Data
+
+Model count data with more variance than Poisson allows:
+
+```rust
+use gamlss_rs::distributions::NegativeBinomial;
+
+let mut formula = HashMap::new();
+formula.insert("mu".to_string(), vec![
+    Term::Intercept,
+    Term::Linear { col_name: "x".to_string() },
+]);
+formula.insert("sigma".to_string(), vec![Term::Intercept]); // Overdispersion
+
+let model = GamlssModel::fit(&df, "count", &formula, &NegativeBinomial::new())?;
+```
+
+### Proportion/Rate Data
+
+Model outcomes bounded between 0 and 1:
+
+```rust
+use gamlss_rs::distributions::Beta;
+
+let mut formula = HashMap::new();
+formula.insert("mu".to_string(), vec![
+    Term::Intercept,
+    Term::Linear { col_name: "x".to_string() },
+]);
+formula.insert("phi".to_string(), vec![Term::Intercept]); // Precision
+
+let model = GamlssModel::fit(&df, "proportion", &formula, &Beta::new())?;
+```
+
+### Duration/Positive Continuous Data
+
+Model positive continuous outcomes like survival times:
+
+```rust
+use gamlss_rs::distributions::Gamma;
+
+let mut formula = HashMap::new();
+formula.insert("mu".to_string(), vec![
+    Term::Intercept,
+    Term::Linear { col_name: "age".to_string() },
+]);
+formula.insert("sigma".to_string(), vec![Term::Intercept]); // Coefficient of variation
+
+let model = GamlssModel::fit(&df, "duration", &formula, &Gamma::new())?;
+```
+
 ## Error Handling
 
 The library uses `GamlssError` for error handling:
@@ -325,16 +425,26 @@ match GamlssModel::fit(&df, "y", &formula, &Gaussian::new()) {
 - [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - Linear algebra (requires OpenBLAS)
 - [argmin](https://crates.io/crates/argmin) - Optimization algorithms
 - [statrs](https://crates.io/crates/statrs) - Statistical functions
+- [rayon](https://crates.io/crates/rayon) - Parallel computation for large datasets
 
 ## Algorithm
 
-GAMLSS fitting uses a penalized quasi-likelihood approach:
+GAMLSS fitting uses a penalized quasi-likelihood approach (Rigby-Stasinopoulos algorithm):
 
 1. **Initialization**: Set starting values for all distribution parameters
 2. **Outer loop**: Cycle through distribution parameters
 3. **Inner loop**: For each parameter, compute working response and weights from derivatives, then fit a penalized weighted least squares model
-4. **Smoothing selection**: Optimize smoothing parameters using the argmin optimization framework
+4. **Smoothing selection**: Optimize smoothing parameters via GCV using L-BFGS
 5. **Convergence**: Check if coefficient changes are below tolerance
+
+## Performance
+
+The library includes several optimizations for large datasets:
+
+- **Batched derivatives**: Distribution derivatives are computed for all observations at once, enabling SIMD vectorization
+- **Parallel computation**: Special functions (digamma, trigamma) use Rayon parallel iterators for n >= 10,000
+- **Warm-starting**: L-BFGS optimization reuses previous smoothing parameters for faster convergence
+- **Efficient matrix operations**: Uses sqrt-weighted approach to avoid O(n²) memory allocation
 
 ## License
 
