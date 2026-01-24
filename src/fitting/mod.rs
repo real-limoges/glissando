@@ -145,10 +145,6 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     let mut param_diagnostics = HashMap::new();
 
     let param_names: Vec<String> = models.keys().cloned().collect();
-    let mut current_params: HashMap<&str, Array1<f64>> = HashMap::with_capacity(param_names.len());
-    let mut obs_params: HashMap<String, f64> = HashMap::with_capacity(param_names.len());
-    let mut deriv_u = Array1::zeros(n_obs);
-    let mut deriv_w = Array1::zeros(n_obs);
 
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
@@ -157,44 +153,51 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         for param_name in family.parameters() {
             let param_key = param_name.to_string();
 
-            current_params.clear();
-            for name in &param_names {
-                let model = &models[name];
-                let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-                current_params.insert(name.as_str(), fitted_values);
-            }
+            // Build current parameter values on response scale (batched)
+            let current_params: HashMap<&str, Array1<f64>> = param_names
+                .iter()
+                .map(|name| {
+                    let model = &models[name];
+                    let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
+                    (name.as_str(), fitted_values)
+                })
+                .collect();
 
-            deriv_u.fill(0.0);
-            deriv_w.fill(0.0);
+            // Create reference map for batched derivatives call
+            let params_ref: HashMap<&str, &Array1<f64>> =
+                current_params.iter().map(|(k, v)| (*k, v)).collect();
 
-            for i in 0..n_obs {
-                obs_params.clear();
-                for name in &param_names {
-                    obs_params.insert(name.clone(), current_params[name.as_str()][i]);
-                }
-
-                let all_derivs = family.derivatives(y[i], &obs_params);
-                let (u, w) = all_derivs.get(*param_name).ok_or_else(|| {
-                    GamlssError::Input(format!("No derivation for {} found", param_name))
-                })?;
-                deriv_u[i] = *u;
-                deriv_w[i] = *w;
-            }
+            // Single batched call replaces n_obs individual calls
+            let all_derivs = family.derivatives(y, &params_ref)?;
+            let (deriv_u, deriv_w) = all_derivs.get(*param_name).ok_or_else(|| {
+                GamlssError::Input(format!("No derivation for {} found", param_name))
+            })?;
 
             let model = models.get_mut(&param_key).ok_or_else(|| {
                 GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
             })?;
 
             // Fisher scoring: z = η + u/w forms working response for weighted least squares
-            let safe_w = deriv_w.mapv(|w| w.max(1e-6));
-            let adjustment = &deriv_u / &safe_w;
+            let safe_w = deriv_w.mapv(|w: f64| w.max(1e-6));
+            let adjustment = deriv_u / &safe_w;
             let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
 
             let z = &model.eta + &safe_adjustment;
             let w = safe_w;
 
-            let best_lambdas =
-                run_optimization::<D>(&model.x_matrix, &z, &w, &model.penalty_matrices)?;
+            // Optimize lambdas (warm-start from previous values for faster convergence)
+            // Skip optimization if no penalty matrices (purely parametric model)
+            let best_lambdas = if model.penalty_matrices.is_empty() {
+                Array1::zeros(0)
+            } else {
+                run_optimization::<D>(
+                    &model.x_matrix,
+                    &z,
+                    &w,
+                    &model.penalty_matrices,
+                    Some(&model.lambdas),
+                )?
+            };
 
             let (new_beta, cov_matrix, edf) = fit_pwls(
                 &model.x_matrix,
