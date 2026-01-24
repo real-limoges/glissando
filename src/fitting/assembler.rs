@@ -1,5 +1,7 @@
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
-use crate::splines::{create_basis_matrix, create_penalty_matrix, kronecker_product};
+use crate::splines::{
+    create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
+};
 use crate::ModelMatrix;
 use ndarray::concatenate;
 use ndarray::{s, Array1, Array2, Axis};
@@ -24,7 +26,7 @@ fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f
         .to_shape(n_obs)
         .map_err(|e| GamlssError::Shape(e.to_string()));
 
-    Ok(Array1::<f64>::from(arr?.to_vec()).to_owned())
+    Ok(arr?.to_owned())
 }
 
 fn assemble_smooth(
@@ -32,8 +34,6 @@ fn assemble_smooth(
     n_obs: usize,
     smooth: &Smooth,
 ) -> Result<(Array2<f64>, Vec<PenaltyMatrix>), GamlssError> {
-    // each smooth has its own arm of the match
-
     match smooth {
         Smooth::PSpline1D {
             col_name,
@@ -41,7 +41,6 @@ fn assemble_smooth(
             degree,
             penalty_order,
         } => {
-            // super straight forward flow
             let x_col = get_col_as_f64(data, col_name, n_obs)?;
             let basis = create_basis_matrix(&x_col, *n_splines, *degree);
             let penalty = create_penalty_matrix(*n_splines, *penalty_order);
@@ -58,9 +57,6 @@ fn assemble_smooth(
             penalty_order_2,
             degree,
         } => {
-            // Tensor product smooths model 2D surfaces f(x1, x2).
-            // The basis is the row-wise Kronecker product of the marginal bases.
-            // See docs/mathematics.md for the full formulation.
             let x1 = get_col_as_f64(data, col_name_1, n_obs)?;
             let b1 = create_basis_matrix(&x1, *n_splines_1, *degree);
             let s1 = create_penalty_matrix(*n_splines_1, *penalty_order_1);
@@ -73,20 +69,11 @@ fn assemble_smooth(
 
             let mut basis = Array2::<f64>::zeros((n_obs, n_coeffs_total));
 
-            // Row-wise Kronecker: each row of basis = b1[i,:] kron b2[i,:]
             for i in 0..n_obs {
-                let row1 = b1.row(i);
-                let row2 = b2.row(i);
-                let row_out = kronecker_product(
-                    &row1.insert_axis(Axis(0)).to_owned(),
-                    &row2.insert_axis(Axis(0)).to_owned(),
-                );
-                basis.row_mut(i).assign(&row_out.row(0));
+                row_kronecker_into(b1.row(i), b2.row(i), basis.row_mut(i));
             }
 
-            // Tensor product penalties: S1 kron I2 penalizes roughness in x1 direction,
-            // I1 kron S2 penalizes roughness in x2 direction. Each gets its own lambda,
-            // allowing anisotropic smoothing (different smoothness in each direction).
+            // Anisotropic penalties: S1⊗I2 for x1 direction, I1⊗S2 for x2 direction
             let i_k1 = Array2::<f64>::eye(*n_splines_1);
             let i_k2 = Array2::<f64>::eye(*n_splines_2);
 
@@ -99,10 +86,7 @@ fn assemble_smooth(
         }
 
         Smooth::RandomEffect { col_name } => {
-            // Random effects are implemented as ridge-penalized indicator variables.
-            // The basis matrix Z is n x G with Z[i,g] = 1 if observation i is in group g.
-            // The identity penalty S = I_G gives lambda * sum(alpha_g^2), shrinking
-            // group effects toward zero. This is equivalent to assuming alpha ~ N(0, 1/lambda).
+            // Ridge-penalized indicators: equivalent to alpha ~ N(0, 1/lambda)
             let series = data.column(col_name)?;
             let cat_series = series.categorical()?;
             let id_codes = cat_series.physical();

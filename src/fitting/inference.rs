@@ -10,14 +10,14 @@ pub fn sample_posterior(
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Vec<Array1<f64>> {
-    let _l_factor = match &v_beta.0.cholesky(UPLO::Lower) {
+    let l_factor = match v_beta.0.cholesky(UPLO::Lower) {
         Ok(cholesky) => cholesky,
         Err(_) => return vec![],
     };
 
     let mut rng_rs = rng();
 
-    sample_from_cholesky(&beta_hat.0, &v_beta.0, n_samples, &mut rng_rs)
+    sample_from_cholesky(&beta_hat.0, &l_factor, n_samples, &mut rng_rs)
 }
 
 pub(crate) fn sample_from_cholesky(
