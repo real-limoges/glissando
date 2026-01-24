@@ -1,5 +1,5 @@
 #![recursion_limit = "1024"]
-#![allow(dead_code, unused_variables, unused_imports)]
+pub mod diagnostics;
 pub mod distributions;
 mod error;
 pub mod fitting;
@@ -9,14 +9,15 @@ mod splines;
 mod terms;
 mod types;
 
+pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;
 pub use fitting::{FitConfig, FitDiagnostics};
 pub use terms::{Smooth, Term};
 pub use types::*;
 
 use distributions::Distribution;
-use ndarray::{Array, Array1};
-use polars::prelude::{DataFrame, PolarsError};
+use ndarray::Array1;
+use polars::prelude::DataFrame;
 use preprocessing::validate_inputs;
 use std::collections::HashMap;
 
@@ -71,7 +72,7 @@ impl GamlssModel {
 
     // I know that the sampling is going to change quite radically, so I'm just commenting this
     // out for right now
-    pub fn posterior_samples(&self, n_samples: usize) -> Vec<Coefficients> {
+    pub fn posterior_samples(&self, _n_samples: usize) -> Vec<Coefficients> {
         todo!();
         // fitting::inference::sample_posterior(&self.coefficients, &self.covariance, n_samples)
         //     .into_iter()

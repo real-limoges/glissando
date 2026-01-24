@@ -1,17 +1,12 @@
 use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
-use crate::Term;
-use crate::distributions;
-use crate::distributions::{Distribution, Gaussian, Link};
+use crate::distributions::Distribution;
 use argmin::core::Gradient;
 use argmin::core::{CostFunction, Error, Executor};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use ndarray::prelude::*;
 use ndarray_linalg::{Inverse, Solve};
-use polars::prelude::DataFrame;
 use std::marker::PhantomData;
-
-pub(crate) const PIRLS_TOLERANCE: f64 = 1e-6;
 
 /// Result from PWLS fitting that includes gradient computation info.
 struct PwlsGradientInfo {

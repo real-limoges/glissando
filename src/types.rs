@@ -1,12 +1,10 @@
-use argmin::core::ArgminError;
 use argmin_math::ArgminScaledSub;
 use argmin_math::{
     ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminScaledAdd,
     ArgminSignum, ArgminSub, ArgminZeroLike,
 };
-use ndarray::prelude::*;
 use ndarray::{Array1, Array2};
-use std::ops::{Add, Deref, DerefMut, Sub};
+use std::ops::{Deref, DerefMut};
 
 // ----- Newtypes for Safety (Vectors)
 #[derive(Debug, Clone)]

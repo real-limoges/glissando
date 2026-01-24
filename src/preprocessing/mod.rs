@@ -4,7 +4,6 @@ use crate::terms::Term;
 use ndarray::prelude::*;
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
 
 #[derive(thiserror::Error, Debug)]
 pub enum PreprocessingError {

@@ -1,4 +1,4 @@
-use gamlss_rs::{GamlssModel, Term, distributions::StudentT};
+use gamlss_rs::{distributions::StudentT, GamlssModel, Term};
 use polars::prelude::*;
 use rand::prelude::*;
 use rand_distr::{Distribution, StudentT as StudentTDist};

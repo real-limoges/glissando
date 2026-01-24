@@ -2,12 +2,24 @@ mod common;
 
 use common::Generator;
 use gamlss_rs::{
+    distributions::{Beta, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT},
     GamlssModel, Smooth, Term,
-    distributions::{Gaussian, Poisson, StudentT},
 };
 use polars::prelude::*;
 use rand::Rng;
 use std::collections::HashMap;
+
+// Helper to sample from Negative Binomial using Gamma-Poisson mixture
+// NB(mu, sigma) where r = 1/sigma, Var(Y) = mu + sigma*mu^2
+fn sample_negative_binomial(rng: &mut impl Rng, mu: f64, sigma: f64) -> f64 {
+    let r = 1.0 / sigma; // size parameter
+                         // Sample lambda ~ Gamma(shape=r, scale=mu/r)
+    let gamma_dist = rand_distr::Gamma::new(r, mu / r).unwrap();
+    let lambda: f64 = rng.sample(gamma_dist);
+    // Sample y ~ Poisson(lambda)
+    let poisson_dist = rand_distr::Poisson::new(lambda.max(1e-10)).unwrap();
+    rng.sample(poisson_dist)
+}
 
 #[test]
 fn test_poisson_with_smooth() {
@@ -919,5 +931,613 @@ fn test_student_t_near_gaussian() {
         fitted_nu > 10.0,
         "Near-Gaussian StudentT should have high nu, got {}",
         fitted_nu
+    );
+}
+
+// ============================================================================
+// Gamma Distribution Tests
+// ============================================================================
+
+#[test]
+fn test_gamma_linear_mu() {
+    // Test Gamma with linear relationship for mu
+    let mut rng = Generator::new(1001);
+
+    let n = 500;
+    let true_sigma = 0.5; // CV = 0.5
+    let shape = 1.0 / (true_sigma * true_sigma); // alpha = 4
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model: log(mu) = 1.0 + 0.5*x => mu from ~2.7 to ~7.4
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (1.0 + 0.5 * xi).exp();
+            let scale = mu / shape; // theta = mu * sigma^2 = mu / alpha
+            let gamma_dist = rand_distr::Gamma::new(shape, scale).unwrap();
+            rng.rng.sample(gamma_dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gamma::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    // Coefficients are on log scale due to log link
+    assert!(
+        (mu_coeffs[0] - 1.0).abs() < 0.2,
+        "Gamma mu intercept should be ~1.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.5).abs() < 0.2,
+        "Gamma mu slope should be ~0.5, got {}",
+        mu_coeffs[1]
+    );
+}
+
+#[test]
+fn test_gamma_heteroscedastic() {
+    // Test Gamma with varying sigma (coefficient of variation)
+    let mut rng = Generator::new(1002);
+
+    let n = 600;
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model:
+    // log(mu) = 2.0 + 0.3*x
+    // log(sigma) = -1.0 + 0.4*x => sigma varies from ~0.37 to ~0.82
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (2.0 + 0.3 * xi).exp();
+            let sigma = (-1.0 + 0.4 * xi).exp();
+            let shape = 1.0 / (sigma * sigma);
+            let scale = mu / shape;
+            let gamma_dist = rand_distr::Gamma::new(shape, scale).unwrap();
+            rng.rng.sample(gamma_dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert(
+        "sigma".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gamma::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    let sigma_coeffs = &model.models["sigma"].coefficients;
+
+    assert!(
+        (mu_coeffs[0] - 2.0).abs() < 0.3,
+        "Gamma hetero mu intercept should be ~2.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.3).abs() < 0.2,
+        "Gamma hetero mu slope should be ~0.3, got {}",
+        mu_coeffs[1]
+    );
+    assert!(
+        (sigma_coeffs[0] - (-1.0)).abs() < 0.4,
+        "Gamma hetero sigma intercept should be ~-1.0, got {}",
+        sigma_coeffs[0]
+    );
+    assert!(
+        (sigma_coeffs[1] - 0.4).abs() < 0.3,
+        "Gamma hetero sigma slope should be ~0.4, got {}",
+        sigma_coeffs[1]
+    );
+}
+
+#[test]
+fn test_gamma_smooth_mu() {
+    // Test Gamma with smooth mu relationship
+    let mut rng = Generator::new(1003);
+
+    let n = 400;
+    let sigma = 0.4;
+    let shape = 1.0 / (sigma * sigma);
+
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+
+    // True model: log(mu) = 2.0 + 0.3*sin(x)
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (2.0 + 0.3 * xi.sin()).exp();
+            let scale = mu / shape;
+            let gamma_dist = rand_distr::Gamma::new(shape, scale).unwrap();
+            rng.rng.sample(gamma_dist)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 12,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Gamma::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    assert!(
+        edf > 2.0,
+        "Gamma smooth mu EDF too low for sinusoidal: {}",
+        edf
+    );
+    assert!(edf < 12.0, "Gamma smooth mu EDF too high: {}", edf);
+}
+
+// ============================================================================
+// Negative Binomial Distribution Tests
+// ============================================================================
+
+#[test]
+fn test_negative_binomial_linear() {
+    // Test Negative Binomial with linear mu relationship
+    let mut rng = Generator::new(2001);
+
+    let n = 500;
+    let true_sigma = 0.5; // overdispersion parameter
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model: log(mu) = 1.5 + 0.5*x => mu from ~4.5 to ~12.2
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (1.5 + 0.5 * xi).exp();
+            sample_negative_binomial(&mut rng.rng, mu, true_sigma)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &NegativeBinomial::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (mu_coeffs[0] - 1.5).abs() < 0.3,
+        "NB mu intercept should be ~1.5, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.5).abs() < 0.2,
+        "NB mu slope should be ~0.5, got {}",
+        mu_coeffs[1]
+    );
+}
+
+#[test]
+fn test_negative_binomial_overdispersed() {
+    // Test NB with high overdispersion (distinct from Poisson)
+    let mut rng = Generator::new(2002);
+
+    let n = 600;
+    let true_sigma = 1.0; // high overdispersion
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model: log(mu) = 2.0 + 0.3*x
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (2.0 + 0.3 * xi).exp();
+            sample_negative_binomial(&mut rng.rng, mu, true_sigma)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &NegativeBinomial::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (mu_coeffs[0] - 2.0).abs() < 0.3,
+        "NB overdispersed mu intercept should be ~2.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.3).abs() < 0.2,
+        "NB overdispersed mu slope should be ~0.3, got {}",
+        mu_coeffs[1]
+    );
+
+    // Check that sigma is estimated reasonably
+    let sigma_coeff = model.models["sigma"].coefficients[0];
+    let fitted_sigma = sigma_coeff.exp();
+    assert!(
+        fitted_sigma > 0.3,
+        "NB should detect overdispersion, got sigma={}",
+        fitted_sigma
+    );
+}
+
+#[test]
+fn test_negative_binomial_smooth() {
+    // Test NB with smooth mu relationship
+    let mut rng = Generator::new(2003);
+
+    let n = 400;
+    let sigma = 0.3;
+
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+
+    // True model: log(mu) = 2.5 + 0.5*sin(x)
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (2.5 + 0.5 * xi.sin()).exp();
+            sample_negative_binomial(&mut rng.rng, mu, sigma)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 12,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &NegativeBinomial::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    assert!(
+        edf > 2.0,
+        "NB smooth mu EDF too low for sinusoidal: {}",
+        edf
+    );
+    assert!(edf < 12.0, "NB smooth mu EDF too high: {}", edf);
+}
+
+#[test]
+fn test_negative_binomial_multiple_predictors() {
+    // Test NB with multiple linear predictors
+    let mut rng = Generator::new(2004);
+
+    let n = 600;
+    let sigma = 0.4;
+
+    let x1: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+    let x2: Vec<f64> = (0..n).map(|_| rng.rng.random::<f64>() * 2.0).collect();
+
+    // True model: log(mu) = 1.0 + 0.5*x1 - 0.3*x2
+    let y: Vec<f64> = (0..n)
+        .map(|i| {
+            let mu = (1.0 + 0.5 * x1[i] - 0.3 * x2[i]).exp();
+            sample_negative_binomial(&mut rng.rng, mu, sigma)
+        })
+        .collect();
+
+    let df = df!("x1" => x1, "x2" => x2, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x1".to_string(),
+            },
+            Term::Linear {
+                col_name: "x2".to_string(),
+            },
+        ],
+    );
+    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &NegativeBinomial::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (mu_coeffs[0] - 1.0).abs() < 0.3,
+        "NB intercept should be ~1.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.5).abs() < 0.2,
+        "NB x1 coef should be ~0.5, got {}",
+        mu_coeffs[1]
+    );
+    assert!(
+        (mu_coeffs[2] - (-0.3)).abs() < 0.2,
+        "NB x2 coef should be ~-0.3, got {}",
+        mu_coeffs[2]
+    );
+}
+
+// ============================================================================
+// Beta Distribution Tests
+// ============================================================================
+
+// Helper to sample from Beta distribution
+fn sample_beta(rng: &mut impl Rng, alpha: f64, beta: f64) -> f64 {
+    let beta_dist = rand_distr::Beta::new(alpha, beta).unwrap();
+    rng.sample(beta_dist)
+}
+
+#[test]
+fn test_beta_linear_mu() {
+    // Test Beta with linear relationship for mu (on logit scale)
+    let mut rng = Generator::new(3001);
+
+    let n = 500;
+    let true_phi = 10.0; // precision parameter
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0 - 1.0).collect(); // x in [-1, 1]
+
+    // True model: logit(mu) = 0.0 + 0.5*x => mu varies around 0.5
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let eta = 0.0 + 0.5 * xi;
+            let mu = 1.0 / (1.0 + (-eta).exp()); // inverse logit
+            let alpha = mu * true_phi;
+            let beta_param = (1.0 - mu) * true_phi;
+            sample_beta(&mut rng.rng, alpha, beta_param)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("phi".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Beta::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    // Coefficients are on logit scale
+    assert!(
+        mu_coeffs[0].abs() < 0.3,
+        "Beta mu intercept should be ~0.0, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 0.5).abs() < 0.3,
+        "Beta mu slope should be ~0.5, got {}",
+        mu_coeffs[1]
+    );
+}
+
+#[test]
+fn test_beta_varying_precision() {
+    // Test Beta with varying phi (precision)
+    let mut rng = Generator::new(3002);
+
+    let n = 600;
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+
+    // True model:
+    // logit(mu) = 0.0 (constant mu = 0.5)
+    // log(phi) = 1.0 + 0.5*x => phi varies from ~2.7 to ~7.4
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = 0.5;
+            let phi = (1.0 + 0.5 * xi).exp();
+            let alpha = mu * phi;
+            let beta_param = (1.0 - mu) * phi;
+            sample_beta(&mut rng.rng, alpha, beta_param)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert("mu".to_string(), vec![Term::Intercept]);
+    formula.insert(
+        "phi".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Beta::new()).unwrap();
+
+    let phi_coeffs = &model.models["phi"].coefficients;
+    assert!(
+        (phi_coeffs[0] - 1.0).abs() < 0.4,
+        "Beta phi intercept should be ~1.0, got {}",
+        phi_coeffs[0]
+    );
+    assert!(
+        (phi_coeffs[1] - 0.5).abs() < 0.3,
+        "Beta phi slope should be ~0.5, got {}",
+        phi_coeffs[1]
+    );
+}
+
+#[test]
+fn test_beta_smooth_mu() {
+    // Test Beta with smooth mu relationship
+    let mut rng = Generator::new(3003);
+
+    let n = 400;
+    let phi = 15.0;
+
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+        .collect();
+
+    // True model: logit(mu) = 0.3*sin(x) => mu oscillates around 0.5
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let eta = 0.3 * xi.sin();
+            let mu = 1.0 / (1.0 + (-eta).exp());
+            let alpha = mu * phi;
+            let beta_param = (1.0 - mu) * phi;
+            sample_beta(&mut rng.rng, alpha, beta_param)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 12,
+            degree: 3,
+            penalty_order: 2,
+        })],
+    );
+    formula.insert("phi".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Beta::new()).unwrap();
+
+    let edf = model.models["mu"].edf;
+    assert!(edf > 2.0, "Beta smooth mu EDF too low: {}", edf);
+    assert!(edf < 12.0, "Beta smooth mu EDF too high: {}", edf);
+}
+
+#[test]
+fn test_beta_high_precision() {
+    // Test Beta with high precision (low variance, data clustered around mean)
+    let mut rng = Generator::new(3004);
+
+    let n = 400;
+    let true_phi = 50.0; // high precision
+
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+
+    // True model: logit(mu) = -0.5 + 1.0*x
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let eta = -0.5 + 1.0 * xi;
+            let mu = 1.0 / (1.0 + (-eta).exp());
+            let alpha = mu * true_phi;
+            let beta_param = (1.0 - mu) * true_phi;
+            sample_beta(&mut rng.rng, alpha, beta_param)
+        })
+        .collect();
+
+    let df = df!("x" => x, "y" => y).unwrap();
+
+    let mut formula = HashMap::new();
+    formula.insert(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+    formula.insert("phi".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&df, "y", &formula, &Beta::new()).unwrap();
+
+    let mu_coeffs = &model.models["mu"].coefficients;
+    assert!(
+        (mu_coeffs[0] - (-0.5)).abs() < 0.3,
+        "Beta high-precision mu intercept should be ~-0.5, got {}",
+        mu_coeffs[0]
+    );
+    assert!(
+        (mu_coeffs[1] - 1.0).abs() < 0.3,
+        "Beta high-precision mu slope should be ~1.0, got {}",
+        mu_coeffs[1]
+    );
+
+    // Check that phi is estimated as high
+    let phi_coeff = model.models["phi"].coefficients[0];
+    let fitted_phi = phi_coeff.exp();
+    assert!(
+        fitted_phi > 20.0,
+        "Beta should detect high precision, got phi={}",
+        fitted_phi
     );
 }
