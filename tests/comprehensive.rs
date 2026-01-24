@@ -2,8 +2,8 @@ mod common;
 
 use common::Generator;
 use gamlss_rs::{
-    GamlssModel, Smooth, Term,
     distributions::{Gaussian, Poisson},
+    GamlssModel, Smooth, Term,
 };
 use polars::prelude::{PlSmallStr, UInt32Chunked};
 use rand::prelude::SliceRandom;

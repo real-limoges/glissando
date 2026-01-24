@@ -2,8 +2,8 @@ mod common;
 
 use common::Generator;
 use gamlss_rs::{
-    GamlssError, GamlssModel, Term,
     distributions::{Gaussian, Poisson},
+    GamlssError, GamlssModel, Term,
 };
 use polars::prelude::*;
 use rand::Rng;

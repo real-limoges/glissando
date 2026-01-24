@@ -1,8 +1,8 @@
 use super::{Coefficients, CovarianceMatrix};
 use ndarray::{Array1, Array2};
 use ndarray_linalg::{Cholesky, UPLO};
-use rand::Rng;
 use rand::rng;
+use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 
 pub fn sample_posterior(
@@ -10,7 +10,7 @@ pub fn sample_posterior(
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Vec<Array1<f64>> {
-    let l_factor = match &v_beta.0.cholesky(UPLO::Lower) {
+    let _l_factor = match &v_beta.0.cholesky(UPLO::Lower) {
         Ok(cholesky) => cholesky,
         Err(_) => return vec![],
     };

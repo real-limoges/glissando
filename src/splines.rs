@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2, s};
+use ndarray::{s, Array1, Array2};
 
 pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     let (m, n) = a.dim();

@@ -10,7 +10,7 @@ use super::distributions::{Distribution, Link};
 use super::error::GamlssError;
 use super::terms::{Smooth, Term};
 use super::types::*;
-use ndarray::{Array1, Array2};
+use ndarray::Array1;
 use polars::prelude::DataFrame;
 use std::collections::HashMap;
 
@@ -37,6 +37,15 @@ pub struct FitDiagnostics {
     pub converged: bool,
     pub iterations: usize,
     pub final_change: f64,
+    pub max_gradient: Option<f64>,
+    pub param_diagnostics: HashMap<String, ParamDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParamDiagnostic {
+    pub final_eta_change: f64,
+    pub final_lambda_change: f64,
+    pub edf: f64,
 }
 
 #[derive(Debug)]
@@ -79,7 +88,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     let mut models: HashMap<String, FittingParameter> = HashMap::new();
 
     // =========================================================
-    // 1. INITIALIZATION PHASE
+    // INITIALIZATION PHASE
     // =========================================================
     for param_name in family.parameters() {
         let param_name_str = param_name.to_string();
@@ -98,7 +107,11 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         } else if param_name_str == "sigma" {
             // Initialize sigma to the standard deviation of the data
             let s = y.std(1.0);
-            if s < 1e-4 { 1.0 } else { s }
+            if s < 1e-4 {
+                1.0
+            } else {
+                s
+            }
         } else if param_name_str == "nu" {
             10.0 // Start with high degrees of freedom (Gaussian-like)
         } else {
@@ -137,13 +150,15 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     } // <--- Initialization Loop Ends Here
 
     // =========================================================
-    // 2. GAMLSS CYCLE PHASE
+    // GAMLSS CYCLE PHASE
     // =========================================================
     let mut converged = false;
     let mut final_iteration = 0;
     let mut final_change = f64::MAX;
+    let mut param_diagnostics = HashMap::new();
 
     for cycle in 0..config.max_iterations {
+        param_diagnostics.clear();
         let mut max_diff = 0.0;
 
         for param_name in family.parameters() {
@@ -205,11 +220,24 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 max_diff = diff;
             }
 
+            let new_eta = model.x_matrix.dot(&new_beta.0);
+            let eta_change = (&new_eta - &model.eta).mapv(f64::abs).sum();
+            let lambda_change = (&best_lambdas - &model.lambdas).mapv(f64::abs).sum();
+
             model.beta = new_beta;
-            model.eta = model.x_matrix.dot(&model.beta.0);
+            model.eta = new_eta;
             model.lambdas = best_lambdas;
             model.covariance = Some(cov_matrix);
             model.edf = edf;
+
+            param_diagnostics.insert(
+                param_key.clone(),
+                ParamDiagnostic {
+                    final_eta_change: eta_change,
+                    final_lambda_change: lambda_change,
+                    edf,
+                },
+            );
         }
 
         final_iteration = cycle + 1;
@@ -222,7 +250,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     }
 
     // =========================================================
-    // 3. FINALIZE
+    // FINALIZE
     // =========================================================
     let mut final_results = HashMap::new();
 
@@ -252,6 +280,8 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         converged,
         iterations: final_iteration,
         final_change,
+        max_gradient: None,
+        param_diagnostics,
     };
 
     Ok((final_results, diagnostics))
