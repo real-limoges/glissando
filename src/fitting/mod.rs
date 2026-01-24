@@ -1,6 +1,6 @@
 pub mod assembler;
 pub mod inference;
-pub mod solver;
+mod solver;
 
 use self::assembler::assemble_model_matrices;
 pub use self::inference::sample_posterior;
@@ -87,9 +87,6 @@ pub(crate) fn fit_gamlss<D: Distribution>(
     let n_obs = y.len();
     let mut models: HashMap<String, FittingParameter> = HashMap::new();
 
-    // =========================================================
-    // INITIALIZATION PHASE
-    // =========================================================
     for param_name in family.parameters() {
         let param_name_str = param_name.to_string();
         let terms = formula.get(&param_name_str).ok_or_else(|| {
@@ -100,12 +97,10 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let (x_model, penalty_matrices, total_coeffs) =
             assemble_model_matrices(data, n_obs, terms)?;
 
-        // --- SMART INITIALIZATION (Fixing the Bugs) ---
-        // 1. Determine Start Value on RESPONSE Scale (Physical units)
+        // Initialize on response scale, then transform to eta via link
         let response_scale_start = if param_name_str == "mu" {
             y.mean().unwrap_or(0.0)
         } else if param_name_str == "sigma" {
-            // Initialize sigma to the standard deviation of the data
             let s = y.std(1.0);
             if s < 1e-4 {
                 1.0
@@ -113,23 +108,18 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 s
             }
         } else if param_name_str == "nu" {
-            10.0 // Start with high degrees of freedom (Gaussian-like)
+            10.0
         } else {
             0.1
         };
 
-        // 2. Convert to LINEAR PREDICTOR Scale (Eta)
-        // This prevents the "Double Link" bug.
         let eta_start = link.link(response_scale_start);
 
-        // 3. Initialize Beta
-        // If the first term is an intercept, set it to eta_start.
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
         if total_coeffs > 0 {
             beta.0[0] = eta_start;
         }
 
-        // 4. Initialize Eta
         let eta = Array1::from_elem(n_obs, eta_start);
         let lambdas = Array1::<f64>::ones(penalty_matrices.len());
 
@@ -147,15 +137,18 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 edf: 0.0,
             },
         );
-    } // <--- Initialization Loop Ends Here
+    }
 
-    // =========================================================
-    // GAMLSS CYCLE PHASE
-    // =========================================================
     let mut converged = false;
     let mut final_iteration = 0;
     let mut final_change = f64::MAX;
     let mut param_diagnostics = HashMap::new();
+
+    let param_names: Vec<String> = models.keys().cloned().collect();
+    let mut current_params: HashMap<&str, Array1<f64>> = HashMap::with_capacity(param_names.len());
+    let mut obs_params: HashMap<String, f64> = HashMap::with_capacity(param_names.len());
+    let mut deriv_u = Array1::zeros(n_obs);
+    let mut deriv_w = Array1::zeros(n_obs);
 
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
@@ -163,20 +156,21 @@ pub(crate) fn fit_gamlss<D: Distribution>(
 
         for param_name in family.parameters() {
             let param_key = param_name.to_string();
-            let mut current_params = HashMap::new();
 
-            for (name, model) in &models {
+            current_params.clear();
+            for name in &param_names {
+                let model = &models[name];
                 let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-                current_params.insert(name.clone(), fitted_values);
+                current_params.insert(name.as_str(), fitted_values);
             }
 
-            let mut deriv_u = Array1::zeros(n_obs);
-            let mut deriv_w = Array1::zeros(n_obs);
+            deriv_u.fill(0.0);
+            deriv_w.fill(0.0);
 
             for i in 0..n_obs {
-                let mut obs_params = HashMap::new();
-                for (name, value) in &current_params {
-                    obs_params.insert(name.clone(), value[i]);
+                obs_params.clear();
+                for name in &param_names {
+                    obs_params.insert(name.clone(), current_params[name.as_str()][i]);
                 }
 
                 let all_derivs = family.derivatives(y[i], &obs_params);
@@ -191,12 +185,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
             })?;
 
-            // Construct the working response (z) and weights (w) for P-IRLS.
-            // From Fisher scoring: z = η + W⁻¹ * u, where u = dl/dη (score) and W = E[-d²l/dη²].
-            // This linearizes the likelihood around the current η, letting us solve
-            // a weighted least squares problem: minimize Σ w_i(z_i - x_i'β)².
-            //
-            // Clamping prevents numerical issues from extreme residuals or near-zero weights.
+            // Fisher scoring: z = η + u/w forms working response for weighted least squares
             let safe_w = deriv_w.mapv(|w| w.max(1e-6));
             let adjustment = &deriv_u / &safe_w;
             let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
@@ -249,9 +238,6 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         }
     }
 
-    // =========================================================
-    // FINALIZE
-    // =========================================================
     let mut final_results = HashMap::new();
 
     for (name, model) in models {
