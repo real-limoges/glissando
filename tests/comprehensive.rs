@@ -169,7 +169,7 @@ fn test_spline_partition_of_unity() {
     });
 
     let (mm, _, _) =
-        gamlss_rs::fitting::assembler::assemble_model_matrices(&df, 100, &vec![term]).unwrap();
+        gamlss_rs::fitting::assembler::assemble_model_matrices(&df, 100, &[term]).unwrap();
 
     // Check each row of the spline basis part of the ModelMatrix. each row sums to 1-ish
     for row in mm.0.rows() {

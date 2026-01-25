@@ -11,7 +11,8 @@ mod types;
 
 pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;
-pub use fitting::{FitConfig, FitDiagnostics};
+pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic};
+pub use preprocessing::PreprocessingError;
 pub use terms::{Smooth, Term};
 pub use types::*;
 
@@ -51,7 +52,8 @@ impl GamlssModel {
             GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e))
         })?;
 
-        let binding = y_series.f64()?.to_ndarray()?;
+        let y_rechunked = y_series.f64()?.rechunk();
+        let binding = y_rechunked.to_ndarray()?;
         let y_vec = binding
             .to_shape(y_series.len())
             .map_err(|e| GamlssError::Shape(e.to_string()))?;
@@ -113,22 +115,24 @@ impl GamlssModel {
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
 
             let v = &fitted_param.covariance.0;
-            let mut se_eta = Array1::zeros(n_obs);
-            for i in 0..n_obs {
-                let x_i = x_matrix.0.row(i);
-                let v_x_i = v.dot(&x_i);
-                let var_eta_i = x_i.dot(&v_x_i);
-                se_eta[i] = var_eta_i.max(0.0).sqrt();
-            }
+            let se_eta: Array1<f64> = x_matrix
+                .0
+                .rows()
+                .into_iter()
+                .map(|x_i| {
+                    let v_x_i = v.dot(&x_i);
+                    x_i.dot(&v_x_i).max(0.0).sqrt()
+                })
+                .collect();
 
             let link = family.default_link(param_name)?;
-            let fitted = eta.mapv(|e| link.inv_link(e));
+            let fitted = eta.view().mapv(|e| link.inv_link(e));
 
             results.insert(
                 param_name.clone(),
                 PredictionResult {
                     fitted,
-                    eta: eta.clone(),
+                    eta,
                     se_eta,
                 },
             );

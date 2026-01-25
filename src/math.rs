@@ -54,7 +54,7 @@ pub fn digamma_batch(x: &Array1<f64>) -> Array1<f64> {
     } else {
         let result: Vec<f64> = x
             .as_slice()
-            .unwrap()
+            .expect("input array not contiguous")
             .par_iter()
             .map(|&v| statrs_digamma(v))
             .collect();
@@ -74,7 +74,7 @@ pub fn trigamma_batch(x: &Array1<f64>) -> Array1<f64> {
     } else {
         let result: Vec<f64> = x
             .as_slice()
-            .unwrap()
+            .expect("input array not contiguous")
             .par_iter()
             .map(|&v| trigamma(v))
             .collect();

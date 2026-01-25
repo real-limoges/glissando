@@ -1,5 +1,9 @@
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayViewMut1};
 
+/// Compute the Kronecker product of two matrices: C = A ⊗ B.
+///
+/// If A is (m × n) and B is (p × q), the result is (mp × nq).
+/// Used for constructing tensor product basis matrices.
 pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     let (m, n) = a.dim();
     let (p, q) = b.dim();
@@ -16,6 +20,10 @@ pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     c
 }
 
+/// Compute row-wise Kronecker product into a pre-allocated output buffer.
+///
+/// Given vectors a (length m) and b (length n), computes their Kronecker product
+/// (length m*n) in-place. Used for efficient tensor product basis evaluation.
 #[inline]
 pub fn row_kronecker_into(a: ArrayView1<f64>, b: ArrayView1<f64>, mut out: ArrayViewMut1<f64>) {
     let len_b = b.len();
@@ -26,6 +34,16 @@ pub fn row_kronecker_into(a: ArrayView1<f64>, b: ArrayView1<f64>, mut out: Array
     }
 }
 
+/// Create a B-spline basis matrix for the given data.
+///
+/// Constructs an (n_obs × n_splines) matrix where each row contains the
+/// B-spline basis function values evaluated at that observation's x value.
+/// Uses clamped knots with interior knots placed at data quantiles.
+///
+/// # Arguments
+/// * `x` - Covariate values (n_obs length)
+/// * `n_splines` - Number of basis functions (typically 10-20)
+/// * `degree` - Polynomial degree (typically 3 for cubic splines)
 pub fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     let n_obs = x.len();
 

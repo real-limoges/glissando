@@ -8,6 +8,12 @@ use ndarray::prelude::*;
 use ndarray_linalg::{Inverse, Solve};
 use std::marker::PhantomData;
 
+/// Minimum denominator value to prevent division by zero in GCV computation
+const MIN_DENOMINATOR: f64 = 1e-10;
+
+/// Minimum lambda value for log-space conversion
+const MIN_LAMBDA: f64 = 1e-10;
+
 /// Result from PWLS fitting that includes gradient computation info.
 struct PwlsGradientInfo {
     beta: Coefficients,
@@ -59,7 +65,7 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
 
         // Guard against division by zero when EDF approaches n (overfit)
         let denominator = (n - edf).powi(2);
-        if denominator.abs() < 1e-10 {
+        if denominator.abs() < MIN_DENOMINATOR {
             return Ok(f64::MAX);
         }
         let gcv_score = (n * rss) / denominator;
@@ -96,7 +102,7 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
         let n = self.z.len() as f64;
         let denom = n - info.edf;
 
-        if denom.abs() < 1e-10 {
+        if denom.abs() < MIN_DENOMINATOR {
             return Ok(LogLambdas(Array1::zeros(n_penalties)));
         }
 
@@ -153,7 +159,9 @@ pub(crate) fn run_optimization<D: Distribution>(
 
     // Warm-start from previous lambdas (in log-space) if available
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => LogLambdas(prev.mapv(|l| l.max(1e-10).ln())),
+        Some(prev) if prev.len() == n_penalties => {
+            LogLambdas(prev.mapv(|l| l.max(MIN_LAMBDA).ln()))
+        }
         _ => LogLambdas(Array1::<f64>::zeros(n_penalties)),
     };
 
@@ -173,7 +181,7 @@ pub(crate) fn run_optimization<D: Distribution>(
             state
                 .param(initial_log_lambdas)
                 .max_iters(50)
-                .target_cost(1e-10) // Early exit if GCV is very small
+                .target_cost(MIN_DENOMINATOR) // Early exit if GCV is very small
         })
         .run()?;
 
