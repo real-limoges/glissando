@@ -8,14 +8,32 @@ use std::fmt::Debug;
 /// Threshold for using parallel computation (below this, sequential is faster)
 const PARALLEL_THRESHOLD: usize = 10_000;
 
-// These traits help make sure the actual distributions are implemented correctly
+/// Minimum value for positive parameters (mu, sigma, etc.) to avoid log(0) or division by zero
+const MIN_POSITIVE: f64 = 1e-10;
+
+/// Maximum linear predictor value for log/logit links to prevent overflow
+const MAX_ETA: f64 = 30.0;
+
+/// Minimum linear predictor value for log/logit links to prevent underflow
+const MIN_ETA: f64 = -30.0;
+
+/// Minimum Fisher information weight to ensure positive definiteness
+const MIN_WEIGHT: f64 = 1e-6;
+
+/// Link function trait for GLM/GAMLSS models.
+///
+/// A link function g maps the mean (mu) to the linear predictor (eta): η = g(μ).
+/// The inverse link maps back: μ = g⁻¹(η).
 pub trait Link: Debug + Send + Sync {
+    /// Apply the link function: η = g(μ).
     fn link(&self, mu: f64) -> f64;
+    /// Apply the inverse link function: μ = g⁻¹(η).
     fn inv_link(&self, eta: f64) -> f64;
 }
 
-// Concrete Links
-
+/// Identity link: η = μ.
+///
+/// Used for unbounded continuous responses (e.g., Gaussian mean).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IdentityLink;
 impl Link for IdentityLink {
@@ -27,28 +45,36 @@ impl Link for IdentityLink {
     }
 }
 
+/// Log link: η = log(μ).
+///
+/// Used for positive continuous responses (e.g., Poisson mean, Gamma).
+/// Clamps eta to [-30, 30] to prevent numerical overflow.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogLink;
 impl Link for LogLink {
     fn link(&self, mu: f64) -> f64 {
-        mu.ln().max(-30.0)
+        mu.ln().max(MIN_ETA)
     }
     fn inv_link(&self, eta: f64) -> f64 {
-        eta.min(30.0).exp()
+        eta.min(MAX_ETA).exp()
     }
 }
 
+/// Logit link: η = log(μ / (1 - μ)).
+///
+/// Used for probability parameters bounded in (0, 1) (e.g., Binomial, Beta).
+/// Clamps mu to [1e-10, 1-1e-10] and eta to [-30, 30] for numerical stability.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogitLink;
 impl Link for LogitLink {
     fn link(&self, mu: f64) -> f64 {
         // logit(mu) = log(mu / (1 - mu))
-        let mu_clamped = mu.clamp(1e-10, 1.0 - 1e-10);
+        let mu_clamped = mu.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
         (mu_clamped / (1.0 - mu_clamped)).ln()
     }
     fn inv_link(&self, eta: f64) -> f64 {
         // inverse logit = 1 / (1 + exp(-eta))
-        let eta_clamped = eta.clamp(-30.0, 30.0);
+        let eta_clamped = eta.clamp(MIN_ETA, MAX_ETA);
         1.0 / (1.0 + (-eta_clamped).exp())
     }
 }
@@ -71,12 +97,38 @@ pub trait Distribution: Debug + Send + Sync {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult;
     fn name(&self) -> &'static str;
+
+    /// Returns initial value for a parameter on the response scale.
+    ///
+    /// Default implementation uses y.mean() for mu, y.std() for sigma, etc.
+    /// Override for distributions where the response isn't directly the mean
+    /// (e.g., Binomial where y is counts but mu is probability).
+    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        match param {
+            "mu" => y.mean().unwrap_or(0.5),
+            "sigma" => {
+                let s = y.std(1.0);
+                if s < 1e-4 {
+                    1.0
+                } else {
+                    s
+                }
+            }
+            "nu" => 5.0,
+            "phi" => 1.0,
+            _ => 0.1,
+        }
+    }
 }
 
-// Distributions
+/// Poisson distribution for count data.
+///
+/// Single parameter: mu (mean/rate) with log link.
+/// Variance equals mean: Var(Y) = μ.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Poisson;
 impl Poisson {
+    /// Create a new Poisson distribution.
     pub fn new() -> Self {
         Self
     }
@@ -121,9 +173,14 @@ impl Distribution for Poisson {
     }
 }
 
+/// Gaussian (Normal) distribution for continuous data.
+///
+/// Parameters: mu (mean, identity link) and sigma (std dev, log link).
+/// Var(Y) = σ².
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gaussian;
 impl Gaussian {
+    /// Create a new Gaussian distribution.
     pub fn new() -> Self {
         Self
     }
@@ -191,9 +248,14 @@ impl Distribution for Gaussian {
     }
 }
 
+/// Student's t distribution for heavy-tailed continuous data.
+///
+/// Parameters: mu (location, identity link), sigma (scale, log link),
+/// and nu (degrees of freedom, log link). As nu → ∞, approaches Gaussian.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StudentT;
 impl StudentT {
+    /// Create a new Student's t distribution.
     pub fn new() -> Self {
         Self
     }
@@ -254,8 +316,8 @@ impl Distribution for StudentT {
                 .map(|(&nu_i, &z2_i)| (nu_i + 1.0) / (nu_i + z2_i))
                 .collect()
         } else {
-            let nu_slice = nu.as_slice().unwrap();
-            let z_sq_slice = z_sq.as_slice().unwrap();
+            let nu_slice = nu.as_slice().expect("nu array not contiguous");
+            let z_sq_slice = z_sq.as_slice().expect("z_sq array not contiguous");
             Array1::from_vec(
                 nu_slice
                     .par_iter()
@@ -296,9 +358,9 @@ impl Distribution for StudentT {
                 .collect();
             (t3, t4)
         } else {
-            let nu_slice = nu.as_slice().unwrap();
-            let z_sq_slice = z_sq.as_slice().unwrap();
-            let w_robust_slice = w_robust.as_slice().unwrap();
+            let nu_slice = nu.as_slice().expect("nu array not contiguous");
+            let z_sq_slice = z_sq.as_slice().expect("z_sq array not contiguous");
+            let w_robust_slice = w_robust.as_slice().expect("w_robust array not contiguous");
 
             let t3: Vec<f64> = nu_slice
                 .par_iter()
@@ -322,22 +384,23 @@ impl Distribution for StudentT {
         let t1 = trigamma_batch(&nu_half);
         let t2 = trigamma_batch(&nu_plus_1_half);
         let t3: Array1<f64> = nu.mapv(|nu_i| (2.0 * (nu_i + 3.0)) / (nu_i * (nu_i + 1.0)));
-        let i_nu = 0.25 * (&t1 - &t2 - &t3);
-        // Floor at 1e-6 to ensure positive definiteness of the weight matrix.
+        // Note: The sign is + not - because t3 subtracts from the negative Hessian
+        let i_nu = 0.25 * (&t1 - &t2 + &t3);
+        // Floor at MIN_WEIGHT to ensure positive definiteness of the weight matrix.
         // For log link: W_eta = I_nu * nu^2
         let w_nu: Array1<f64> = if n < PARALLEL_THRESHOLD {
             i_nu.iter()
                 .zip(nu.iter())
-                .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(1e-6))
+                .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(MIN_WEIGHT))
                 .collect()
         } else {
-            let i_nu_slice = i_nu.as_slice().unwrap();
-            let nu_slice = nu.as_slice().unwrap();
+            let i_nu_slice = i_nu.as_slice().expect("i_nu array not contiguous");
+            let nu_slice = nu.as_slice().expect("nu array not contiguous");
             Array1::from_vec(
                 i_nu_slice
                     .par_iter()
                     .zip(nu_slice.par_iter())
-                    .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(1e-6))
+                    .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(MIN_WEIGHT))
                     .collect(),
             )
         };
@@ -353,14 +416,15 @@ impl Distribution for StudentT {
     }
 }
 
-// Gamma Distribution
-// Parameterization: mu = mean, sigma = coefficient of variation (sqrt(Var/mu^2))
-// Shape alpha = 1/sigma^2, Scale theta = mu * sigma^2
-// Var(Y) = mu^2 * sigma^2
+/// Gamma distribution for positive continuous data.
+///
+/// Parameters: mu (mean, log link) and sigma (coefficient of variation, log link).
+/// Shape α = 1/σ², Scale θ = μσ². Var(Y) = μ²σ².
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gamma;
 
 impl Gamma {
+    /// Create a new Gamma distribution.
     pub fn new() -> Self {
         Self
     }
@@ -411,8 +475,8 @@ impl Distribution for Gamma {
                 param: "sigma".to_string(),
             })?;
 
-        let mu_safe = mu.mapv(|m| m.max(1e-10));
-        let sigma_safe = sigma.mapv(|s| s.max(1e-10));
+        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
+        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
         let sigma_sq = sigma_safe.mapv(|s| s.powi(2));
         let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
 
@@ -435,8 +499,8 @@ impl Distribution for Gamma {
         // I_sigma = (4/sigma^4) * trigamma(1/sigma^2) - 2/sigma^2
         let psi_prime_alpha = trigamma_batch(&alpha);
         let sigma_sq_sq = sigma_sq.mapv(|s2| s2.powi(2));
-        let w_sigma =
-            ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 2.0 / &sigma_sq).mapv(|v| v.abs().max(1e-6));
+        let w_sigma = ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 2.0 / &sigma_sq)
+            .mapv(|v| v.abs().max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -449,15 +513,15 @@ impl Distribution for Gamma {
     }
 }
 
-// Negative Binomial Distribution (NB2 parameterization)
-// Parameterization: mu = mean, sigma = overdispersion parameter
-// Var(Y) = mu + sigma * mu^2
-// When sigma -> 0, approaches Poisson
-// size (r) = 1/sigma, prob p = 1/(1 + sigma*mu)
+/// Negative Binomial distribution for overdispersed count data (NB2 parameterization).
+///
+/// Parameters: mu (mean, log link) and sigma (overdispersion, log link).
+/// Var(Y) = μ + σμ². As σ → 0, approaches Poisson.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NegativeBinomial;
 
 impl NegativeBinomial {
+    /// Create a new Negative Binomial distribution.
     pub fn new() -> Self {
         Self
     }
@@ -508,8 +572,8 @@ impl Distribution for NegativeBinomial {
             })?;
 
         let n = y.len();
-        let mu_safe = mu.mapv(|m| m.max(1e-10));
-        let sigma_safe = sigma.mapv(|s| s.max(1e-10));
+        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
+        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
 
         let one_plus_sigma_mu: Array1<f64> = if n < PARALLEL_THRESHOLD {
             sigma_safe
@@ -518,8 +582,8 @@ impl Distribution for NegativeBinomial {
                 .map(|(&s, &m)| 1.0 + s * m)
                 .collect()
         } else {
-            let sigma_slice = sigma_safe.as_slice().unwrap();
-            let mu_slice = mu_safe.as_slice().unwrap();
+            let sigma_slice = sigma_safe.as_slice().expect("sigma array not contiguous");
+            let mu_slice = mu_safe.as_slice().expect("mu array not contiguous");
             Array1::from_vec(
                 sigma_slice
                     .par_iter()
@@ -550,7 +614,7 @@ impl Distribution for NegativeBinomial {
         // w_sigma = (1/sigma^2) * trigamma(1/sigma) (simplified)
         let psi_prime_r = trigamma_batch(&r);
         let sigma_sq = sigma_safe.mapv(|s| s.powi(2));
-        let w_sigma: Array1<f64> = (&psi_prime_r / &sigma_sq).mapv(|v| v.abs().max(1e-6));
+        let w_sigma: Array1<f64> = (&psi_prime_r / &sigma_sq).mapv(|v| v.abs().max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -563,14 +627,15 @@ impl Distribution for NegativeBinomial {
     }
 }
 
-// Beta Distribution
-// Parameterization: mu = mean (0 < mu < 1), phi = precision (phi > 0)
-// Shape parameters: alpha = mu * phi, beta = (1 - mu) * phi
-// Var(Y) = mu * (1 - mu) / (1 + phi)
+/// Beta distribution for proportions/rates in (0, 1).
+///
+/// Parameters: mu (mean, logit link) and phi (precision, log link).
+/// Shape α = μφ, β = (1-μ)φ. Var(Y) = μ(1-μ)/(1+φ).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Beta;
 
 impl Beta {
+    /// Create a new Beta distribution.
     pub fn new() -> Self {
         Self
     }
@@ -620,11 +685,11 @@ impl Distribution for Beta {
                 param: "phi".to_string(),
             })?;
 
-        let mu_safe = mu.mapv(|m| m.clamp(1e-10, 1.0 - 1e-10));
-        let phi_safe = phi.mapv(|p| p.max(1e-10));
+        let mu_safe = mu.mapv(|m| m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
+        let phi_safe = phi.mapv(|p| p.max(MIN_POSITIVE));
 
         // Clamp y to valid range
-        let y_clamped = y.mapv(|v| v.clamp(1e-10, 1.0 - 1e-10));
+        let y_clamped = y.mapv(|v| v.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
 
         // Compute alpha = mu * phi, beta_param = (1 - mu) * phi
         let alpha = &mu_safe * &phi_safe;
@@ -657,7 +722,7 @@ impl Distribution for Beta {
         let phi_sq = phi_safe.mapv(|p| p.powi(2));
         let i_mu = &phi_sq * (&psi_prime_alpha + &psi_prime_beta);
         let mu_1_minus_mu_sq = mu_1_minus_mu.mapv(|v| v.powi(2));
-        let w_mu = (&mu_1_minus_mu_sq * &i_mu).mapv(|v| v.max(1e-6));
+        let w_mu = (&mu_1_minus_mu_sq * &i_mu).mapv(|v| v.max(MIN_WEIGHT));
 
         // phi derivatives (log link)
         // dl/d_phi = digamma(phi) - mu*digamma(alpha) - (1-mu)*digamma(beta)
@@ -674,7 +739,7 @@ impl Distribution for Beta {
         let mu_sq = mu_safe.mapv(|m| m.powi(2));
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v.powi(2));
         let i_phi = &psi_prime_phi - &mu_sq * &psi_prime_alpha - &one_minus_mu_sq * &psi_prime_beta;
-        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.abs().max(1e-6));
+        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.abs().max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -687,4 +752,103 @@ impl Distribution for Beta {
     }
 }
 
-// TODO: Add Binomial distribution (will need special handling for n parameter)
+/// Binomial distribution for modeling count data with a known number of trials.
+///
+/// The response y represents the number of successes out of n trials.
+/// The probability parameter mu uses a logit link by default.
+#[derive(Debug, Clone)]
+pub struct Binomial {
+    /// Number of trials per observation (can be uniform or varying)
+    n_trials: Array1<f64>,
+}
+
+impl Binomial {
+    /// Create a Binomial distribution with a fixed number of trials for all observations.
+    pub fn new(n_trials: usize) -> Self {
+        Self {
+            n_trials: Array1::from_elem(1, n_trials as f64),
+        }
+    }
+
+    /// Create a Binomial distribution with varying number of trials per observation.
+    pub fn with_trials(n_trials: Array1<f64>) -> Self {
+        Self { n_trials }
+    }
+
+    /// Get the number of trials, broadcasting if necessary.
+    fn get_n(&self, n_obs: usize) -> Array1<f64> {
+        if self.n_trials.len() == 1 {
+            Array1::from_elem(n_obs, self.n_trials[0])
+        } else {
+            self.n_trials.clone()
+        }
+    }
+}
+
+impl Distribution for Binomial {
+    fn parameters(&self) -> &[&'static str] {
+        &["mu"]
+    }
+
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+        match param {
+            "mu" => Ok(Box::new(LogitLink)),
+            _ => Err(GamlssError::UnknownParameter {
+                distribution: self.name().to_string(),
+                param: param.to_string(),
+            }),
+        }
+    }
+
+    fn derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> DerivativesResult {
+        // Binomial log-likelihood: l = y*log(mu) + (n-y)*log(1-mu) + log(C(n,y))
+        //
+        // Score (dl/dmu): (y - n*mu) / (mu*(1-mu))
+        // Fisher info: n / (mu*(1-mu))
+        //
+        // With logit link η = logit(mu), dmu/deta = mu*(1-mu):
+        //   Score on eta: u_eta = y - n*mu
+        //   Fisher info on eta: w_eta = n * mu * (1-mu)
+        let mu = *params
+            .get("mu")
+            .ok_or_else(|| GamlssError::UnknownParameter {
+                distribution: self.name().to_string(),
+                param: "mu".to_string(),
+            })?;
+
+        let n_obs = y.len();
+        let n = self.get_n(n_obs);
+
+        // Clamp mu to valid probability range
+        let mu_safe = mu.mapv(|m| m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
+
+        // Score on eta scale: u = y - n*mu
+        let u_mu = y - &(&n * &mu_safe);
+
+        // Fisher info on eta scale: w = n * mu * (1 - mu)
+        let mu_1_minus_mu = &mu_safe * &mu_safe.mapv(|m| 1.0 - m);
+        let w_mu = (&n * &mu_1_minus_mu).mapv(|v| v.max(MIN_WEIGHT));
+
+        Ok(HashMap::from([("mu".to_string(), (u_mu, w_mu))]))
+    }
+
+    fn name(&self) -> &'static str {
+        "Binomial"
+    }
+
+    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        match param {
+            "mu" => {
+                // y is counts, so divide by n to get probability
+                let n = self.n_trials[0];
+                let p = y.mean().unwrap_or(n / 2.0) / n;
+                p.clamp(0.1, 0.9) // Avoid extreme starting values
+            }
+            _ => 0.1,
+        }
+    }
+}

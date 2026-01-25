@@ -14,12 +14,18 @@ use ndarray::Array1;
 use polars::prelude::DataFrame;
 use std::collections::HashMap;
 
-const DEFAULT_MAX_ITER: usize = 20;
-const DEFAULT_TOLERANCE: f64 = 1e-6;
+const DEFAULT_MAX_ITER: usize = 200;
+const DEFAULT_TOLERANCE: f64 = 1e-3;
 
+/// Minimum weight for IRLS to prevent division by near-zero
+const MIN_WEIGHT: f64 = 1e-6;
+
+/// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
 pub struct FitConfig {
+    /// Maximum number of RS algorithm iterations (default: 200).
     pub max_iterations: usize,
+    /// Convergence tolerance for coefficient changes (default: 1e-3).
     pub tolerance: f64,
 }
 
@@ -32,34 +38,52 @@ impl Default for FitConfig {
     }
 }
 
+/// Diagnostic information from the model fitting process.
 #[derive(Debug, Clone)]
 pub struct FitDiagnostics {
+    /// Whether the algorithm converged within the maximum iterations.
     pub converged: bool,
+    /// Number of RS algorithm iterations performed.
     pub iterations: usize,
+    /// Maximum coefficient change in the final iteration.
     pub final_change: f64,
+    /// Maximum gradient at convergence (if computed).
     pub max_gradient: Option<f64>,
+    /// Per-parameter diagnostic information.
     pub param_diagnostics: HashMap<String, ParamDiagnostic>,
 }
 
-#[derive(Debug, Clone)]
+/// Diagnostic information for a single distribution parameter.
+#[derive(Debug, Clone, Default)]
 pub struct ParamDiagnostic {
+    /// Sum of absolute changes in linear predictor (eta) in final iteration.
     pub final_eta_change: f64,
+    /// Sum of absolute changes in smoothing parameters (lambda) in final iteration.
     pub final_lambda_change: f64,
+    /// Effective degrees of freedom for this parameter's model.
     pub edf: f64,
 }
 
+/// Fitted results for a single distribution parameter (e.g., mu, sigma).
 #[derive(Debug)]
 pub struct FittedParameter {
+    /// Estimated regression coefficients (beta).
     pub coefficients: Coefficients,
+    /// Covariance matrix of the coefficient estimates.
     pub covariance: CovarianceMatrix,
+    /// Terms included in this parameter's model formula.
     pub terms: Vec<Term>,
+    /// Optimized smoothing parameters for each penalty matrix.
     pub lambdas: Array1<f64>,
+    /// Linear predictor values (X * beta).
     pub eta: Array1<f64>,
+    /// Fitted values on the response scale (link^-1(eta)).
     pub fitted_values: Array1<f64>,
+    /// Effective degrees of freedom.
     pub edf: f64,
 }
 
-pub struct FittingParameter {
+struct FittingParameter {
     terms: Vec<Term>,
     link: Box<dyn Link>,
     x_matrix: ModelMatrix,
@@ -97,22 +121,8 @@ pub(crate) fn fit_gamlss<D: Distribution>(
         let (x_model, penalty_matrices, total_coeffs) =
             assemble_model_matrices(data, n_obs, terms)?;
 
-        // Initialize on response scale, then transform to eta via link
-        let response_scale_start = if param_name_str == "mu" {
-            y.mean().unwrap_or(0.0)
-        } else if param_name_str == "sigma" {
-            let s = y.std(1.0);
-            if s < 1e-4 {
-                1.0
-            } else {
-                s
-            }
-        } else if param_name_str == "nu" {
-            10.0
-        } else {
-            0.1
-        };
-
+        // Initialize on response scale using distribution-specific logic
+        let response_scale_start = family.initial_value(param_name, y);
         let eta_start = link.link(response_scale_start);
 
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
@@ -178,7 +188,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             })?;
 
             // Fisher scoring: z = η + u/w forms working response for weighted least squares
-            let safe_w = deriv_w.mapv(|w: f64| w.max(1e-6));
+            let safe_w = deriv_w.mapv(|w: f64| w.max(MIN_WEIGHT));
             let adjustment = deriv_u / &safe_w;
             let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
 
@@ -207,7 +217,11 @@ pub(crate) fn fit_gamlss<D: Distribution>(
                 &best_lambdas,
             )?;
 
-            let diff = (&new_beta.0 - &model.beta.0).mapv(f64::abs).sum();
+            // Use max absolute change for convergence
+            let diff = (&new_beta.0 - &model.beta.0)
+                .iter()
+                .map(|x| x.abs())
+                .fold(0.0_f64, |a, b| a.max(b));
             if diff > max_diff {
                 max_diff = diff;
             }

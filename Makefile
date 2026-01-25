@@ -12,4 +12,7 @@ test:
 build:
 	cargo build
 
-ci: fmt clippy test build
+build-native:
+	RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+ci: fmt clippy test build-native

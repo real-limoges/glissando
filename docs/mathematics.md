@@ -52,7 +52,7 @@ $$
 
 #### For $\nu$ (log link):
 $$
-I_{\log(\nu)} = \frac{\nu^2}{4}\left[\psi'\left(\frac{\nu}{2}\right) - \psi'\left(\frac{\nu+1}{2}\right) - \frac{2(\nu+3)}{\nu(\nu+1)}\right]
+I_{\log(\nu)} = \frac{\nu^2}{4}\left[\psi'\left(\frac{\nu}{2}\right) - \psi'\left(\frac{\nu+1}{2}\right) + \frac{2(\nu+3)}{\nu(\nu+1)}\right]
 $$
 
 where $\psi'(x)$ is the trigamma function.

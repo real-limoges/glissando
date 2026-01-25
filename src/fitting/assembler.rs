@@ -13,13 +13,14 @@ fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f
         .column(name)
         .map_err(|e| GamlssError::Input(format!("Column '{}' not found: {}", name, e)))?;
 
-    let f64_series = if series.dtype() != &DataType::Float64 {
-        series.cast(&DataType::Float64)?
+    // Avoid clone by binding cast result to extend its lifetime
+    let casted;
+    let f64_chunked_array = if series.dtype() != &DataType::Float64 {
+        casted = series.cast(&DataType::Float64)?;
+        casted.f64()?.rechunk()
     } else {
-        series.clone()
+        series.f64()?.rechunk()
     };
-
-    let f64_chunked_array = f64_series.f64()?;
 
     let ndarray_data = f64_chunked_array.to_ndarray()?;
     let arr = ndarray_data
@@ -94,7 +95,8 @@ fn assemble_smooth(
             let n_groups = id_codes.n_unique()?;
             let mut basis = Array2::<f64>::zeros((n_obs, n_groups));
 
-            let id_col_ndarray = id_codes
+            let id_codes_rechunked = id_codes.rechunk();
+            let id_col_ndarray = id_codes_rechunked
                 .to_ndarray()?
                 .into_shape_with_order(n_obs)
                 .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
@@ -112,6 +114,16 @@ fn assemble_smooth(
     }
 }
 
+/// Assemble the design matrix and penalty matrices from formula terms.
+///
+/// Constructs the combined model matrix X by concatenating columns for each term
+/// (intercept, linear, smooth), and builds the corresponding penalty matrices
+/// for smooth terms.
+///
+/// # Returns
+/// * `ModelMatrix` - Combined design matrix (n_obs × total_coeffs)
+/// * `Vec<PenaltyMatrix>` - Penalty matrices for each smooth term
+/// * `usize` - Total number of coefficients
 pub fn assemble_model_matrices(
     data: &DataFrame,
     n_obs: usize,

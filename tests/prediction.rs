@@ -314,6 +314,13 @@ fn test_predict_with_smooth() {
         "Prediction at x=pi should be near 0, got {}",
         mu_pred[idx_pi]
     );
+
+    // At x=2*pi, sin(2*pi) = 0
+    assert!(
+        mu_pred[idx_2pi].abs() < 0.5,
+        "Prediction at x=2*pi should be near 0, got {}",
+        mu_pred[idx_2pi]
+    );
 }
 
 #[test]

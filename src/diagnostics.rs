@@ -2,6 +2,9 @@ use crate::fitting::FittedParameter;
 use ndarray::Array1;
 use std::collections::HashMap;
 
+/// Minimum positive value to prevent division by zero or log(0)
+const MIN_POSITIVE: f64 = 1e-10;
+
 #[derive(Debug, Clone)]
 pub struct ModelDiagnostics {
     pub pearson_residuals: Array1<f64>,
@@ -18,11 +21,11 @@ pub fn pearson_residuals_gaussian(
     mu: &Array1<f64>,
     sigma: &Array1<f64>,
 ) -> Array1<f64> {
-    (y - mu) / &sigma.mapv(|s| s.max(1e-10))
+    (y - mu) / &sigma.mapv(|s| s.max(MIN_POSITIVE))
 }
 
 pub fn pearson_residuals_poisson(y: &Array1<f64>, mu: &Array1<f64>) -> Array1<f64> {
-    (y - mu) / &mu.mapv(|m| m.max(1e-10).sqrt())
+    (y - mu) / &mu.mapv(|m| m.max(MIN_POSITIVE).sqrt())
 }
 
 pub fn pearson_residuals_gamma(
@@ -30,7 +33,7 @@ pub fn pearson_residuals_gamma(
     mu: &Array1<f64>,
     sigma: &Array1<f64>,
 ) -> Array1<f64> {
-    let sd = (mu * sigma).mapv(|v| v.max(1e-10));
+    let sd = (mu * sigma).mapv(|v| v.max(MIN_POSITIVE));
     (y - mu) / &sd
 }
 
@@ -45,7 +48,7 @@ pub fn pearson_residuals_negative_binomial(
         .and(mu)
         .and(sigma)
         .for_each(|v, &m, &s| {
-            *v = (m + s * m * m).max(1e-10).sqrt();
+            *v = (m + s * m * m).max(MIN_POSITIVE).sqrt();
         });
     (y - mu) / &variance
 }
@@ -55,9 +58,26 @@ pub fn pearson_residuals_beta(y: &Array1<f64>, mu: &Array1<f64>, phi: &Array1<f6
     let mut sd = Array1::zeros(mu.len());
     Zip::from(&mut sd).and(mu).and(phi).for_each(|v, &m, &p| {
         let variance = m * (1.0 - m) / (1.0 + p);
-        *v = variance.max(1e-10).sqrt();
+        *v = variance.max(MIN_POSITIVE).sqrt();
     });
     (y - mu) / &sd
+}
+
+pub fn pearson_residuals_binomial(
+    y: &Array1<f64>,
+    mu: &Array1<f64>,
+    n: &Array1<f64>,
+) -> Array1<f64> {
+    use ndarray::Zip;
+    let mut sd = Array1::zeros(mu.len());
+    Zip::from(&mut sd).and(mu).and(n).for_each(|v, &m, &ni| {
+        // Variance of binomial: n * mu * (1 - mu)
+        let variance = ni * m * (1.0 - m);
+        *v = variance.max(MIN_POSITIVE).sqrt();
+    });
+    // Residuals: (y - n*mu) / sqrt(variance)
+    let expected = mu * n;
+    (y - &expected) / &sd
 }
 
 pub fn loglik_gaussian(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f64 {
@@ -65,7 +85,7 @@ pub fn loglik_gaussian(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -
     let log_2pi = (2.0 * std::f64::consts::PI).ln();
     let mut ll = 0.0;
     Zip::from(y).and(mu).and(sigma).for_each(|&yi, &mui, &si| {
-        let s = si.max(1e-10);
+        let s = si.max(MIN_POSITIVE);
         let z = (yi - mui) / s;
         ll += -0.5 * log_2pi - s.ln() - 0.5 * z * z;
     });
@@ -77,7 +97,21 @@ pub fn loglik_poisson(y: &Array1<f64>, mu: &Array1<f64>) -> f64 {
     use statrs::function::gamma::ln_gamma;
     let mut ll = 0.0;
     Zip::from(y).and(mu).for_each(|&yi, &mui| {
-        ll += yi * mui.max(1e-10).ln() - mui - ln_gamma(yi + 1.0);
+        ll += yi * mui.max(MIN_POSITIVE).ln() - mui - ln_gamma(yi + 1.0);
+    });
+    ll
+}
+
+pub fn loglik_binomial(y: &Array1<f64>, mu: &Array1<f64>, n: &Array1<f64>) -> f64 {
+    use ndarray::Zip;
+    use statrs::function::gamma::ln_gamma;
+    let mut ll = 0.0;
+    Zip::from(y).and(mu).and(n).for_each(|&yi, &mui, &ni| {
+        let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+        // log(C(n,y)) + y*log(mu) + (n-y)*log(1-mu)
+        ll += ln_gamma(ni + 1.0) - ln_gamma(yi + 1.0) - ln_gamma(ni - yi + 1.0)
+            + yi * m.ln()
+            + (ni - yi) * (1.0 - m).ln();
     });
     ll
 }
@@ -87,11 +121,13 @@ pub fn loglik_gamma(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f
     use statrs::function::gamma::ln_gamma;
     let mut ll = 0.0;
     Zip::from(y).and(mu).and(sigma).for_each(|&yi, &mui, &si| {
-        let s = si.max(1e-10);
+        let s = si.max(MIN_POSITIVE);
         let alpha = 1.0 / (s * s);
         let theta = mui * s * s;
-        ll +=
-            (alpha - 1.0) * yi.max(1e-10).ln() - yi / theta - alpha * theta.ln() - ln_gamma(alpha);
+        ll += (alpha - 1.0) * yi.max(MIN_POSITIVE).ln()
+            - yi / theta
+            - alpha * theta.ln()
+            - ln_gamma(alpha);
     });
     ll
 }
@@ -101,11 +137,11 @@ pub fn loglik_negative_binomial(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array
     use statrs::function::gamma::ln_gamma;
     let mut ll = 0.0;
     Zip::from(y).and(mu).and(sigma).for_each(|&yi, &mui, &si| {
-        let r = 1.0 / si.max(1e-10);
+        let r = 1.0 / si.max(MIN_POSITIVE);
         let p = r / (r + mui);
         ll += ln_gamma(yi + r) - ln_gamma(r) - ln_gamma(yi + 1.0)
-            + r * p.max(1e-10).ln()
-            + yi * (1.0 - p).max(1e-10).ln();
+            + r * p.max(MIN_POSITIVE).ln()
+            + yi * (1.0 - p).max(MIN_POSITIVE).ln();
     });
     ll
 }
