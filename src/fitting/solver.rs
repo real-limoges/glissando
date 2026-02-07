@@ -1,11 +1,11 @@
 use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
 use crate::distributions::Distribution;
+use crate::linalg;
 use argmin::core::Gradient;
 use argmin::core::{CostFunction, Error, Executor};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use ndarray::prelude::*;
-use ndarray_linalg::{Inverse, Solve};
 use std::marker::PhantomData;
 
 /// Minimum denominator value to prevent division by zero in GCV computation
@@ -243,10 +243,10 @@ fn fit_pwls_with_grad_info(
 
     let lhs = &x_t_w_x + &s_lambda;
 
-    let beta_arr = lhs.solve(&x_t_w_z).map_err(GamlssError::Linalg)?;
+    let beta_arr = linalg::solve(&lhs, &x_t_w_z)?;
     let beta = Coefficients(beta_arr);
 
-    let v = lhs.inv().map_err(GamlssError::Linalg)?;
+    let v = linalg::inv(&lhs)?;
 
     // EDF (effective degrees of freedom) measures model complexity.
     // EDF = tr(H) where H = X(X'WX + sum lambda*S)^-1 X'W is the hat matrix.

@@ -3,27 +3,29 @@ pub mod diagnostics;
 pub mod distributions;
 mod error;
 pub mod fitting;
+mod linalg;
 mod math;
 pub mod preprocessing;
 mod splines;
 mod terms;
 mod types;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;
 pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic};
-pub use preprocessing::PreprocessingError;
 pub use terms::{Smooth, Term};
 pub use types::*;
 
 use distributions::Distribution;
 use fitting::assembler::assemble_model_matrices;
 use ndarray::Array1;
-use polars::prelude::DataFrame;
 use preprocessing::validate_inputs;
 use std::collections::HashMap;
 
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamlssModel {
     pub models: HashMap<String, fitting::FittedParameter>,
     pub diagnostics: FitDiagnostics,
@@ -31,37 +33,24 @@ pub struct GamlssModel {
 
 impl GamlssModel {
     pub fn fit<D: Distribution>(
-        data: &DataFrame,
-        y_name: &str,
-        formula: &HashMap<String, Vec<Term>>,
+        y: &Array1<f64>,
+        data: &DataSet,
+        formula: &Formula,
         family: &D,
     ) -> Result<Self, GamlssError> {
-        Self::fit_with_config(data, y_name, formula, family, FitConfig::default())
+        Self::fit_with_config(y, data, formula, family, FitConfig::default())
     }
 
     pub fn fit_with_config<D: Distribution>(
-        data: &DataFrame,
-        y_name: &str,
-        formula: &HashMap<String, Vec<Term>>,
+        y: &Array1<f64>,
+        data: &DataSet,
+        formula: &Formula,
         family: &D,
         config: FitConfig,
     ) -> Result<Self, GamlssError> {
-        validate_inputs(data, y_name, formula, family)?;
+        validate_inputs(y, data, formula, family)?;
 
-        let y_series = data.column(y_name).map_err(|e| {
-            GamlssError::Input(format!("Target Column '{}' not found: {}", y_name, e))
-        })?;
-
-        let y_rechunked = y_series.f64()?.rechunk();
-        let binding = y_rechunked.to_ndarray()?;
-        let y_vec = binding
-            .to_shape(y_series.len())
-            .map_err(|e| GamlssError::Shape(e.to_string()))?;
-
-        let y_vector = y_vec.to_owned();
-
-        let (fitted_models, diagnostics) =
-            fitting::fit_gamlss(data, &y_vector, formula, family, &config)?;
+        let (fitted_models, diagnostics) = fitting::fit_gamlss(data, y, formula, family, &config)?;
 
         Ok(Self {
             models: fitted_models,
@@ -73,16 +62,33 @@ impl GamlssModel {
         self.diagnostics.converged
     }
 
+    /// Includes the distribution name so it can be deserialized without knowing the type upfront.
+    #[cfg(feature = "serde")]
+    pub fn to_json<D: Distribution + ?Sized>(&self, family: &D) -> Result<String, GamlssError> {
+        let wrapper = SerializedModel {
+            distribution: family.name().to_string(),
+            model: self,
+        };
+        serde_json::to_string(&wrapper).map_err(|e| GamlssError::Input(e.to_string()))
+    }
+
+    #[cfg(feature = "serde")]
+    pub fn from_json(json: &str) -> Result<(Self, String), GamlssError> {
+        let wrapper: OwnedSerializedModel =
+            serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
+        Ok((wrapper.model, wrapper.distribution))
+    }
+
     /// Predict fitted values for new data.
     ///
     /// Returns a HashMap with parameter names as keys and fitted values (on response scale)
     /// as values. The distribution is needed to obtain the appropriate link functions.
-    pub fn predict<D: Distribution>(
+    pub fn predict<D: Distribution + ?Sized>(
         &self,
-        new_data: &DataFrame,
+        new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
-        let n_obs = new_data.height();
+        let n_obs = new_data.n_obs().unwrap_or(0);
         let mut predictions = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
@@ -102,12 +108,12 @@ impl GamlssModel {
     /// Returns predictions on the linear predictor (eta) scale along with standard errors.
     /// Standard errors are computed via: se = sqrt(diag(X * V * X'))
     /// where V is the covariance matrix of the coefficients.
-    pub fn predict_with_se<D: Distribution>(
+    pub fn predict_with_se<D: Distribution + ?Sized>(
         &self,
-        new_data: &DataFrame,
+        new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, PredictionResult>, GamlssError> {
-        let n_obs = new_data.height();
+        let n_obs = new_data.n_obs().unwrap_or(0);
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
@@ -165,13 +171,13 @@ impl GamlssModel {
     ///
     /// For each posterior sample of coefficients, computes predictions on new data.
     /// Returns samples of fitted values on the response scale.
-    pub fn predict_samples<D: Distribution>(
+    pub fn predict_samples<D: Distribution + ?Sized>(
         &self,
-        new_data: &DataFrame,
+        new_data: &DataSet,
         family: &D,
         n_samples: usize,
     ) -> Result<HashMap<String, Vec<Array1<f64>>>, GamlssError> {
-        let n_obs = new_data.height();
+        let n_obs = new_data.n_obs().unwrap_or(0);
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
@@ -200,13 +206,24 @@ impl GamlssModel {
     }
 }
 
-/// Result of prediction with standard errors
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PredictionResult {
-    /// Fitted values on the response scale
     pub fitted: Array1<f64>,
-    /// Linear predictor values
     pub eta: Array1<f64>,
-    /// Standard errors on the linear predictor scale
     pub se_eta: Array1<f64>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize)]
+struct SerializedModel<'a> {
+    distribution: String,
+    model: &'a GamlssModel,
+}
+
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+struct OwnedSerializedModel {
+    distribution: String,
+    model: GamlssModel,
 }

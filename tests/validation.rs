@@ -3,39 +3,49 @@ mod common;
 use common::Generator;
 use gamlss_rs::{
     distributions::{Gaussian, Poisson},
-    GamlssError, GamlssModel, Term,
+    DataSet, Formula, GamlssError, GamlssModel, Term,
 };
-use polars::prelude::*;
+use ndarray::Array1;
 use rand::Rng;
-use std::collections::HashMap;
 
 #[test]
-fn test_missing_response_column() {
-    let df = df!("x" => [1.0, 2.0, 3.0]).unwrap();
+fn test_missing_variable_in_data() {
+    let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+    let data = DataSet::new(); // empty data, no "x" column
 
-    let mut formulas = HashMap::new();
-    formulas.insert("mu".to_string(), vec![Term::Intercept]);
+    let mut formulas = Formula::new();
+    formulas.add_terms(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
 
-    let result = GamlssModel::fit(&df, "y", &formulas, &Poisson::new());
+    let result = GamlssModel::fit(&y, &data, &formulas, &Poisson::new());
 
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        matches!(err, GamlssError::MissingColumn { .. }),
-        "Expected MissingColumn error for missing response column, got {:?}",
+        matches!(err, GamlssError::MissingVariable { .. }),
+        "Expected MissingVariable error for missing predictor column, got {:?}",
         err
     );
 }
 
 #[test]
 fn test_missing_formula_for_parameter() {
-    let df = df!("x" => [1.0, 2.0, 3.0], "y" => [1.0, 2.0, 3.0]).unwrap();
+    let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0]));
 
-    let mut formulas = HashMap::new();
-    formulas.insert("mu".to_string(), vec![Term::Intercept]);
+    let mut formulas = Formula::new();
+    formulas.add_terms("mu", vec![Term::Intercept]);
     // Missing "sigma" formula for Gaussian
 
-    let result = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new());
+    let result = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new());
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -48,14 +58,12 @@ fn test_missing_formula_for_parameter() {
 
 #[test]
 fn test_small_dataset() {
-    let df = df!(
-        "x" => [1.0, 2.0, 3.0, 4.0, 5.0],
-        "y" => [2.1, 4.0, 5.9, 8.1, 10.0]
-    )
-    .unwrap();
+    let y = Array1::from_vec(vec![2.1, 4.0, 5.9, 8.1, 10.0]);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -64,9 +72,9 @@ fn test_small_dataset() {
             },
         ],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma", vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover approximately y = 2x (intercept ~0, slope ~2)
@@ -80,13 +88,13 @@ fn test_small_dataset() {
 #[test]
 fn test_intercept_only_model() {
     let mut rand_gen = Generator::new(999);
-    let df = rand_gen.linear_gaussian(200, 0.0, 10.0, 1.0); // slope=0, intercept=10
+    let (y, data) = rand_gen.linear_gaussian(200, 0.0, 10.0, 1.0); // slope=0, intercept=10
 
-    let mut formulas = HashMap::new();
-    formulas.insert("mu".to_string(), vec![Term::Intercept]);
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    let mut formulas = Formula::new();
+    formulas.add_terms("mu".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     let mu_intercept = model.models["mu"].coefficients[0];
     assert!(
@@ -99,14 +107,17 @@ fn test_intercept_only_model() {
 #[test]
 fn test_large_coefficients() {
     // Test that the model can handle data with large scale
-    let df = df!(
-        "x" => [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-        "y" => [1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0, 1700.0, 1800.0, 1900.0]
-    )
-    .unwrap();
+    let y = Array1::from_vec(vec![
+        1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0, 1700.0, 1800.0, 1900.0,
+    ]);
+    let mut data = DataSet::new();
+    data.insert_column(
+        "x".to_string(),
+        Array1::from_vec(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
+    );
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -115,9 +126,9 @@ fn test_large_coefficients() {
             },
         ],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover y = 1000 + 100*x
@@ -135,14 +146,15 @@ fn test_large_coefficients() {
 
 #[test]
 fn test_negative_response_gaussian() {
-    let df = df!(
-        "x" => [1.0, 2.0, 3.0, 4.0, 5.0],
-        "y" => [-10.0, -8.0, -6.0, -4.0, -2.0]
-    )
-    .unwrap();
+    let y = Array1::from_vec(vec![-10.0, -8.0, -6.0, -4.0, -2.0]);
+    let mut data = DataSet::new();
+    data.insert_column(
+        "x".to_string(),
+        Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]),
+    );
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -151,9 +163,9 @@ fn test_negative_response_gaussian() {
             },
         ],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover y = -12 + 2*x
@@ -181,10 +193,13 @@ fn test_multiple_linear_terms() {
         })
         .collect();
 
-    let df = df!("x1" => x1, "x2" => x2, "y" => y).unwrap();
+    let y = Array1::from_vec(y);
+    let mut data = DataSet::new();
+    data.insert_column("x1".to_string(), Array1::from_vec(x1));
+    data.insert_column("x2".to_string(), Array1::from_vec(x2));
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -196,9 +211,9 @@ fn test_multiple_linear_terms() {
             },
         ],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover intercept ~1, x1 coef ~2, x2 coef ~3
@@ -235,10 +250,12 @@ fn test_spline_smooth_recovery() {
         })
         .collect();
 
-    let df = df!("x" => x.clone(), "y" => y).unwrap();
+    let y = Array1::from_vec(y);
+    let mut data = DataSet::new();
+    data.insert_column("x".to_string(), Array1::from_vec(x.clone()));
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![Term::Smooth(gamlss_rs::Smooth::PSpline1D {
             col_name: "x".to_string(),
@@ -247,9 +264,9 @@ fn test_spline_smooth_recovery() {
             penalty_order: 2,
         })],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     // Check that fitted values roughly follow sin(x)
     let fitted = &model.models["mu"].fitted_values;
@@ -270,10 +287,10 @@ fn test_spline_smooth_recovery() {
 #[test]
 fn test_edf_reasonable() {
     let mut rand_gen = Generator::new(42);
-    let df = rand_gen.linear_gaussian(200, 1.0, 5.0, 1.0);
+    let (y, data) = rand_gen.linear_gaussian(200, 1.0, 5.0, 1.0);
 
-    let mut formulas = HashMap::new();
-    formulas.insert(
+    let mut formulas = Formula::new();
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -282,9 +299,9 @@ fn test_edf_reasonable() {
             },
         ],
     );
-    formulas.insert("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&df, "y", &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
 
     // For intercept + linear, EDF should be ~2
     let mu_edf = model.models["mu"].edf;

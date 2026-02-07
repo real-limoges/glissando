@@ -11,7 +11,6 @@ use super::error::GamlssError;
 use super::terms::{Smooth, Term};
 use super::types::*;
 use ndarray::Array1;
-use polars::prelude::DataFrame;
 use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
@@ -22,6 +21,7 @@ const MIN_WEIGHT: f64 = 1e-6;
 
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FitConfig {
     /// Maximum number of RS algorithm iterations (default: 200).
     pub max_iterations: usize,
@@ -40,6 +40,7 @@ impl Default for FitConfig {
 
 /// Diagnostic information from the model fitting process.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FitDiagnostics {
     /// Whether the algorithm converged within the maximum iterations.
     pub converged: bool,
@@ -55,6 +56,7 @@ pub struct FitDiagnostics {
 
 /// Diagnostic information for a single distribution parameter.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ParamDiagnostic {
     /// Sum of absolute changes in linear predictor (eta) in final iteration.
     pub final_eta_change: f64,
@@ -66,6 +68,7 @@ pub struct ParamDiagnostic {
 
 /// Fitted results for a single distribution parameter (e.g., mu, sigma).
 #[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedParameter {
     /// Estimated regression coefficients (beta).
     pub coefficients: Coefficients,
@@ -102,9 +105,9 @@ struct FittingParameter {
 /// penalized iteratively reweighted least squares (P-IRLS) with a working response z
 /// and working weights w derived from the distribution's score and Fisher information.
 pub(crate) fn fit_gamlss<D: Distribution>(
-    data: &DataFrame,
+    data: &DataSet,
     y: &Array1<f64>,
-    formula: &HashMap<String, Vec<Term>>,
+    formula: &Formula,
     family: &D,
     config: &FitConfig,
 ) -> Result<(HashMap<String, FittedParameter>, FitDiagnostics), GamlssError> {

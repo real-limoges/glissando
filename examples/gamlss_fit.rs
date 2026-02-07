@@ -1,8 +1,7 @@
 use gamlss_rs::distributions::StudentT;
-use gamlss_rs::{GamlssError, GamlssModel, Smooth, Term};
-use polars::prelude::*;
-use rand::Rng; // Needed for the .random_range trait
-use std::collections::HashMap;
+use gamlss_rs::{DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
+use ndarray::Array1;
+use rand::Rng;
 
 fn main() -> Result<(), GamlssError> {
     // Generate Synthetic Data
@@ -10,7 +9,6 @@ fn main() -> Result<(), GamlssError> {
     let mut rng = rand::rng();
     let n = 200;
 
-    // one issue is that it isn't numerically stable right now
     let x_vals: Vec<f64> = (0..n).map(|i| (i as f64) * 0.1).collect();
 
     let y_vals: Vec<f64> = x_vals
@@ -19,22 +17,20 @@ fn main() -> Result<(), GamlssError> {
             let mu = x.sin();
             let sigma = 0.5 + 0.1 * x;
 
-            // rand 0.9 syntax for range
             let noise: f64 = rng.random_range(-1.0..1.0);
             mu + sigma * noise
         })
         .collect();
 
-    let df = df! {
-        "x" => &x_vals,
-        "y" => &y_vals,
-    }?;
+    let y = Array1::from_vec(y_vals);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(x_vals));
 
-    // the formula hashmap
-    let mut formulas = HashMap::new();
+    // the formula
+    let mut formulas = Formula::new();
 
     // Mu: Smooth P-Spline
-    formulas.insert(
+    formulas.add_terms(
         "mu".to_string(),
         vec![
             Term::Intercept,
@@ -48,7 +44,7 @@ fn main() -> Result<(), GamlssError> {
     );
 
     // Sigma: Linear
-    formulas.insert(
+    formulas.add_terms(
         "sigma".to_string(),
         vec![
             Term::Intercept,
@@ -59,11 +55,11 @@ fn main() -> Result<(), GamlssError> {
     );
 
     // Nu: Constant
-    formulas.insert("nu".to_string(), vec![Term::Intercept]);
+    formulas.add_terms("nu".to_string(), vec![Term::Intercept]);
 
     // Fit
     println!("Fitting GAMLSS model...");
-    let model = GamlssModel::fit(&df, "y", &formulas, &StudentT::new())?;
+    let model = GamlssModel::fit(&y, &data, &formulas, &StudentT::new())?;
     println!("Successfully Trained GAMLSS Model!");
 
     // 5. Inspect Results

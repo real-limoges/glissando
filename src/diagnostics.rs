@@ -6,6 +6,7 @@ use std::collections::HashMap;
 const MIN_POSITIVE: f64 = 1e-10;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelDiagnostics {
     pub pearson_residuals: Array1<f64>,
     pub response_residuals: Array1<f64>,

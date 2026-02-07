@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Term {
     // 3 types of Terms. A constant (Intercept), a Linear, and a Smooth
     Intercept,
@@ -18,6 +19,7 @@ impl Term {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Smooth {
     // 3 tyeps of smooths implemented right now
     PSpline1D {

@@ -1,8 +1,10 @@
 use ndarray::Array1;
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use statrs::function::gamma::digamma as statrs_digamma;
 
 /// Threshold for using parallel computation (below this, sequential is faster)
+#[cfg(feature = "parallel")]
 const PARALLEL_THRESHOLD: usize = 10_000;
 
 /// Scalar digamma function (re-exported from statrs for accuracy).
@@ -45,40 +47,54 @@ pub fn trigamma(x: f64) -> f64 {
 /// Batch digamma function optimized for vectorization.
 ///
 /// Computes digamma for all elements in the input array.
-/// Uses parallel computation for large arrays (n >= 10,000).
+/// Uses parallel computation for large arrays (n >= 10,000) when the parallel feature is enabled.
 #[inline]
 pub fn digamma_batch(x: &Array1<f64>) -> Array1<f64> {
-    let n = x.len();
-    if n < PARALLEL_THRESHOLD {
+    #[cfg(feature = "parallel")]
+    {
+        let n = x.len();
+        if n < PARALLEL_THRESHOLD {
+            x.mapv(statrs_digamma)
+        } else {
+            let result: Vec<f64> = x
+                .as_slice()
+                .expect("input array not contiguous")
+                .par_iter()
+                .map(|&v| statrs_digamma(v))
+                .collect();
+            Array1::from_vec(result)
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
         x.mapv(statrs_digamma)
-    } else {
-        let result: Vec<f64> = x
-            .as_slice()
-            .expect("input array not contiguous")
-            .par_iter()
-            .map(|&v| statrs_digamma(v))
-            .collect();
-        Array1::from_vec(result)
     }
 }
 
 /// Batch trigamma function optimized for vectorization.
 ///
 /// Computes trigamma for all elements in the input array.
-/// Uses parallel computation for large arrays (n >= 10,000).
+/// Uses parallel computation for large arrays (n >= 10,000) when the parallel feature is enabled.
 #[inline]
 pub fn trigamma_batch(x: &Array1<f64>) -> Array1<f64> {
-    let n = x.len();
-    if n < PARALLEL_THRESHOLD {
+    #[cfg(feature = "parallel")]
+    {
+        let n = x.len();
+        if n < PARALLEL_THRESHOLD {
+            x.mapv(trigamma)
+        } else {
+            let result: Vec<f64> = x
+                .as_slice()
+                .expect("input array not contiguous")
+                .par_iter()
+                .map(|&v| trigamma(v))
+                .collect();
+            Array1::from_vec(result)
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
         x.mapv(trigamma)
-    } else {
-        let result: Vec<f64> = x
-            .as_slice()
-            .expect("input array not contiguous")
-            .par_iter()
-            .map(|&v| trigamma(v))
-            .collect();
-        Array1::from_vec(result)
     }
 }
 
