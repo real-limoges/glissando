@@ -1,11 +1,13 @@
 use crate::error::GamlssError;
 use crate::math::{digamma_batch, trigamma_batch};
 use ndarray::Array1;
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
 /// Threshold for using parallel computation (below this, sequential is faster)
+#[cfg(feature = "parallel")]
 const PARALLEL_THRESHOLD: usize = 10_000;
 
 /// Minimum value for positive parameters (mu, sigma, etc.) to avoid log(0) or division by zero
@@ -303,6 +305,7 @@ impl Distribution for StudentT {
                 param: "nu".to_string(),
             })?;
 
+        #[cfg(feature = "parallel")]
         let n = y.len();
         let z = (y - mu) / sigma;
         let z_sq = z.mapv(|v| v.powi(2));
@@ -310,6 +313,7 @@ impl Distribution for StudentT {
         // w_robust = (nu+1)/(nu+z^2) appears in all derivatives.
         // This "robustifying weight" downweights outliers (large |z|).
         // As nu -> infinity, w_robust -> 1 and we recover Gaussian behavior.
+        #[cfg(feature = "parallel")]
         let w_robust: Array1<f64> = if n < PARALLEL_THRESHOLD {
             nu.iter()
                 .zip(z_sq.iter())
@@ -326,6 +330,13 @@ impl Distribution for StudentT {
                     .collect(),
             )
         };
+
+        #[cfg(not(feature = "parallel"))]
+        let w_robust: Array1<f64> = nu
+            .iter()
+            .zip(z_sq.iter())
+            .map(|(&nu_i, &z2_i)| (nu_i + 1.0) / (nu_i + z2_i))
+            .collect();
 
         // --- mu derivatives (identity link) ---
         let u_mu = (&w_robust * &z) / sigma;
@@ -344,6 +355,7 @@ impl Distribution for StudentT {
         let d1 = digamma_batch(&nu_plus_1_half);
         let d2 = digamma_batch(&nu_half);
 
+        #[cfg(feature = "parallel")]
         let (term3, term4): (Array1<f64>, Array1<f64>) = if n < PARALLEL_THRESHOLD {
             let t3: Array1<f64> = nu
                 .iter()
@@ -374,6 +386,22 @@ impl Distribution for StudentT {
             (Array1::from_vec(t3), Array1::from_vec(t4))
         };
 
+        #[cfg(not(feature = "parallel"))]
+        let (term3, term4): (Array1<f64>, Array1<f64>) = {
+            let t3: Array1<f64> = nu
+                .iter()
+                .zip(z_sq.iter())
+                .map(|(&nu_i, &z2_i)| (1.0 + z2_i / nu_i).ln())
+                .collect();
+            let t4: Array1<f64> = nu
+                .iter()
+                .zip(w_robust.iter())
+                .zip(z_sq.iter())
+                .map(|((&nu_i, &w_i), &z2_i)| (w_i * z2_i - 1.0) / nu_i)
+                .collect();
+            (t3, t4)
+        };
+
         let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
 
         // Chain rule for log link: u_eta = nu * dl/dnu
@@ -388,6 +416,7 @@ impl Distribution for StudentT {
         let i_nu = 0.25 * (&t1 - &t2 + &t3);
         // Floor at MIN_WEIGHT to ensure positive definiteness of the weight matrix.
         // For log link: W_eta = I_nu * nu^2
+        #[cfg(feature = "parallel")]
         let w_nu: Array1<f64> = if n < PARALLEL_THRESHOLD {
             i_nu.iter()
                 .zip(nu.iter())
@@ -404,6 +433,13 @@ impl Distribution for StudentT {
                     .collect(),
             )
         };
+
+        #[cfg(not(feature = "parallel"))]
+        let w_nu: Array1<f64> = i_nu
+            .iter()
+            .zip(nu.iter())
+            .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(MIN_WEIGHT))
+            .collect();
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -571,10 +607,12 @@ impl Distribution for NegativeBinomial {
                 param: "sigma".to_string(),
             })?;
 
+        #[cfg(feature = "parallel")]
         let n = y.len();
         let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
         let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
 
+        #[cfg(feature = "parallel")]
         let one_plus_sigma_mu: Array1<f64> = if n < PARALLEL_THRESHOLD {
             sigma_safe
                 .iter()
@@ -592,6 +630,13 @@ impl Distribution for NegativeBinomial {
                     .collect(),
             )
         };
+
+        #[cfg(not(feature = "parallel"))]
+        let one_plus_sigma_mu: Array1<f64> = sigma_safe
+            .iter()
+            .zip(mu_safe.iter())
+            .map(|(&s, &m)| 1.0 + s * m)
+            .collect();
 
         // mu derivatives (log link)
         let u_mu = (y - &mu_safe) / &one_plus_sigma_mu;

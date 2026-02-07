@@ -127,7 +127,7 @@ $$
 \max_k \|\beta_k^{(t+1)} - \beta_k^{(t)}\|_1 < \epsilon
 $$
 
-Typical: $\epsilon = 10^{-6}$, max iterations = 20.
+Typical: $\epsilon = 10^{-3}$, max iterations = 200.
 
 ---
 

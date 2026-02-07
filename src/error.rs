@@ -1,5 +1,4 @@
 use ndarray::ShapeError;
-use polars::prelude::PolarsError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -7,8 +6,13 @@ pub enum GamlssError {
     #[error("Optimization failed: {0}")]
     Optimization(String),
 
+    #[cfg(feature = "openblas")]
     #[error("Linear algebra error: {0}")]
     Linalg(#[from] ndarray_linalg::error::LinalgError),
+
+    #[cfg(feature = "pure-rust")]
+    #[error("Linear algebra error: {0}")]
+    Linalg(String),
 
     #[error("Array shape error: {0}")]
     Shape(String),
@@ -19,9 +23,6 @@ pub enum GamlssError {
     #[error("Invalid input: {0}")]
     Input(String),
 
-    #[error("Polars error: {0}")]
-    Polars(#[from] PolarsError),
-
     #[error("ShapeError (Private): {0}")]
     ComputationError(String),
 
@@ -31,16 +32,16 @@ pub enum GamlssError {
     #[error("Internal error: {0}")]
     Internal(String),
 
-    #[error("Column '{column}' not found in DataFrame")]
-    MissingColumn { column: String },
+    #[error("Variable '{name}' not found in data")]
+    MissingVariable { name: String },
 
-    #[error("Column '{column}' contains {count} non-finite values (NaN or Inf)")]
-    NonFiniteValues { column: String, count: usize },
+    #[error("Variable '{name}' contains {count} non-finite values (NaN or Inf)")]
+    NonFiniteValues { name: String, count: usize },
 
     #[error("Formula missing terms for distribution parameter '{param}'")]
     MissingFormula { param: String },
 
-    #[error("Empty dataset: DataFrame has no rows")]
+    #[error("Empty dataset: no observations provided")]
     EmptyData,
 }
 

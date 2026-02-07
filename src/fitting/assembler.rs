@@ -2,36 +2,20 @@ use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
     create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
 };
+use crate::types::DataSet;
 use crate::ModelMatrix;
 use ndarray::concatenate;
 use ndarray::{s, Array1, Array2, Axis};
-use polars::prelude::ChunkUnique;
-use polars::prelude::{DataFrame, DataType};
+use std::collections::HashMap;
 
-fn get_col_as_f64(data: &DataFrame, name: &str, n_obs: usize) -> Result<Array1<f64>, GamlssError> {
-    let series = data
-        .column(name)
-        .map_err(|e| GamlssError::Input(format!("Column '{}' not found: {}", name, e)))?;
-
-    // Avoid clone by binding cast result to extend its lifetime
-    let casted;
-    let f64_chunked_array = if series.dtype() != &DataType::Float64 {
-        casted = series.cast(&DataType::Float64)?;
-        casted.f64()?.rechunk()
-    } else {
-        series.f64()?.rechunk()
-    };
-
-    let ndarray_data = f64_chunked_array.to_ndarray()?;
-    let arr = ndarray_data
-        .to_shape(n_obs)
-        .map_err(|e| GamlssError::Shape(e.to_string()));
-
-    Ok(arr?.to_owned())
+fn get_col<'a>(data: &'a DataSet, name: &str) -> Result<&'a Array1<f64>, GamlssError> {
+    data.get(name).ok_or_else(|| GamlssError::MissingVariable {
+        name: name.to_string(),
+    })
 }
 
 fn assemble_smooth(
-    data: &DataFrame,
+    data: &DataSet,
     n_obs: usize,
     smooth: &Smooth,
 ) -> Result<(Array2<f64>, Vec<PenaltyMatrix>), GamlssError> {
@@ -42,8 +26,8 @@ fn assemble_smooth(
             degree,
             penalty_order,
         } => {
-            let x_col = get_col_as_f64(data, col_name, n_obs)?;
-            let basis = create_basis_matrix(&x_col, *n_splines, *degree);
+            let x_col = get_col(data, col_name)?;
+            let basis = create_basis_matrix(x_col, *n_splines, *degree);
             let penalty = create_penalty_matrix(*n_splines, *penalty_order);
 
             Ok((basis, vec![PenaltyMatrix(penalty)]))
@@ -58,12 +42,12 @@ fn assemble_smooth(
             penalty_order_2,
             degree,
         } => {
-            let x1 = get_col_as_f64(data, col_name_1, n_obs)?;
-            let b1 = create_basis_matrix(&x1, *n_splines_1, *degree);
+            let x1 = get_col(data, col_name_1)?;
+            let b1 = create_basis_matrix(x1, *n_splines_1, *degree);
             let s1 = create_penalty_matrix(*n_splines_1, *penalty_order_1);
 
-            let x2 = get_col_as_f64(data, col_name_2, n_obs)?;
-            let b2 = create_basis_matrix(&x2, *n_splines_2, *degree);
+            let x2 = get_col(data, col_name_2)?;
+            let b2 = create_basis_matrix(x2, *n_splines_2, *degree);
             let s2 = create_penalty_matrix(*n_splines_2, *penalty_order_2);
 
             let n_coeffs_total = *n_splines_1 * *n_splines_2;
@@ -88,25 +72,32 @@ fn assemble_smooth(
 
         Smooth::RandomEffect { col_name } => {
             // Ridge-penalized indicators: equivalent to alpha ~ N(0, 1/lambda)
-            let series = data.column(col_name)?;
-            let cat_series = series.categorical()?;
-            let id_codes = cat_series.physical();
+            let group_var = get_col(data, col_name)?;
 
-            let n_groups = id_codes.n_unique()?;
+            // Find unique groups and create mapping
+            let mut unique_groups = Vec::new();
+            let mut group_to_id: HashMap<String, usize> = HashMap::new();
+
+            for val in group_var.iter() {
+                let key: String = val.to_string();
+                if let std::collections::hash_map::Entry::Vacant(e) = group_to_id.entry(key.clone())
+                {
+                    let id = unique_groups.len();
+                    unique_groups.push(key);
+                    e.insert(id);
+                }
+            }
+
+            let n_groups = unique_groups.len();
             let mut basis = Array2::<f64>::zeros((n_obs, n_groups));
 
-            let id_codes_rechunked = id_codes.rechunk();
-            let id_col_ndarray = id_codes_rechunked
-                .to_ndarray()?
-                .into_shape_with_order(n_obs)
-                .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
-
-            for i in 0..n_obs {
-                let group_id = id_col_ndarray[i] as usize;
-                if group_id < n_groups {
+            for (i, val) in group_var.iter().enumerate() {
+                let key: String = val.to_string();
+                if let Some(&group_id) = group_to_id.get(&key) {
                     basis[[i, group_id]] = 1.0;
                 }
             }
+
             let penalty = Array2::<f64>::eye(n_groups);
 
             Ok((basis, vec![PenaltyMatrix(penalty)]))
@@ -125,7 +116,7 @@ fn assemble_smooth(
 /// * `Vec<PenaltyMatrix>` - Penalty matrices for each smooth term
 /// * `usize` - Total number of coefficients
 pub fn assemble_model_matrices(
-    data: &DataFrame,
+    data: &DataSet,
     n_obs: usize,
     terms: &[Term],
 ) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize), GamlssError> {
@@ -143,10 +134,13 @@ pub fn assemble_model_matrices(
                 total_coeffs += 1;
             }
             Term::Linear { col_name } => {
-                let x_col_vec = get_col_as_f64(data, col_name, n_obs)?;
-                let part = x_col_vec
+                let x_col_vec = get_col(data, col_name)?;
+                let part: Array2<f64> = x_col_vec
+                    .to_owned()
                     .into_shape_with_order((n_obs, 1))
-                    .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
+                    .map_err(|err: ndarray::ShapeError| {
+                        GamlssError::ComputationError(err.to_string())
+                    })?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }

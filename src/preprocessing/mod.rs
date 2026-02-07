@@ -1,57 +1,41 @@
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
-use crate::terms::Term;
+use crate::types::{DataSet, Formula};
 use ndarray::prelude::*;
-use polars::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-#[derive(thiserror::Error, Debug)]
-pub enum PreprocessingError {
-    #[error("Polars error: {0}")]
-    Polars(#[from] PolarsError),
-    #[error("Shape error: {0}")]
-    Shape(#[from] ndarray::ShapeError),
-    #[error("Column '{0}' contains Null values. Linear algebra cannot handle Nulls.")]
-    NullValues(String),
-    #[error("Unsupported data type in column '{0}'")]
-    UnsupportedType(String),
-}
-
-pub fn series_to_array1(series: &Series) -> Result<Array1<f64>, PreprocessingError> {
-    let casted = series.cast(&DataType::Float64)?;
-    let ca = casted.f64()?;
-
-    if ca.null_count() > 0 {
-        return Err(PreprocessingError::NullValues(series.name().to_string()));
-    }
-    let vec_data: Vec<f64> = ca.into_no_null_iter().collect();
-
-    Ok(Array1::from(vec_data))
-}
-
+/// Validates input data and formula for model fitting.
+///
+/// Checks that:
+/// - Dataset is not empty
+/// - Response variable exists
+/// - Response variable contains only finite values
+/// - All parameters in the distribution have formulas
+/// - All variables referenced in formulas exist in the data
+/// - All numeric variables contain only finite values
 pub fn validate_inputs<D: Distribution>(
-    data: &DataFrame,
-    y_name: &str,
-    formula: &HashMap<String, Vec<Term>>,
+    y: &Array1<f64>,
+    data: &DataSet,
+    formula: &Formula,
     family: &D,
 ) -> Result<(), GamlssError> {
-    if data.height() == 0 {
+    // Check dataset is not empty
+    if y.is_empty() {
         return Err(GamlssError::EmptyData);
     }
 
-    let available_columns: HashSet<String> = data
-        .get_column_names()
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+    let n_obs = y.len();
 
-    if !available_columns.contains(y_name) {
-        return Err(GamlssError::MissingColumn {
-            column: y_name.to_string(),
+    // Validate response variable is finite
+    let non_finite_count = y.iter().filter(|v| !v.is_finite()).count();
+    if non_finite_count > 0 {
+        return Err(GamlssError::NonFiniteValues {
+            name: "y (response)".to_string(),
+            count: non_finite_count,
         });
     }
-    validate_column_finite(data, y_name)?;
 
+    // Check all parameters have formulas
     for param in family.parameters() {
         if !formula.contains_key(*param) {
             return Err(GamlssError::MissingFormula {
@@ -60,6 +44,7 @@ pub fn validate_inputs<D: Distribution>(
         }
     }
 
+    // Collect all referenced column names from formulas
     let mut referenced_columns: HashSet<&str> = HashSet::new();
     for terms in formula.values() {
         for term in terms {
@@ -69,57 +54,35 @@ pub fn validate_inputs<D: Distribution>(
         }
     }
 
+    // Check all referenced columns exist in data
     for col in &referenced_columns {
-        if !available_columns.contains(*col) {
-            return Err(GamlssError::MissingColumn {
-                column: col.to_string(),
+        if !data.contains_key(*col) {
+            return Err(GamlssError::MissingVariable {
+                name: col.to_string(),
             });
         }
     }
 
-    for col in &referenced_columns {
-        let series = data.column(col).map_err(|_| GamlssError::MissingColumn {
-            column: col.to_string(),
-        })?;
-
-        if series.dtype().is_primitive_numeric() {
-            validate_column_finite(data, col)?;
+    // Validate all variables have correct length and contain finite values
+    for (name, arr) in data.iter() {
+        // Check length matches response
+        if arr.len() != n_obs {
+            return Err(GamlssError::Input(format!(
+                "Variable '{}' has {} observations but response has {}",
+                name,
+                arr.len(),
+                n_obs
+            )));
         }
-    }
 
-    Ok(())
-}
-
-fn validate_column_finite(data: &DataFrame, col_name: &str) -> Result<(), GamlssError> {
-    let series = data
-        .column(col_name)
-        .map_err(|_| GamlssError::MissingColumn {
-            column: col_name.to_string(),
-        })?;
-
-    let casted = match series.cast(&DataType::Float64) {
-        Ok(s) => s,
-        Err(_) => return Ok(()),
-    };
-
-    let ca = match casted.f64() {
-        Ok(ca) => ca,
-        Err(_) => return Ok(()),
-    };
-
-    let non_finite_count = ca
-        .into_iter()
-        .filter(|opt| match opt {
-            Some(v) => !v.is_finite(),
-            None => true,
-        })
-        .count();
-
-    if non_finite_count > 0 {
-        return Err(GamlssError::NonFiniteValues {
-            column: col_name.to_string(),
-            count: non_finite_count,
-        });
+        // Check for non-finite values
+        let non_finite_count = arr.iter().filter(|v| !v.is_finite()).count();
+        if non_finite_count > 0 {
+            return Err(GamlssError::NonFiniteValues {
+                name: name.clone(),
+                count: non_finite_count,
+            });
+        }
     }
 
     Ok(())

@@ -8,9 +8,10 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 
 - **Multiple distribution parameters**: Model mean, variance, and shape parameters simultaneously
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
-- **Automatic smoothing**: Smoothing parameters selected via optimization
-- **Built on Polars**: Efficient data handling with Polars DataFrames
-- **Type-safe API**: Rust's type system ensures correct usage
+- **Automatic smoothing**: Smoothing parameters selected via GCV optimization
+- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via faer (no system deps)
+- **WASM support**: Serialize fitted models to JSON, predict in the browser via wasm-bindgen
+- **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse
 
 ## Installation
 
@@ -18,13 +19,23 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gamlss_rs = { git = "https://github.com/your-repo/gamlss_rs" }
+gamlss_rs = { git = "https://github.com/real-limoges/gamlss_rs" }
 ```
+
+### Feature Flags
+
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `openblas` | OpenBLAS backend (ndarray-linalg) — max performance | yes |
+| `pure-rust` | Faer backend — no system dependencies, WASM-compatible | no |
+| `serialization` | Serde support for model serialization | no |
+| `wasm` | WASM prediction API (implies `pure-rust` + `serialization`) | no |
+| `parallel` | Rayon parallelism for large datasets | yes |
 
 ### Requirements
 
-- Rust 2024 edition
-- OpenBLAS (for linear algebra operations)
+- Rust 2021 edition
+- OpenBLAS (only with default `openblas` feature)
 
 On macOS:
 ```bash
@@ -36,37 +47,30 @@ On Ubuntu/Debian:
 sudo apt-get install libopenblas-dev
 ```
 
+For pure Rust or WASM builds, no system dependencies are needed.
+
 ## Quick Start
 
 ```rust
-use gamlss_rs::{GamlssModel, Term, Smooth};
+use gamlss_rs::{GamlssModel, DataSet, Formula, Term};
 use gamlss_rs::distributions::Gaussian;
-use polars::prelude::*;
-use std::collections::HashMap;
+use ndarray::Array1;
 
-// Load your data into a Polars DataFrame
-let df = df!(
-    "x" => [1.0, 2.0, 3.0, 4.0, 5.0],
-    "y" => [2.1, 4.0, 5.9, 8.1, 10.0]
-).unwrap();
+let y = Array1::from_vec(vec![2.1, 4.0, 5.9, 8.1, 10.0]);
 
-// Define formulas for each distribution parameter
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-formula.insert("sigma".to_string(), vec![
-    Term::Intercept,
-]);
+let mut data = DataSet::new();
+data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
 
-// Fit the model
-let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new()).unwrap();
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ])
+    .with_terms("sigma", vec![Term::Intercept]);
 
-// Check convergence
+let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+
 println!("Converged: {}", model.converged());
-
-// Access results
 let mu_coeffs = &model.models["mu"].coefficients;
 println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 ```
@@ -76,6 +80,7 @@ println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 | Distribution | Parameters | Default Links | Use Case |
 |--------------|------------|---------------|----------|
 | `Poisson` | mu | log | Count data |
+| `Binomial` | mu | logit | Binary/count with known trials |
 | `Gaussian` | mu, sigma | identity, log | Continuous data |
 | `StudentT` | mu, sigma, nu | identity, log, log | Heavy-tailed continuous |
 | `Gamma` | mu, sigma | log, log | Positive continuous |
@@ -85,9 +90,10 @@ println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 ### Usage
 
 ```rust
-use gamlss_rs::distributions::{Poisson, Gaussian, StudentT, Gamma, NegativeBinomial, Beta};
+use gamlss_rs::distributions::{Poisson, Binomial, Gaussian, StudentT, Gamma, NegativeBinomial, Beta};
 
 let poisson = Poisson::new();             // Count data
+let binomial = Binomial::new(10);         // Binary/count with 10 trials
 let gaussian = Gaussian::new();           // Continuous data
 let student_t = StudentT::new();          // Heavy-tailed continuous data
 let gamma = Gamma::new();                 // Positive continuous (e.g., durations)
@@ -154,85 +160,81 @@ Term::Smooth(Smooth::RandomEffect {
 
 ## Configuration
 
-Customize fitting behavior with `FitConfig`:
-
 ```rust
 use gamlss_rs::FitConfig;
 
 let config = FitConfig {
-    max_iterations: 50,  // Maximum outer iterations (default: 20)
-    tolerance: 1e-8,     // Convergence tolerance (default: 1e-6)
+    max_iterations: 100,
+    tolerance: 1e-4,
 };
 
 let model = GamlssModel::fit_with_config(
-    &df, "y", &formula, &Gaussian::new(), config
+    &y, &data, &formula, &Gaussian::new(), config
 )?;
 ```
 
 ## Accessing Results
 
 ```rust
-let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
 
-// Check convergence diagnostics
+// Convergence diagnostics
 println!("Converged: {}", model.diagnostics.converged);
 println!("Iterations: {}", model.diagnostics.iterations);
-println!("Final change: {}", model.diagnostics.final_change);
 
-// For each parameter (mu, sigma, etc.)
+// Per-parameter results
 let fitted_mu = &model.models["mu"];
-
-fitted_mu.coefficients    // Coefficient estimates (Coefficients wrapper)
-fitted_mu.covariance      // Covariance matrix (CovarianceMatrix wrapper)
-fitted_mu.fitted_values   // Fitted values on response scale
-fitted_mu.eta             // Linear predictor values
-fitted_mu.edf             // Effective degrees of freedom
-fitted_mu.lambdas         // Smoothing parameters
-fitted_mu.terms           // The terms used in the formula
+fitted_mu.coefficients     // Coefficients newtype (Deref to Array1<f64>)
+fitted_mu.covariance       // CovarianceMatrix newtype (Deref to Array2<f64>)
+fitted_mu.fitted_values    // Fitted values on response scale
+fitted_mu.eta              // Linear predictor (X * beta)
+fitted_mu.edf              // Effective degrees of freedom
+fitted_mu.lambdas          // Smoothing parameters
+fitted_mu.terms            // Formula terms
 ```
 
 ## Prediction
 
-Make predictions on new data:
-
 ```rust
-// Predict on new data
-let new_df = df!(
-    "x" => [1.5, 2.5, 3.5]
-).unwrap();
+let mut new_data = DataSet::new();
+new_data.insert_column("x", Array1::from_vec(vec![1.5, 2.5, 3.5]));
 
-// Point predictions (returns fitted values for each parameter)
-let predictions = model.predict(&new_df)?;
+let family = Gaussian::new();
+
+// Point predictions (fitted values on response scale)
+let predictions = model.predict(&new_data, &family)?;
 let mu_pred = &predictions["mu"];
 
 // Predictions with standard errors
-let (pred, se) = model.predict_with_se(&new_df)?;
+let results = model.predict_with_se(&new_data, &family)?;
+let mu_result = &results["mu"];
+println!("Fitted: {:?}", mu_result.fitted);
+println!("SE(eta): {:?}", mu_result.se_eta);
 
-// Generate posterior samples for uncertainty quantification
-let samples = model.posterior_samples(&new_df, 1000)?;
+// Posterior samples for uncertainty quantification
+let samples = model.predict_samples(&new_data, &family, 1000)?;
+let mu_samples = &samples["mu"];  // Vec<Array1<f64>> with 1000 samples
 ```
 
 ## Model Diagnostics
 
-Access diagnostic information:
-
 ```rust
-use gamlss_rs::diagnostics::{residuals, ResidualType};
+use gamlss_rs::diagnostics::{
+    pearson_residuals_gaussian, response_residuals,
+    loglik_gaussian, compute_aic, compute_bic, total_edf,
+};
 
-// Get residuals
-let response_resid = residuals(&model, &df, "y", ResidualType::Response)?;
-let pearson_resid = residuals(&model, &df, "y", ResidualType::Pearson)?;
+let mu = &model.models["mu"].fitted_values;
+let sigma = &model.models["sigma"].fitted_values;
 
-// Information criteria
-let aic = model.aic(&df, "y")?;
-let bic = model.bic(&df, "y")?;
-
-// Log-likelihood
-let loglik = model.log_likelihood(&df, "y")?;
-
-// Total effective degrees of freedom
-let total_edf = model.total_edf();
+let pearson_resid = pearson_residuals_gaussian(&y, mu, sigma);
+let ll = loglik_gaussian(&y, mu, sigma);
+let edf = total_edf(&model.models);
+let aic = compute_aic(ll, edf);
+let bic = compute_bic(ll, edf, y.len());
 ```
+
+Distribution-specific residual and log-likelihood functions are available for all supported distributions (e.g., `pearson_residuals_poisson`, `loglik_gamma`, etc.).
 
 ## Examples
 
@@ -241,145 +243,144 @@ let total_edf = model.total_edf();
 Model where both mean and variance depend on x:
 
 ```rust
-let mut formula = HashMap::new();
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ])
+    .with_terms("sigma", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ]);
 
-// Mean increases with x
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-
-// Variance also increases with x
-formula.insert("sigma".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-
-let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
 ```
 
 ### Nonlinear Smooth
 
-Fit a flexible nonparametric curve:
-
 ```rust
-let mut formula = HashMap::new();
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".to_string(),
+            n_splines: 15,
+            degree: 3,
+            penalty_order: 2,
+        }),
+    ])
+    .with_terms("sigma", vec![Term::Intercept]);
 
-formula.insert("mu".to_string(), vec![
-    Term::Smooth(Smooth::PSpline1D {
-        col_name: "x".to_string(),
-        n_splines: 15,
-        degree: 3,
-        penalty_order: 2,
-    }),
-]);
-formula.insert("sigma".to_string(), vec![Term::Intercept]);
-
-let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
 ```
 
 ### Count Data with Poisson
 
-Model count outcomes:
-
 ```rust
 use gamlss_rs::distributions::Poisson;
 
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "predictor".to_string() },
-]);
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "predictor".to_string() },
+    ]);
 
-let model = GamlssModel::fit(&df, "count", &formula, &Poisson::new())?;
+let model = GamlssModel::fit(&counts, &data, &formula, &Poisson::new())?;
+```
+
+### Binary/Binomial Data
+
+```rust
+use gamlss_rs::distributions::Binomial;
+
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ]);
+
+// Fixed number of trials
+let model = GamlssModel::fit(&successes, &data, &formula, &Binomial::new(20))?;
+
+// Or varying trials per observation
+let trials = Array1::from_vec(vec![10.0, 15.0, 20.0, 25.0]);
+let model = GamlssModel::fit(&successes, &data, &formula, &Binomial::with_trials(trials))?;
 ```
 
 ### Heavy-Tailed Data with Student-t
 
-Model data with potential outliers:
-
 ```rust
 use gamlss_rs::distributions::StudentT;
 
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-formula.insert("sigma".to_string(), vec![Term::Intercept]);
-formula.insert("nu".to_string(), vec![Term::Intercept]); // Degrees of freedom
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ])
+    .with_terms("sigma", vec![Term::Intercept])
+    .with_terms("nu", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&df, "y", &formula, &StudentT::new())?;
+let model = GamlssModel::fit(&y, &data, &formula, &StudentT::new())?;
 ```
 
 ### Mixed Effects Model
 
-Include random intercepts for grouped data:
-
 ```rust
-let mut formula = HashMap::new();
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+        Term::Smooth(Smooth::RandomEffect {
+            col_name: "subject_id".to_string(),
+        }),
+    ])
+    .with_terms("sigma", vec![Term::Intercept]);
 
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-    Term::Smooth(Smooth::RandomEffect {
-        col_name: "subject_id".to_string(),
-    }),
-]);
-formula.insert("sigma".to_string(), vec![Term::Intercept]);
-
-let model = GamlssModel::fit(&df, "y", &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
 ```
 
 ### Overdispersed Count Data
 
-Model count data with more variance than Poisson allows:
-
 ```rust
 use gamlss_rs::distributions::NegativeBinomial;
 
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-formula.insert("sigma".to_string(), vec![Term::Intercept]); // Overdispersion
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ])
+    .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&df, "count", &formula, &NegativeBinomial::new())?;
+let model = GamlssModel::fit(&counts, &data, &formula, &NegativeBinomial::new())?;
 ```
 
 ### Proportion/Rate Data
 
-Model outcomes bounded between 0 and 1:
-
 ```rust
 use gamlss_rs::distributions::Beta;
 
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "x".to_string() },
-]);
-formula.insert("phi".to_string(), vec![Term::Intercept]); // Precision
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "x".to_string() },
+    ])
+    .with_terms("phi", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&df, "proportion", &formula, &Beta::new())?;
+let model = GamlssModel::fit(&proportions, &data, &formula, &Beta::new())?;
 ```
 
 ### Duration/Positive Continuous Data
 
-Model positive continuous outcomes like survival times:
-
 ```rust
 use gamlss_rs::distributions::Gamma;
 
-let mut formula = HashMap::new();
-formula.insert("mu".to_string(), vec![
-    Term::Intercept,
-    Term::Linear { col_name: "age".to_string() },
-]);
-formula.insert("sigma".to_string(), vec![Term::Intercept]); // Coefficient of variation
+let formula = Formula::new()
+    .with_terms("mu", vec![
+        Term::Intercept,
+        Term::Linear { col_name: "age".to_string() },
+    ])
+    .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&df, "duration", &formula, &Gamma::new())?;
+let model = GamlssModel::fit(&durations, &data, &formula, &Gamma::new())?;
 ```
 
 ## Error Handling
@@ -389,7 +390,7 @@ The library uses `GamlssError` for error handling:
 ```rust
 use gamlss_rs::GamlssError;
 
-match GamlssModel::fit(&df, "y", &formula, &Gaussian::new()) {
+match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
     Ok(model) => {
         // Use the fitted model
     }
@@ -410,22 +411,57 @@ match GamlssModel::fit(&df, "y", &formula, &Gaussian::new()) {
 | Error | Description |
 |-------|-------------|
 | `Input` | Invalid input data or formula |
-| `MissingColumn` | Required column not in DataFrame |
+| `MissingVariable` | Required variable not found in data |
 | `MissingFormula` | Formula missing for a distribution parameter |
-| `NonFiniteValues` | NaN or Inf values in data |
-| `EmptyData` | DataFrame has no rows |
-| `Convergence` | Algorithm failed to converge |
+| `NonFiniteValues` | Variable contains NaN or Inf values (includes count) |
+| `EmptyData` | No observations provided |
+| `Convergence` | Algorithm failed to converge after N iterations |
 | `Optimization` | Smoothing parameter optimization failed |
 | `Linalg` | Linear algebra computation failed |
+| `UnknownParameter` | Unknown parameter for the given distribution |
+| `Shape` | Array shape mismatch |
+| `Internal` | Internal computation error |
+
+## Serialization & WASM
+
+Models can be serialized to JSON for transfer to browsers or other systems. Enable with the `serialization` feature:
+
+```toml
+[dependencies]
+gamlss_rs = { git = "...", features = ["serialization"] }
+```
+
+```rust
+// Serialize a fitted model (native side)
+let json = model.to_json(&Gaussian::new())?;
+
+// Deserialize (returns model + distribution name)
+let (model, dist_name) = GamlssModel::from_json(&json)?;
+```
+
+For browser-based prediction, build with the `wasm` feature:
+
+```bash
+wasm-pack build --no-default-features --features wasm --target web
+```
+
+```js
+import { WasmGamlssModel } from './pkg/gamlss_rs.js';
+
+const model = WasmGamlssModel.fromJson(modelJson);
+const predictions = JSON.parse(model.predict('{"x": [1, 2, 3]}'));
+```
 
 ## Dependencies
 
-- [polars](https://crates.io/crates/polars) - DataFrame operations
 - [ndarray](https://crates.io/crates/ndarray) - N-dimensional arrays
-- [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - Linear algebra (requires OpenBLAS)
-- [argmin](https://crates.io/crates/argmin) - Optimization algorithms
+- [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - Linear algebra via OpenBLAS (optional: `openblas` feature)
+- [faer](https://crates.io/crates/faer) - Pure Rust linear algebra (optional: `pure-rust` feature)
+- [argmin](https://crates.io/crates/argmin) - L-BFGS optimization
 - [statrs](https://crates.io/crates/statrs) - Statistical functions
-- [rayon](https://crates.io/crates/rayon) - Parallel computation for large datasets
+- [rayon](https://crates.io/crates/rayon) - Parallel computation (optional: `parallel` feature)
+- [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) - Serialization (optional: `serialization` feature)
+- [wasm-bindgen](https://crates.io/crates/wasm-bindgen) - JavaScript interop (optional: `wasm` feature)
 
 ## Algorithm
 
