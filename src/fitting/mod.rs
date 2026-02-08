@@ -104,7 +104,7 @@ struct FittingParameter {
 /// as a penalized additive model while holding others fixed. Each parameter update uses
 /// penalized iteratively reweighted least squares (P-IRLS) with a working response z
 /// and working weights w derived from the distribution's score and Fisher information.
-pub(crate) fn fit_gamlss<D: Distribution>(
+pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
     formula: &Formula,
@@ -203,7 +203,7 @@ pub(crate) fn fit_gamlss<D: Distribution>(
             let best_lambdas = if model.penalty_matrices.is_empty() {
                 Array1::zeros(0)
             } else {
-                run_optimization::<D>(
+                run_optimization(
                     &model.x_matrix,
                     &z,
                     &w,

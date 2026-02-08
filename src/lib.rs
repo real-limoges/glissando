@@ -1,4 +1,28 @@
 #![recursion_limit = "1024"]
+//! Generalized Additive Models for Location, Scale, and Shape (GAMLSS) in Rust.
+//!
+//! GAMLSS extends traditional regression by modeling multiple distribution parameters
+//! (mean, variance, shape) as functions of predictors using the Rigby-Stasinopoulos
+//! algorithm with penalized B-splines for nonlinear effects.
+//!
+//! # Quick start
+//!
+//! ```rust,no_run
+//! use gamlss_rs::{GamlssModel, DataSet, Formula, Term};
+//! use gamlss_rs::distributions::Gaussian;
+//! use ndarray::Array1;
+//!
+//! let y = Array1::from_vec(vec![2.1, 4.0, 5.9, 8.1, 10.0]);
+//! let mut data = DataSet::new();
+//! data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
+//!
+//! let formula = Formula::new()
+//!     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }])
+//!     .with_terms("sigma", vec![Term::Intercept]);
+//!
+//! let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+//! ```
+
 pub mod diagnostics;
 pub mod distributions;
 mod error;
@@ -24,15 +48,24 @@ use ndarray::Array1;
 use preprocessing::validate_inputs;
 use std::collections::HashMap;
 
+/// A fitted GAMLSS model containing per-parameter results and convergence diagnostics.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamlssModel {
+    /// Fitted results keyed by parameter name (e.g., "mu", "sigma").
     pub models: HashMap<String, fitting::FittedParameter>,
+    /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
 }
 
 impl GamlssModel {
-    pub fn fit<D: Distribution>(
+    /// Fits a GAMLSS model with default configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
+    /// or a linear algebra operation fails.
+    pub fn fit<D: Distribution + ?Sized>(
         y: &Array1<f64>,
         data: &DataSet,
         formula: &Formula,
@@ -41,7 +74,13 @@ impl GamlssModel {
         Self::fit_with_config(y, data, formula, family, FitConfig::default())
     }
 
-    pub fn fit_with_config<D: Distribution>(
+    /// Fits a GAMLSS model with custom iteration limits and tolerance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
+    /// or a linear algebra operation fails.
+    pub fn fit_with_config<D: Distribution + ?Sized>(
         y: &Array1<f64>,
         data: &DataSet,
         formula: &Formula,
@@ -62,7 +101,11 @@ impl GamlssModel {
         self.diagnostics.converged
     }
 
-    /// Includes the distribution name so it can be deserialized without knowing the type upfront.
+    /// Serializes the model to JSON, including the distribution name for later deserialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError::Input` if serialization fails.
     #[cfg(feature = "serde")]
     pub fn to_json<D: Distribution + ?Sized>(&self, family: &D) -> Result<String, GamlssError> {
         let wrapper = SerializedModel {
@@ -72,6 +115,11 @@ impl GamlssModel {
         serde_json::to_string(&wrapper).map_err(|e| GamlssError::Input(e.to_string()))
     }
 
+    /// Deserializes a model from JSON, returning the model and distribution name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError::Input` if deserialization fails.
     #[cfg(feature = "serde")]
     pub fn from_json(json: &str) -> Result<(Self, String), GamlssError> {
         let wrapper: OwnedSerializedModel =
@@ -206,11 +254,15 @@ impl GamlssModel {
     }
 }
 
+/// Prediction output containing fitted values, linear predictor, and standard errors.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PredictionResult {
+    /// Fitted values on the response scale (link⁻¹(eta)).
     pub fitted: Array1<f64>,
+    /// Linear predictor values (X * beta).
     pub eta: Array1<f64>,
+    /// Standard errors on the linear predictor scale.
     pub se_eta: Array1<f64>,
 }
 

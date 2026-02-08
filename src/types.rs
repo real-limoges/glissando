@@ -9,12 +9,13 @@ use std::ops::{Deref, DerefMut};
 
 use crate::terms::Term;
 
-// ----- Newtypes for Safety (Vectors)
+/// Regression coefficient vector. Derefs to `Array1<f64>`.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Coefficients(pub Array1<f64>);
 
+/// Log-space smoothing parameters for L-BFGS optimization. Derefs to `Array1<f64>`.
 #[derive(Clone, Debug)]
 pub struct LogLambdas(pub Array1<f64>);
 
@@ -134,13 +135,15 @@ macro_rules! impl_argmin_math_for_vector_wrapper {
 impl_argmin_math_for_vector_wrapper!(Coefficients);
 impl_argmin_math_for_vector_wrapper!(LogLambdas);
 
-// ----- Newtypes for Safety (Matrices)
+/// Design matrix (n_obs x n_coeffs). Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
 pub struct ModelMatrix(pub Array2<f64>);
 
+/// Penalty matrix for a smooth term. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
 pub struct PenaltyMatrix(pub Array2<f64>);
 
+/// Covariance matrix of coefficient estimates, V = (X'WX + Σλ·S)⁻¹. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -165,8 +168,6 @@ macro_rules! impl_deref_for_matrix_wrapper {
 impl_deref_for_matrix_wrapper!(CovarianceMatrix);
 impl_deref_for_matrix_wrapper!(PenaltyMatrix);
 impl_deref_for_matrix_wrapper!(ModelMatrix);
-
-// ----- Newtypes for Input Data and Formula
 
 /// A dataset of named columns, wrapping `HashMap<String, Array1<f64>>`.
 #[derive(Debug, Clone, Default)]
@@ -195,7 +196,7 @@ impl DataSet {
         self.0.insert(name.into(), values);
     }
 
-    /// Create a DataSet from a HashMap of Vec<f64>, converting each to Array1<f64>.
+    /// Creates a `DataSet` from a `HashMap<String, Vec<f64>>`, converting each to `Array1<f64>`.
     pub fn from_vecs(data: HashMap<String, Vec<f64>>) -> Self {
         let mut ds = Self::new();
         for (name, values) in data {

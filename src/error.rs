@@ -1,6 +1,7 @@
 use ndarray::ShapeError;
 use thiserror::Error;
 
+/// Errors that can occur during GAMLSS model fitting, prediction, or serialization.
 #[derive(Debug, Error)]
 pub enum GamlssError {
     #[error("Optimization failed: {0}")]

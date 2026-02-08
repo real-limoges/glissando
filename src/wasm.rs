@@ -5,8 +5,10 @@ use crate::distributions::{
     Beta, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
 use crate::error::GamlssError;
-use crate::types::DataSet;
+use crate::fitting::FitConfig;
+use crate::types::{DataSet, Formula};
 use crate::GamlssModel;
+use ndarray::Array1;
 
 /// Binomial is excluded because it requires state (n_trials) that
 /// cannot be recovered from the distribution name alone.
@@ -25,15 +27,28 @@ fn get_distribution(name: &str) -> Result<Box<dyn Distribution>, GamlssError> {
     }
 }
 
+/// Expects a JSON array of numbers, e.g. `[1.0, 2.0, 3.0]`.
+fn parse_y_json(json: &str) -> Result<Array1<f64>, JsError> {
+    let values: Vec<f64> = serde_json::from_str(json).map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(Array1::from_vec(values))
+}
+
 /// Expects `{"col_name": [1.0, 2.0, ...], ...}`.
-fn parse_data_json(json: &str) -> Result<DataSet, GamlssError> {
+fn parse_data_json(json: &str) -> Result<DataSet, JsError> {
     let raw: HashMap<String, Vec<f64>> =
-        serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
+        serde_json::from_str(json).map_err(|e| JsError::new(&e.to_string()))?;
     Ok(DataSet::from_vecs(raw))
 }
 
-/// Models are fitted natively and serialized to JSON via `GamlssModel::to_json()`.
-/// This wrapper deserializes them for browser-based prediction.
+/// Expects `{"mu": [{"Intercept": null}, ...], "sigma": [...]}`.
+fn parse_formula_json(json: &str) -> Result<Formula, JsError> {
+    serde_json::from_str(json).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// WASM wrapper for GAMLSS models.
+///
+/// Supports both fitting models in the browser and loading pre-fitted models
+/// serialized via `GamlssModel::to_json()`.
 #[wasm_bindgen]
 pub struct WasmGamlssModel {
     model: GamlssModel,
@@ -42,6 +57,61 @@ pub struct WasmGamlssModel {
 
 #[wasm_bindgen]
 impl WasmGamlssModel {
+    /// Fit a GAMLSS model in the browser.
+    ///
+    /// - `y_json`: Response variable as a JSON array, e.g. `[1.0, 2.0, 3.0]`
+    /// - `data_json`: Predictor data as JSON object, e.g. `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`
+    /// - `formula_json`: Formula mapping parameter names to terms, e.g.
+    ///   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`
+    /// - `distribution`: Distribution name (Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta)
+    pub fn fit(
+        y_json: &str,
+        data_json: &str,
+        formula_json: &str,
+        distribution: &str,
+    ) -> Result<WasmGamlssModel, JsError> {
+        let y = parse_y_json(y_json)?;
+        let data = parse_data_json(data_json)?;
+        let formula = parse_formula_json(formula_json)?;
+        let family = get_distribution(distribution).map_err(|e| JsError::new(&e.to_string()))?;
+
+        let model = GamlssModel::fit(&y, &data, &formula, family.as_ref())
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(WasmGamlssModel {
+            model,
+            distribution_name: distribution.to_string(),
+        })
+    }
+
+    /// Fit a GAMLSS model with custom configuration.
+    ///
+    /// `config_json` is a JSON object with optional fields:
+    /// `{"max_iterations": 200, "tolerance": 0.001}`
+    #[wasm_bindgen(js_name = "fitWithConfig")]
+    pub fn fit_with_config(
+        y_json: &str,
+        data_json: &str,
+        formula_json: &str,
+        distribution: &str,
+        config_json: &str,
+    ) -> Result<WasmGamlssModel, JsError> {
+        let y = parse_y_json(y_json)?;
+        let data = parse_data_json(data_json)?;
+        let formula = parse_formula_json(formula_json)?;
+        let family = get_distribution(distribution).map_err(|e| JsError::new(&e.to_string()))?;
+        let config: FitConfig =
+            serde_json::from_str(config_json).map_err(|e| JsError::new(&e.to_string()))?;
+
+        let model = GamlssModel::fit_with_config(&y, &data, &formula, family.as_ref(), config)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(WasmGamlssModel {
+            model,
+            distribution_name: distribution.to_string(),
+        })
+    }
+
     #[wasm_bindgen(js_name = "fromJson")]
     pub fn from_json(json: &str) -> Result<WasmGamlssModel, JsError> {
         let (model, distribution_name) =

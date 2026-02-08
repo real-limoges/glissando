@@ -1,12 +1,10 @@
 use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
-use crate::distributions::Distribution;
 use crate::linalg;
 use argmin::core::Gradient;
 use argmin::core::{CostFunction, Error, Executor};
 use argmin::solver::linesearch::MoreThuenteLineSearch;
 use argmin::solver::quasinewton::LBFGS;
 use ndarray::prelude::*;
-use std::marker::PhantomData;
 
 /// Minimum denominator value to prevent division by zero in GCV computation
 const MIN_DENOMINATOR: f64 = 1e-10;
@@ -24,16 +22,14 @@ struct PwlsGradientInfo {
     rss: f64,
 }
 
-pub(crate) struct GamlssCost<'a, D: Distribution> {
+pub(crate) struct GamlssCost<'a> {
     pub(crate) x_matrix: &'a ModelMatrix,
     pub(crate) z: &'a Array1<f64>,
     pub(crate) w: &'a Array1<f64>,
     pub(crate) penalty_matrices: &'a Vec<PenaltyMatrix>,
-
-    pub _marker: PhantomData<D>,
 }
 
-impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
+impl<'a> CostFunction for GamlssCost<'a> {
     type Param = LogLambdas;
     type Output = f64;
 
@@ -74,7 +70,7 @@ impl<'a, D: Distribution> CostFunction for GamlssCost<'a, D> {
     }
 }
 
-impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
+impl<'a> Gradient for GamlssCost<'a> {
     type Param = LogLambdas;
     type Gradient = LogLambdas;
 
@@ -135,7 +131,7 @@ impl<'a, D: Distribution> Gradient for GamlssCost<'a, D> {
 ///
 /// Uses warm-starting from previous lambdas when available for faster convergence.
 /// Skips optimization entirely when there are no penalty matrices.
-pub(crate) fn run_optimization<D: Distribution>(
+pub(crate) fn run_optimization(
     x_model: &ModelMatrix,
     z: &Array1<f64>,
     w: &Array1<f64>,
@@ -149,12 +145,11 @@ pub(crate) fn run_optimization<D: Distribution>(
         return Ok(Array1::zeros(0));
     }
 
-    let cost_function: GamlssCost<'_, D> = GamlssCost::<D> {
+    let cost_function = GamlssCost {
         x_matrix: x_model,
         z,
         w,
         penalty_matrices,
-        _marker: PhantomData,
     };
 
     // Warm-start from previous lambdas (in log-space) if available

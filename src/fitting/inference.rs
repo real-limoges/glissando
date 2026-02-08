@@ -5,6 +5,9 @@ use rand::rng;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 
+/// Draws samples from the approximate posterior N(beta_hat, V_beta) via Cholesky decomposition.
+///
+/// Returns an empty vec if the covariance matrix is not positive definite.
 pub fn sample_posterior(
     beta_hat: &Coefficients,
     v_beta: &CovarianceMatrix,
