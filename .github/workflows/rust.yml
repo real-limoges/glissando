@@ -8,12 +8,19 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
 
 jobs:
-  build:
+  fmt:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
 
+  clippy:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -23,19 +30,46 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             pkg-config \
-            libssl-dev \
+            libopenblas-dev \
+            gfortran \
             libzstd-dev \
-            liblz4-dev \
+            liblz4-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo clippy --workspace -- -D warnings
+
+  test-openblas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
             libopenblas-dev \
             gfortran
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        run: cargo build --verbose
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test --verbose
+      - run: cargo test --verbose
+
+  test-pure-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --no-default-features --features pure-rust --verbose
