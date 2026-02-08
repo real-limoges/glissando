@@ -17,7 +17,7 @@ pure-rust = ["faer"]
 serialization = ["serde", "serde_json", "ndarray/serde"]
 
 # WASM target (implies pure-rust + serialization, no parallel)
-wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom/wasm_js"]
+wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom/wasm_js", "getrandom_02"]
 
 # Parallelism (incompatible with WASM)
 parallel = ["rayon"]
@@ -44,6 +44,7 @@ serde_json = { version = "1.0", optional = true }
 # Optional: WASM support
 wasm-bindgen = { version = "0.2", optional = true }
 getrandom = { version = "0.3", optional = true }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"], optional = true }
 
 [dependencies.argmin-math]
 version = "0.5.1"

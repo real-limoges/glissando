@@ -1,10 +1,12 @@
+//! Model diagnostic functions: residuals, log-likelihoods, and information criteria.
+
 use crate::fitting::FittedParameter;
 use ndarray::Array1;
 use std::collections::HashMap;
 
-/// Minimum positive value to prevent division by zero or log(0)
 const MIN_POSITIVE: f64 = 1e-10;
 
+/// Aggregated model diagnostics including residuals, EDF, and information criteria.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelDiagnostics {
@@ -17,6 +19,7 @@ pub struct ModelDiagnostics {
     pub n_obs: usize,
 }
 
+/// Computes Pearson residuals for a Gaussian model: (y - mu) / sigma.
 pub fn pearson_residuals_gaussian(
     y: &Array1<f64>,
     mu: &Array1<f64>,
@@ -25,10 +28,12 @@ pub fn pearson_residuals_gaussian(
     (y - mu) / &sigma.mapv(|s| s.max(MIN_POSITIVE))
 }
 
+/// Computes Pearson residuals for a Poisson model: (y - mu) / sqrt(mu).
 pub fn pearson_residuals_poisson(y: &Array1<f64>, mu: &Array1<f64>) -> Array1<f64> {
     (y - mu) / &mu.mapv(|m| m.max(MIN_POSITIVE).sqrt())
 }
 
+/// Computes Pearson residuals for a Gamma model: (y - mu) / (mu * sigma).
 pub fn pearson_residuals_gamma(
     y: &Array1<f64>,
     mu: &Array1<f64>,
@@ -38,6 +43,7 @@ pub fn pearson_residuals_gamma(
     (y - mu) / &sd
 }
 
+/// Computes Pearson residuals for a Negative Binomial model: (y - mu) / sqrt(mu + sigma*mu^2).
 pub fn pearson_residuals_negative_binomial(
     y: &Array1<f64>,
     mu: &Array1<f64>,
@@ -54,6 +60,7 @@ pub fn pearson_residuals_negative_binomial(
     (y - mu) / &variance
 }
 
+/// Computes Pearson residuals for a Beta model: (y - mu) / sqrt(mu*(1-mu)/(1+phi)).
 pub fn pearson_residuals_beta(y: &Array1<f64>, mu: &Array1<f64>, phi: &Array1<f64>) -> Array1<f64> {
     use ndarray::Zip;
     let mut sd = Array1::zeros(mu.len());
@@ -64,6 +71,7 @@ pub fn pearson_residuals_beta(y: &Array1<f64>, mu: &Array1<f64>, phi: &Array1<f6
     (y - mu) / &sd
 }
 
+/// Computes Pearson residuals for a Binomial model: (y - n*mu) / sqrt(n*mu*(1-mu)).
 pub fn pearson_residuals_binomial(
     y: &Array1<f64>,
     mu: &Array1<f64>,
@@ -81,6 +89,7 @@ pub fn pearson_residuals_binomial(
     (y - &expected) / &sd
 }
 
+/// Computes Gaussian log-likelihood: Σ[-0.5*log(2π) - log(σ) - 0.5*((y-μ)/σ)²].
 pub fn loglik_gaussian(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     let log_2pi = (2.0 * std::f64::consts::PI).ln();
@@ -93,6 +102,7 @@ pub fn loglik_gaussian(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -
     ll
 }
 
+/// Computes Poisson log-likelihood: Σ[y*log(μ) - μ - log(y!)].
 pub fn loglik_poisson(y: &Array1<f64>, mu: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     use statrs::function::gamma::ln_gamma;
@@ -103,6 +113,7 @@ pub fn loglik_poisson(y: &Array1<f64>, mu: &Array1<f64>) -> f64 {
     ll
 }
 
+/// Computes Binomial log-likelihood: Σ[log(C(n,y)) + y*log(μ) + (n-y)*log(1-μ)].
 pub fn loglik_binomial(y: &Array1<f64>, mu: &Array1<f64>, n: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     use statrs::function::gamma::ln_gamma;
@@ -117,6 +128,7 @@ pub fn loglik_binomial(y: &Array1<f64>, mu: &Array1<f64>, n: &Array1<f64>) -> f6
     ll
 }
 
+/// Computes Gamma log-likelihood using (mu, sigma) parameterization where α = 1/σ².
 pub fn loglik_gamma(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     use statrs::function::gamma::ln_gamma;
@@ -133,6 +145,7 @@ pub fn loglik_gamma(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f
     ll
 }
 
+/// Computes Negative Binomial log-likelihood (NB2 parameterization, r = 1/σ).
 pub fn loglik_negative_binomial(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     use statrs::function::gamma::ln_gamma;
@@ -147,6 +160,7 @@ pub fn loglik_negative_binomial(y: &Array1<f64>, mu: &Array1<f64>, sigma: &Array
     ll
 }
 
+/// Computes Beta log-likelihood with (mu, phi) parameterization where α = μφ, β = (1-μ)φ.
 pub fn loglik_beta(y: &Array1<f64>, mu: &Array1<f64>, phi: &Array1<f64>) -> f64 {
     use ndarray::Zip;
     use statrs::function::gamma::ln_gamma;
@@ -162,18 +176,22 @@ pub fn loglik_beta(y: &Array1<f64>, mu: &Array1<f64>, phi: &Array1<f64>) -> f64 
     ll
 }
 
+/// Computes Akaike Information Criterion: -2*loglik + 2*EDF.
 pub fn compute_aic(log_likelihood: f64, total_edf: f64) -> f64 {
     -2.0 * log_likelihood + 2.0 * total_edf
 }
 
+/// Computes Bayesian Information Criterion: -2*loglik + log(n)*EDF.
 pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
     -2.0 * log_likelihood + (n_obs as f64).ln() * total_edf
 }
 
+/// Sums effective degrees of freedom across all fitted parameters.
 pub fn total_edf(fitted_params: &HashMap<String, FittedParameter>) -> f64 {
     fitted_params.values().map(|p| p.edf).sum()
 }
 
+/// Computes raw response residuals: y - mu.
 pub fn response_residuals(y: &Array1<f64>, mu: &Array1<f64>) -> Array1<f64> {
     y - mu
 }

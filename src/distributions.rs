@@ -85,8 +85,18 @@ impl Link for LogitLink {
 /// Maps parameter names to (score, Fisher info) array pairs.
 pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
 
+/// A statistical distribution for GAMLSS, defining parameters, link functions, and derivatives.
+///
+/// Implementations must provide score vectors and Fisher information for each parameter
+/// to drive the IRLS algorithm. See [`Gaussian`] for a reference implementation.
 pub trait Distribution: Debug + Send + Sync {
+    /// Returns the names of the distribution's parameters (e.g., `["mu", "sigma"]`).
     fn parameters(&self) -> &[&'static str];
+    /// Returns the default link function for the given parameter name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError::UnknownParameter` if the parameter name is not recognized.
     fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError>;
     /// Computes score (u) and Fisher information (w) for each distribution parameter.
     ///
@@ -98,6 +108,7 @@ pub trait Distribution: Debug + Send + Sync {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult;
+    /// Returns the distribution name as a static string (e.g., `"Gaussian"`).
     fn name(&self) -> &'static str;
 
     /// Returns initial value for a parameter on the response scale.
@@ -189,7 +200,6 @@ impl Gaussian {
 }
 
 impl Distribution for Gaussian {
-    // Gaussian has two parameters: mu and sigma. Mu is the mean, sigma is the standard deviation.
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma"]
     }
@@ -263,8 +273,6 @@ impl StudentT {
     }
 }
 impl Distribution for StudentT {
-    // StudentT has three parameters: mu, sigma and nu.
-    // Mu is the mean, sigma is the standard deviation and nu is the degrees of freedom.
     fn parameters(&self) -> &[&'static str] {
         &["mu", "sigma", "nu"]
     }

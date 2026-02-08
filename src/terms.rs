@@ -1,7 +1,7 @@
+/// A single term in a model formula: intercept, linear effect, or smooth.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Term {
-    // 3 types of Terms. A constant (Intercept), a Linear, and a Smooth
     Intercept,
     Linear { col_name: String },
     Smooth(Smooth),
@@ -18,10 +18,10 @@ impl Term {
     }
 }
 
+/// Smooth term specification for nonlinear and random effects.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Smooth {
-    // 3 tyeps of smooths implemented right now
     PSpline1D {
         col_name: String,
         n_splines: usize,
@@ -37,7 +37,7 @@ pub enum Smooth {
         n_splines_2: usize,
         penalty_order_2: usize,
 
-        // I'm just forcing them to have the same degree
+        // Shared across both marginal bases
         degree: usize,
     },
     RandomEffect {

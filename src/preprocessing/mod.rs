@@ -13,7 +13,7 @@ use std::collections::HashSet;
 /// - All parameters in the distribution have formulas
 /// - All variables referenced in formulas exist in the data
 /// - All numeric variables contain only finite values
-pub fn validate_inputs<D: Distribution>(
+pub fn validate_inputs<D: Distribution + ?Sized>(
     y: &Array1<f64>,
     data: &DataSet,
     formula: &Formula,

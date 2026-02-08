@@ -10,7 +10,7 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
 - **Automatic smoothing**: Smoothing parameters selected via GCV optimization
 - **Dual backends**: OpenBLAS (default, max performance) or pure Rust via faer (no system deps)
-- **WASM support**: Serialize fitted models to JSON, predict in the browser via wasm-bindgen
+- **WASM support**: Fit models and predict directly in the browser via wasm-bindgen
 - **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse
 
 ## Installation
@@ -29,7 +29,7 @@ gamlss_rs = { git = "https://github.com/real-limoges/gamlss_rs" }
 | `openblas` | OpenBLAS backend (ndarray-linalg) — max performance | yes |
 | `pure-rust` | Faer backend — no system dependencies, WASM-compatible | no |
 | `serialization` | Serde support for model serialization | no |
-| `wasm` | WASM prediction API (implies `pure-rust` + `serialization`) | no |
+| `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`) | no |
 | `parallel` | Rayon parallelism for large datasets | yes |
 
 ### Requirements
@@ -439,17 +439,54 @@ let json = model.to_json(&Gaussian::new())?;
 let (model, dist_name) = GamlssModel::from_json(&json)?;
 ```
 
-For browser-based prediction, build with the `wasm` feature:
+For browser-based fitting and prediction, build with the `wasm` feature:
 
 ```bash
 wasm-pack build --no-default-features --features wasm --target web
 ```
 
+### Fitting in the Browser
+
 ```js
 import { WasmGamlssModel } from './pkg/gamlss_rs.js';
 
+const y = JSON.stringify([2.1, 4.0, 5.9, 8.1, 10.0]);
+const data = JSON.stringify({ x: [1.0, 2.0, 3.0, 4.0, 5.0] });
+const formula = JSON.stringify({
+  mu: [{ Intercept: null }, { Linear: { col_name: "x" } }],
+  sigma: [{ Intercept: null }],
+});
+
+const model = WasmGamlssModel.fit(y, data, formula, "Gaussian");
+console.log("Converged:", model.converged());
+
+// With custom configuration
+const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001 });
+const model2 = WasmGamlssModel.fitWithConfig(y, data, formula, "Gaussian", config);
+```
+
+Supported distributions: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`.
+
+### Loading Pre-fitted Models
+
+```js
 const model = WasmGamlssModel.fromJson(modelJson);
+```
+
+### Prediction
+
+```js
 const predictions = JSON.parse(model.predict('{"x": [1, 2, 3]}'));
+
+// With standard errors
+const results = JSON.parse(model.predictWithSe('{"x": [1, 2, 3]}'));
+
+// Access fitted values and coefficients directly
+const mu_fitted = model.fittedValues("mu");
+const mu_coeffs = model.coefficients("mu");
+
+// Diagnostics
+const diagnostics = JSON.parse(model.diagnosticsJson());
 ```
 
 ## Dependencies
