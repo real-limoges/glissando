@@ -44,7 +44,7 @@ fi
 # Step 3: Generate test data
 echo "[3/4] Generating test data..."
 mkdir -p "${OUTPUT_DIR}"
-python3 "${SCRIPT_DIR}/orchestrate.py" \
+uv run --project "${SCRIPT_DIR}" python3 "${SCRIPT_DIR}/orchestrate.py" \
     --generate-only \
     --output-dir "${OUTPUT_DIR}" \
     --n-obs "${N_OBS}" \
@@ -63,7 +63,7 @@ if [ -n "${RUST_BINARY}" ]; then
     ARGS="${ARGS} --rust-binary ${RUST_BINARY}"
 fi
 
-python3 "${SCRIPT_DIR}/orchestrate.py" ${ARGS}
+uv run --project "${SCRIPT_DIR}" python3 "${SCRIPT_DIR}/orchestrate.py" ${ARGS}
 
 echo ""
 echo "========================================"
