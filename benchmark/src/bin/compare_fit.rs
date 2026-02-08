@@ -4,10 +4,11 @@
 //! and outputs standardized JSON results for comparison with R/mgcv.
 //!
 //! Usage:
-//!   cargo run --bin compare_fit -- --data path/to/data.parquet --scenario gaussian_linear --output result.json
+//!   cargo run -p gamlss_benchmark --bin compare_fit -- --data path/to/data.parquet --scenario gaussian_linear --output result.json
 
 use gamlss_rs::distributions::{Beta, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
-use gamlss_rs::{GamlssModel, Smooth, Term};
+use gamlss_rs::{DataSet, Formula, GamlssModel, Smooth, Term};
+use ndarray::Array1;
 use polars::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -30,88 +31,55 @@ struct FitResult {
     error: Option<String>,
 }
 
-fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
-    let start = Instant::now();
+fn extract_column(df: &DataFrame, name: &str) -> Array1<f64> {
+    let col = df
+        .column(name)
+        .unwrap_or_else(|_| panic!("column '{}' not found", name));
+    let cast = col
+        .cast(&DataType::Float64)
+        .unwrap_or_else(|_| panic!("column '{}' cannot be cast to f64", name));
+    let ca = cast
+        .as_materialized_series()
+        .f64()
+        .unwrap_or_else(|_| panic!("column '{}' cannot be read as f64", name));
+    Array1::from_vec(ca.into_no_null_iter().collect())
+}
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
-
-    match GamlssModel::fit(df, "y", &formula, &Gaussian::new()) {
-        Ok(model) => {
-            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-
-            let mut coefficients = HashMap::new();
-            coefficients.insert("mu".to_string(), model.models["mu"].coefficients.0.to_vec());
-            coefficients.insert(
-                "log_sigma".to_string(),
-                model.models["sigma"].coefficients.0.to_vec(),
-            );
-
-            let mut edf = HashMap::new();
-            edf.insert("mu".to_string(), model.models["mu"].edf);
-            edf.insert("sigma".to_string(), model.models["sigma"].edf);
-
-            FitResult {
-                converged: model.converged(),
-                iterations: model.diagnostics.iterations,
-                fit_time_ms: elapsed,
-                coefficients,
-                fitted_mu: model.models["mu"].fitted_values.to_vec(),
-                fitted_sigma: model.models["sigma"].fitted_values.to_vec(),
-                edf,
-                log_likelihood: None, // TODO: implement in gamlss_rs
-                aic: None,
-                error: None,
-            }
-        }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+fn error_result(start: Instant, e: gamlss_rs::GamlssError) -> FitResult {
+    FitResult {
+        converged: false,
+        iterations: 0,
+        fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
+        coefficients: HashMap::new(),
+        fitted_mu: vec![],
+        fitted_sigma: vec![],
+        edf: HashMap::new(),
+        log_likelihood: None,
+        aic: None,
+        error: Some(e.to_string()),
     }
 }
 
-fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
+fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert(
-        "sigma".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &Gaussian::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -139,37 +107,89 @@ fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
+    }
+}
+
+fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
+    let start = Instant::now();
+
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
+
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms(
+            "sigma",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        );
+
+    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+        Ok(model) => {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+            let mut coefficients = HashMap::new();
+            coefficients.insert("mu".to_string(), model.models["mu"].coefficients.0.to_vec());
+            coefficients.insert(
+                "log_sigma".to_string(),
+                model.models["sigma"].coefficients.0.to_vec(),
+            );
+
+            let mut edf = HashMap::new();
+            edf.insert("mu".to_string(), model.models["mu"].edf);
+            edf.insert("sigma".to_string(), model.models["sigma"].edf);
+
+            FitResult {
+                converged: model.converged(),
+                iterations: model.diagnostics.iterations,
+                fit_time_ms: elapsed,
+                coefficients,
+                fitted_mu: model.models["mu"].fitted_values.to_vec(),
+                fitted_sigma: model.models["sigma"].fitted_values.to_vec(),
+                edf,
+                log_likelihood: None,
+                aic: None,
+                error: None,
+            }
+        }
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 20,
-            degree: 3,
-            penalty_order: 2,
-        })],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &Gaussian::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![Term::Smooth(Smooth::PSpline1D {
+                col_name: "x".to_string(),
+                n_splines: 20,
+                degree: 3,
+                penalty_order: 2,
+            })],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -200,27 +220,19 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_poisson_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
+
+    let formula = Formula::new().with_terms(
+        "mu",
         vec![
             Term::Intercept,
             Term::Linear {
@@ -229,7 +241,7 @@ fn fit_poisson_linear(df: &DataFrame) -> FitResult {
         ],
     );
 
-    match GamlssModel::fit(df, "y", &formula, &Poisson::new()) {
+    match GamlssModel::fit(&y, &data, &formula, &Poisson::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -255,37 +267,30 @@ fn fit_poisson_linear(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gamma_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &Gamma::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Gamma::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -316,38 +321,31 @@ fn fit_gamma_linear(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_studentt_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
-    formula.insert("nu".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &StudentT::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms("nu", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &StudentT::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -380,37 +378,30 @@ fn fit_studentt_linear(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &NegativeBinomial::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &NegativeBinomial::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -441,37 +432,30 @@ fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_beta_linear(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.insert("phi".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &Beta::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x".to_string(),
+                },
+            ],
+        )
+        .with_terms("phi", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Beta::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -502,27 +486,19 @@ fn fit_beta_linear(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
+
+    let formula = Formula::new().with_terms(
+        "mu",
         vec![Term::Smooth(Smooth::PSpline1D {
             col_name: "x".to_string(),
             n_splines: 20,
@@ -531,7 +507,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
         })],
     );
 
-    match GamlssModel::fit(df, "y", &formula, &Poisson::new()) {
+    match GamlssModel::fit(&y, &data, &formula, &Poisson::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -557,37 +533,30 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 20,
-            degree: 3,
-            penalty_order: 2,
-        })],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &Gamma::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![Term::Smooth(Smooth::PSpline1D {
+                col_name: "x".to_string(),
+                n_splines: 20,
+                degree: 3,
+                penalty_order: 2,
+            })],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Gamma::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -618,43 +587,38 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x1".to_string(),
-            },
-            Term::Linear {
-                col_name: "x2".to_string(),
-            },
-            Term::Linear {
-                col_name: "x3".to_string(),
-            },
-        ],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x1", extract_column(df, "x1"));
+    data.insert_column("x2", extract_column(df, "x2"));
+    data.insert_column("x3", extract_column(df, "x3"));
 
-    match GamlssModel::fit(df, "y", &formula, &Gaussian::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                Term::Linear {
+                    col_name: "x1".to_string(),
+                },
+                Term::Linear {
+                    col_name: "x2".to_string(),
+                },
+                Term::Linear {
+                    col_name: "x3".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -682,43 +646,35 @@ fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gaussian_large(df: &DataFrame) -> FitResult {
-    // Same as gaussian_linear, just with larger data
     fit_gaussian_linear(df)
 }
 
 fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 20,
-            degree: 3,
-            penalty_order: 2,
-        })],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
-    formula.insert("nu".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &StudentT::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![Term::Smooth(Smooth::PSpline1D {
+                col_name: "x".to_string(),
+                n_splines: 20,
+                degree: 3,
+                penalty_order: 2,
+            })],
+        )
+        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms("nu", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &StudentT::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -754,37 +710,30 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
 
-    let mut formula = HashMap::new();
-    formula.insert(
-        "mu".to_string(),
-        vec![Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 20,
-            degree: 3,
-            penalty_order: 2,
-        })],
-    );
-    formula.insert("sigma".to_string(), vec![Term::Intercept]);
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
 
-    match GamlssModel::fit(df, "y", &formula, &NegativeBinomial::new()) {
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![Term::Smooth(Smooth::PSpline1D {
+                col_name: "x".to_string(),
+                n_splines: 20,
+                degree: 3,
+                penalty_order: 2,
+            })],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit(&y, &data, &formula, &NegativeBinomial::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -815,23 +764,11 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
                 error: None,
             }
         }
-        Err(e) => FitResult {
-            converged: false,
-            iterations: 0,
-            fit_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-            coefficients: HashMap::new(),
-            fitted_mu: vec![],
-            fitted_sigma: vec![],
-            edf: HashMap::new(),
-            log_likelihood: None,
-            aic: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => error_result(start, e),
     }
 }
 
 fn fit_gaussian_quadratic(df: &DataFrame) -> FitResult {
-    // Same as gaussian_smooth - testing smooth on quadratic data
     fit_gaussian_smooth(df)
 }
 

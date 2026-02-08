@@ -7,6 +7,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 N_OBS=${N_OBS:-1000}
 SEED=${SEED:-42}
@@ -21,15 +22,14 @@ echo ""
 
 # Step 1: Build Rust binary
 echo "[1/4] Building Rust binary..."
-cd "${SCRIPT_DIR}"
-if cargo build --release --bin compare_fit 2>/dev/null; then
-    RUST_BINARY="${SCRIPT_DIR}/target/release/compare_fit"
+cd "${REPO_ROOT}"
+if cargo build --release -p gamlss_benchmark --bin compare_fit 2>/dev/null; then
+    RUST_BINARY="${REPO_ROOT}/target/release/compare_fit"
     echo "      Built: ${RUST_BINARY}"
 else
     echo "      Warning: Rust build failed. Will skip Rust fitting."
     RUST_BINARY=""
 fi
-cd "${SCRIPT_DIR}"
 
 # Step 2: Check R dependencies
 echo "[2/4] Checking R dependencies..."

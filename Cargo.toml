@@ -56,3 +56,6 @@ criterion = "0.5"
 [[bench]]
 name = "derivatives"
 harness = false
+
+[workspace]
+members = ["benchmark"]

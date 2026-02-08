@@ -500,6 +500,13 @@ const diagnostics = JSON.parse(model.diagnosticsJson());
 - [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) - Serialization (optional: `serialization` feature)
 - [wasm-bindgen](https://crates.io/crates/wasm-bindgen) - JavaScript interop (optional: `wasm` feature)
 
+## Project Structure
+
+This repository is a Cargo workspace:
+
+- **`gamlss_rs`** (root) — the core library
+- **`benchmark/`** (`gamlss_benchmark`) — comparison framework against R/mgcv
+
 ## Algorithm
 
 GAMLSS fitting uses a penalized quasi-likelihood approach (Rigby-Stasinopoulos algorithm):
@@ -518,6 +525,28 @@ The library includes several optimizations for large datasets:
 - **Parallel computation**: Special functions (digamma, trigamma) use Rayon parallel iterators for n >= 10,000
 - **Warm-starting**: L-BFGS optimization reuses previous smoothing parameters for faster convergence
 - **Efficient matrix operations**: Uses sqrt-weighted approach to avoid O(n²) memory allocation
+
+## Benchmark (Comparison with R)
+
+The `benchmark/` directory contains a comparison framework that validates gamlss_rs against R's mgcv and gamlss packages across 15 scenarios (linear, smooth, heteroskedastic) and all supported distributions.
+
+### Quick Start
+
+```bash
+# Build the Rust comparison binary
+cargo build -p gamlss_benchmark --release
+
+# Run a single scenario
+cargo run -p gamlss_benchmark --release --bin compare_fit -- \
+    --data benchmark/output/data_gaussian_linear.parquet \
+    --scenario gaussian_linear \
+    --output result.json
+
+# Run the full comparison suite (requires Python with numpy/polars and R with mgcv)
+./benchmark/run_comparison.sh
+```
+
+The orchestrator (`benchmark/orchestrate.py`) generates synthetic data with known parameters, fits models in both Rust and R, and produces a comparison summary with fitted value correlations, coefficient recovery, and timing.
 
 ## License
 
