@@ -1,15 +1,11 @@
-use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyRuntimeError};
-use pyo3::types::{PyDict, PyTuple};
-use numpy::{PyReadonlyArray1, ToPyArray};
-use std::collections::HashMap;
 use ndarray::Array1;
+use numpy::{PyReadonlyArray1, ToPyArray};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyTuple};
+use std::collections::HashMap;
 
-use crate::{
-    GamlssModel, DataSet, Formula, Term, Smooth,
-    GamlssError,
-    distributions::*,
-};
+use crate::{distributions::*, DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
 
 // Internal enum to dispatch to concrete distribution types
 enum FamilyType {
@@ -23,8 +19,12 @@ enum FamilyType {
 }
 
 impl FamilyType {
-    fn fit_model(&self, data: &DataSet, y: &Array1<f64>, formula: &Formula)
-        -> Result<GamlssModel, GamlssError> {
+    fn fit_model(
+        &self,
+        data: &DataSet,
+        y: &Array1<f64>,
+        formula: &Formula,
+    ) -> Result<GamlssModel, GamlssError> {
         match self {
             FamilyType::Gaussian(d) => GamlssModel::fit(data, y, formula, d),
             FamilyType::Poisson(d) => GamlssModel::fit(data, y, formula, d),
@@ -36,8 +36,11 @@ impl FamilyType {
         }
     }
 
-    fn predict(&self, model: &GamlssModel, new_data: &DataSet)
-        -> Result<HashMap<String, Array1<f64>>, GamlssError> {
+    fn predict(
+        &self,
+        model: &GamlssModel,
+        new_data: &DataSet,
+    ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
         match self {
             FamilyType::Gaussian(d) => model.predict(new_data, d),
             FamilyType::Poisson(d) => model.predict(new_data, d),
@@ -186,17 +189,17 @@ fn parse_single_term(_py: Python, item: &Bound<PyAny>) -> PyResult<Term> {
         "linear" => {
             if tuple.len() != 2 {
                 return Err(PyValueError::new_err(
-                    "Linear term requires: ('linear', 'col_name')"
+                    "Linear term requires: ('linear', 'col_name')",
                 ));
             }
             let col_name: String = tuple.get_item(1)?.extract()?;
             Ok(Term::Linear { col_name })
-        },
+        }
 
         "smooth" => {
             if tuple.len() < 2 {
                 return Err(PyValueError::new_err(
-                    "Smooth term requires at least: ('smooth', 'col_name')"
+                    "Smooth term requires at least: ('smooth', 'col_name')",
                 ));
             }
             let col_name: String = tuple.get_item(1)?.extract()?;
@@ -206,12 +209,21 @@ fn parse_single_term(_py: Python, item: &Bound<PyAny>) -> PyResult<Term> {
             let (n_splines, degree, penalty_order) = if tuple.len() >= 3 {
                 let kwargs_item = tuple.get_item(2)?;
                 let kwargs: &Bound<PyDict> = kwargs_item.downcast()?;
-                let n_splines = kwargs.get_item("n_splines")?
-                    .map(|v| v.extract::<usize>()).transpose()?.unwrap_or(10);
-                let degree = kwargs.get_item("degree")?
-                    .map(|v| v.extract::<usize>()).transpose()?.unwrap_or(3);
-                let penalty_order = kwargs.get_item("penalty_order")?
-                    .map(|v| v.extract::<usize>()).transpose()?.unwrap_or(2);
+                let n_splines = kwargs
+                    .get_item("n_splines")?
+                    .map(|v| v.extract::<usize>())
+                    .transpose()?
+                    .unwrap_or(10);
+                let degree = kwargs
+                    .get_item("degree")?
+                    .map(|v| v.extract::<usize>())
+                    .transpose()?
+                    .unwrap_or(3);
+                let penalty_order = kwargs
+                    .get_item("penalty_order")?
+                    .map(|v| v.extract::<usize>())
+                    .transpose()?
+                    .unwrap_or(2);
                 (n_splines, degree, penalty_order)
             } else {
                 (10, 3, 2)
@@ -223,17 +235,17 @@ fn parse_single_term(_py: Python, item: &Bound<PyAny>) -> PyResult<Term> {
                 degree,
                 penalty_order,
             }))
-        },
+        }
 
         "random" => {
             if tuple.len() != 2 {
                 return Err(PyValueError::new_err(
-                    "Random effect requires: ('random', 'col_name')"
+                    "Random effect requires: ('random', 'col_name')",
                 ));
             }
             let col_name: String = tuple.get_item(1)?.extract()?;
             Ok(Term::Smooth(Smooth::RandomEffect { col_name }))
-        },
+        }
 
         _ => Err(PyValueError::new_err(format!(
             "Unknown term type: {}. Use 'intercept', 'linear', 'smooth', or 'random'",
@@ -327,7 +339,8 @@ impl PyGamlssModel {
         let family_type = extract_family(py, family)?;
 
         // Fit model
-        let model = family_type.fit_model(&dataset, &y_array, &rust_formula)
+        let model = family_type
+            .fit_model(&dataset, &y_array, &rust_formula)
             .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
 
         Ok(Self {
@@ -350,7 +363,9 @@ impl PyGamlssModel {
     fn predict(&self, py: Python, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
         let dataset = py_dict_to_dataset(py, new_data)?;
 
-        let predictions = self.family.predict(&self.inner, &dataset)
+        let predictions = self
+            .family
+            .predict(&self.inner, &dataset)
             .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
 
         // Convert HashMap<String, Array1<f64>> to Python dict
