@@ -1,3 +1,6 @@
+// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+#![cfg(not(feature = "python"))]
+
 mod common;
 
 use common::Generator;
@@ -26,7 +29,7 @@ fn test_poisson_recovery() {
     );
 
     let model =
-        GamlssModel::fit(&y, &data, &formulas, &Poisson::new()).expect("Poisson Fit Failed!");
+        GamlssModel::fit(&data, &y, &formulas, &Poisson::new()).expect("Poisson Fit Failed!");
 
     let coeffs = &model.models["mu"].coefficients;
 
@@ -67,7 +70,7 @@ fn test_heteroskedastic_gaussian_recovery() {
     );
 
     let model =
-        GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).expect("Gaussian Fit Failed!");
+        GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).expect("Gaussian Fit Failed!");
 
     let mu = &model.models["mu"].coefficients;
     let sigma = &model.models["sigma"].coefficients;
@@ -102,7 +105,7 @@ fn test_tensor_product_complexity() {
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
     let model =
-        GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).expect("Tensor Fit Failed!");
+        GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).expect("Tensor Fit Failed!");
 
     let edf = model.models["mu"].edf;
 
@@ -130,7 +133,7 @@ fn test_model_convergence_invariants() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model_1 = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model_1 = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     // Create shuffled copies of y and data
     let n = y.len();
@@ -147,7 +150,7 @@ fn test_model_convergence_invariants() {
     }
 
     let model_2 =
-        GamlssModel::fit(&y_shuffled, &data_shuffled, &formulas, &Gaussian::new()).unwrap();
+        GamlssModel::fit(&data_shuffled, &y_shuffled, &formulas, &Gaussian::new()).unwrap();
 
     // verify coefficients are identical regardless of row order
     let b1 = &model_1.models["mu"].coefficients;

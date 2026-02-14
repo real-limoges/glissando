@@ -177,7 +177,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
                         },
                     ],
                 );
-                black_box(GamlssModel::fit(&y, &data, &formula, &Poisson).unwrap())
+                black_box(GamlssModel::fit(&data, &y, &formula, &Poisson).unwrap())
             })
         });
 
@@ -195,7 +195,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
                         ],
                     )
                     .with_terms("sigma", vec![Term::Intercept]);
-                black_box(GamlssModel::fit(&y, &data, &formula, &Gaussian).unwrap())
+                black_box(GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap())
             })
         });
     }

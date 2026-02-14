@@ -79,7 +79,7 @@ fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -138,7 +138,7 @@ fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
             ],
         );
 
-    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -189,7 +189,7 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -241,7 +241,7 @@ fn fit_poisson_linear(df: &DataFrame) -> FitResult {
         ],
     );
 
-    match GamlssModel::fit(&y, &data, &formula, &Poisson::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Poisson::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -290,7 +290,7 @@ fn fit_gamma_linear(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Gamma::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gamma::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -345,7 +345,7 @@ fn fit_studentt_linear(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept])
         .with_terms("nu", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &StudentT::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &StudentT::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -401,7 +401,7 @@ fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &NegativeBinomial::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -455,7 +455,7 @@ fn fit_beta_linear(df: &DataFrame) -> FitResult {
         )
         .with_terms("phi", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Beta::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Beta::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -507,7 +507,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
         })],
     );
 
-    match GamlssModel::fit(&y, &data, &formula, &Poisson::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Poisson::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -556,7 +556,7 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Gamma::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gamma::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -618,7 +618,7 @@ fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -674,7 +674,7 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept])
         .with_terms("nu", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &StudentT::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &StudentT::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -733,7 +733,7 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
-    match GamlssModel::fit(&y, &data, &formula, &NegativeBinomial::new()) {
+    match GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()) {
         Ok(model) => {
             let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
