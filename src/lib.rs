@@ -20,7 +20,7 @@
 //!     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }])
 //!     .with_terms("sigma", vec![Term::Intercept]);
 //!
-//! let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+//! let model = GamlssModel::fit( &data,&y, &formula, &Gaussian::new()).unwrap();
 //! ```
 
 pub mod diagnostics;
@@ -35,6 +35,8 @@ mod terms;
 mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
+#[cfg(feature = "python")]
+mod python;
 
 pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;
@@ -66,12 +68,12 @@ impl GamlssModel {
     /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
     /// or a linear algebra operation fails.
     pub fn fit<D: Distribution + ?Sized>(
-        y: &Array1<f64>,
         data: &DataSet,
+        y: &Array1<f64>,
         formula: &Formula,
         family: &D,
     ) -> Result<Self, GamlssError> {
-        Self::fit_with_config(y, data, formula, family, FitConfig::default())
+        Self::fit_with_config(data, y, formula, family, FitConfig::default())
     }
 
     /// Fits a GAMLSS model with custom iteration limits and tolerance.
@@ -81,8 +83,8 @@ impl GamlssModel {
     /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
     /// or a linear algebra operation fails.
     pub fn fit_with_config<D: Distribution + ?Sized>(
-        y: &Array1<f64>,
         data: &DataSet,
+        y: &Array1<f64>,
         formula: &Formula,
         family: &D,
         config: FitConfig,
