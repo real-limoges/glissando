@@ -1,7 +1,7 @@
 use gamlss_rs::distributions::StudentT;
 use gamlss_rs::{DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
 use ndarray::Array1;
-use rand::Rng;
+use rand::RngExt;
 
 fn main() -> Result<(), GamlssError> {
     // Generate Synthetic Data

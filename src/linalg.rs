@@ -41,7 +41,7 @@ pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
 
 #[cfg(feature = "pure-rust")]
 pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-    use faer::prelude::*;
+    use faer::linalg::solvers::Solve;
 
     // Convert ndarray -> faer
     let a_faer = ndarray_to_faer_mat(a);
@@ -57,7 +57,7 @@ pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
 
 #[cfg(feature = "pure-rust")]
 pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-    use faer::prelude::*;
+    use faer::linalg::solvers::DenseSolveCore;
 
     // Convert ndarray -> faer
     let a_faer = ndarray_to_faer_mat(a);
@@ -75,18 +75,19 @@ pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
     // Convert ndarray -> faer
     let a_faer = ndarray_to_faer_mat(a);
 
-    // Compute Cholesky decomposition
-    let chol = a_faer.cholesky(faer::Side::Lower).map_err(|_| {
+    // Compute Cholesky decomposition (LLT)
+    // llt() decomposes A = LL^H where L is lower triangular
+    let chol = a_faer.llt(faer::Side::Lower).map_err(|_| {
         GamlssError::Linalg(
             "Cholesky decomposition failed (matrix not positive definite)".to_string(),
         )
     })?;
 
-    // The Cholesky object itself represents L, we can use it directly
     // Extract the lower triangular matrix
-    let l_faer = chol.compute_l();
+    let l_ref = chol.L();
 
-    // Convert back to ndarray
+    // Convert to owned Mat and then to ndarray
+    let l_faer = l_ref.to_owned();
     faer_mat_to_ndarray(&l_faer)
 }
 
@@ -116,14 +117,14 @@ fn ndarray_to_faer_col(arr: &Array1<f64>) -> faer::Col<f64> {
 #[cfg(feature = "pure-rust")]
 fn faer_mat_to_ndarray(mat: &faer::Mat<f64>) -> Result<Array2<f64>> {
     let (nrows, ncols) = (mat.nrows(), mat.ncols());
-    let result = Array2::from_shape_fn((nrows, ncols), |(i, j)| mat.read(i, j));
+    let result = Array2::from_shape_fn((nrows, ncols), |(i, j)| mat[(i, j)]);
     Ok(result)
 }
 
 #[cfg(feature = "pure-rust")]
 fn faer_col_to_ndarray(col: &faer::Col<f64>) -> Result<Array1<f64>> {
     let n = col.nrows();
-    let result = Array1::from_shape_fn(n, |i| col.read(i));
+    let result = Array1::from_shape_fn(n, |i| col[i]);
     Ok(result)
 }
 
