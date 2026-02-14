@@ -1,3 +1,6 @@
+// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+#![cfg(not(feature = "python"))]
+
 mod common;
 
 use common::Generator;
@@ -24,7 +27,7 @@ fn test_missing_variable_in_data() {
         ],
     );
 
-    let result = GamlssModel::fit(&y, &data, &formulas, &Poisson::new());
+    let result = GamlssModel::fit(&data, &y, &formulas, &Poisson::new());
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -45,7 +48,7 @@ fn test_missing_formula_for_parameter() {
     formulas.add_terms("mu", vec![Term::Intercept]);
     // Missing "sigma" formula for Gaussian
 
-    let result = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new());
+    let result = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new());
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -74,7 +77,7 @@ fn test_small_dataset() {
     );
     formulas.add_terms("sigma", vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover approximately y = 2x (intercept ~0, slope ~2)
@@ -94,7 +97,7 @@ fn test_intercept_only_model() {
     formulas.add_terms("mu".to_string(), vec![Term::Intercept]);
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_intercept = model.models["mu"].coefficients[0];
     assert!(
@@ -128,7 +131,7 @@ fn test_large_coefficients() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover y = 1000 + 100*x
@@ -165,7 +168,7 @@ fn test_negative_response_gaussian() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover y = -12 + 2*x
@@ -213,7 +216,7 @@ fn test_multiple_linear_terms() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
     // Should recover intercept ~1, x1 coef ~2, x2 coef ~3
@@ -266,7 +269,7 @@ fn test_spline_smooth_recovery() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     // Check that fitted values roughly follow sin(x)
     let fitted = &model.models["mu"].fitted_values;
@@ -301,7 +304,7 @@ fn test_edf_reasonable() {
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     // For intercept + linear, EDF should be ~2
     let mu_edf = model.models["mu"].edf;

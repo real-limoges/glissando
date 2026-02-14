@@ -59,7 +59,7 @@ fn main() -> Result<(), GamlssError> {
 
     // Fit
     println!("Fitting GAMLSS model...");
-    let model = GamlssModel::fit(&y, &data, &formulas, &StudentT::new())?;
+    let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new())?;
     println!("Successfully Trained GAMLSS Model!");
 
     // 5. Inspect Results
