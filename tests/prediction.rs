@@ -6,7 +6,7 @@ use gamlss_rs::{
     DataSet, Formula, GamlssModel, Smooth, Term,
 };
 use ndarray::Array1;
-use rand::Rng;
+use rand::RngExt;
 
 #[test]
 fn test_predict_on_training_data() {

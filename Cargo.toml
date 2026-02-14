@@ -10,48 +10,56 @@ crate-type = ["cdylib", "rlib"]
 default = ["openblas", "parallel"]
 
 # Backend selection (mutually exclusive in practice)
-openblas = ["ndarray-linalg", "argmin-math/ndarray_v0_16"]
-pure-rust = ["faer"]
+openblas = ["ndarray-linalg", "argmin-math/ndarray_latest"]
+pure-rust = ["faer", "argmin-math/faer_latest"]
 
 # Serialization support (serde + ndarray/serde)
 serialization = ["serde", "serde_json", "ndarray/serde"]
 
 # WASM target (implies pure-rust + serialization, no parallel)
-wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom/wasm_js", "getrandom_02"]
+wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom_02", "getrandom_03", "getrandom"]
 
 # Parallelism (incompatible with WASM)
 parallel = ["rayon"]
 
 [dependencies]
 argmin = { version = "0.11.0"}
-ndarray = { version = "0.16" }
-rand = { version = "0.9.2" }
-rand_distr = { version = "0.5.1" }
+ndarray = { version = "0.17" }
+rand = { version = "0.10" }
+rand_distr = { version = "0.6" }
 statrs = { version = "0.18.0" }
-thiserror = { version = "2.0.18" }
+thiserror = { version = "2.0" }
 
 # Optional: Linear algebra backends
-ndarray-linalg = { version = "0.17.0", features = ["openblas-system"], optional = true }
-faer = { version = "0.19", default-features = false, optional = true }
+ndarray-linalg = { version = "0.18", features = ["openblas-system"], optional = true }
+faer = { version = "0.24", default-features = false, optional = true }
 
 # Optional: Parallelism
-rayon = { version = "1.11.0", optional = true }
+rayon = { version = "1.11", optional = true }
 
 # Optional: Serialization
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 
 # Optional: WASM support
-wasm-bindgen = { version = "0.2", optional = true }
-getrandom = { version = "0.3", optional = true }
-getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"], optional = true }
+wasm-bindgen = { version = "0.2.108", optional = true }
+
+# getrandom is a transitive dependency, but we explicitly depend on it to ensure
+# the correct features are enabled for WASM builds
+# Multiple versions needed due to transitive dependencies:
+#   v0.2 from statrs → nalgebra → rand 0.8
+#   v0.3 from argmin → rand 0.9
+#   v0.4 from our direct rand 0.10 dependency
+getrandom_02 = { package = "getrandom", version = "0.2", optional = true, features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", optional = true, default-features = false, features = ["wasm_js"] }
+getrandom = { version = "0.4", optional = true, default-features = false, features = ["wasm_js"] }
 
 [dependencies.argmin-math]
 version = "0.5.1"
-features = ["ndarray_v0_16-nolinalg"]
+features = ["ndarray_latest-nolinalg"]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "derivatives"

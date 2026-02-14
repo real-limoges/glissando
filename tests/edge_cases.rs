@@ -6,7 +6,7 @@ use gamlss_rs::{
     DataSet, Formula, GamlssModel, Smooth, Term,
 };
 use ndarray::Array1;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 // Helper to sample from Negative Binomial using Gamma-Poisson mixture
 // NB(mu, sigma) where r = 1/sigma, Var(Y) = mu + sigma*mu^2
@@ -1698,7 +1698,7 @@ fn test_binomial_multiple_predictors() {
         .zip(x2.iter())
         .map(|(&xi1, &xi2)| {
             let eta = -0.5 + 1.5 * xi1 + 0.8 * xi2;
-            let mu = 1.0 / (1.0 + (-eta).exp());
+            let mu: f64 = 1.0 / (1.0 + (-eta).exp());
             let dist = rand_distr::Binomial::new(n_trials as u64, mu.clamp(0.05, 0.95)).unwrap();
             rng.rng.sample(dist) as f64
         })
