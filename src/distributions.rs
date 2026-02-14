@@ -1,3 +1,13 @@
+//! Probability distributions for GAMLSS models.
+//!
+//! This module provides standard distributions commonly used in statistical regression.
+//! Each distribution defines:
+//! - Parameters (e.g., μ, σ, ν)
+//! - Default link functions for each parameter
+//! - Derivatives (score and Fisher information) for the RS fitting algorithm
+//!
+//! All derivatives are computed in batched form (vectorized across observations) for efficiency.
+
 use crate::error::GamlssError;
 use crate::math::{digamma_batch, trigamma_batch};
 use ndarray::Array1;
@@ -463,12 +473,12 @@ impl Distribution for StudentT {
 /// Gamma distribution for positive continuous data.
 ///
 /// Parameters: mu (mean, log link) and sigma (coefficient of variation, log link).
-/// Shape α = 1/σ², Scale θ = μσ². Var(Y) = μ²σ².
+/// Parameterization: Shape α = 1/σ², Scale θ = μσ². Var(Y) = μ²σ².
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gamma;
 
 impl Gamma {
-    /// Create a new Gamma distribution.
+    /// Creates a new Gamma distribution.
     pub fn new() -> Self {
         Self
     }

@@ -29,8 +29,11 @@ gamlss_rs = { git = "https://github.com/real-limoges/gamlss_rs" }
 | `openblas` | OpenBLAS backend (ndarray-linalg) — max performance | yes |
 | `pure-rust` | Faer backend — no system dependencies, WASM-compatible | no |
 | `serialization` | Serde support for model serialization | no |
-| `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`) | no |
-| `parallel` | Rayon parallelism for large datasets | yes |
+| `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`, no parallelism) | no |
+| `python` | PyO3 bindings for Python integration (implies `openblas` + `parallel` + `serialization`) | no |
+| `parallel` | Rayon parallelism for large datasets (incompatible with WASM) | yes |
+
+**Note**: `openblas` and `pure-rust` are mutually exclusive (select your linear algebra backend). The `wasm` feature automatically disables parallelism.
 
 ### Requirements
 
@@ -68,7 +71,7 @@ let formula = Formula::new()
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
 println!("Converged: {}", model.converged());
 let mu_coeffs = &model.models["mu"].coefficients;
@@ -169,14 +172,14 @@ let config = FitConfig {
 };
 
 let model = GamlssModel::fit_with_config(
-    &y, &data, &formula, &Gaussian::new(), config
+    &data, &y, &formula, &Gaussian::new(), config
 )?;
 ```
 
 ## Accessing Results
 
 ```rust
-let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 
 // Convergence diagnostics
 println!("Converged: {}", model.diagnostics.converged);
@@ -208,8 +211,9 @@ let mu_pred = &predictions["mu"];
 // Predictions with standard errors
 let results = model.predict_with_se(&new_data, &family)?;
 let mu_result = &results["mu"];
-println!("Fitted: {:?}", mu_result.fitted);
-println!("SE(eta): {:?}", mu_result.se_eta);
+println!("Fitted values (response scale): {:?}", mu_result.fitted);
+println!("Linear predictor (eta): {:?}", mu_result.eta);
+println!("Standard errors on eta scale: {:?}", mu_result.se_eta);
 
 // Posterior samples for uncertainty quantification
 let samples = model.predict_samples(&new_data, &family, 1000)?;
@@ -253,7 +257,7 @@ let formula = Formula::new()
         Term::Linear { col_name: "x".to_string() },
     ]);
 
-let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```
 
 ### Nonlinear Smooth
@@ -270,7 +274,7 @@ let formula = Formula::new()
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```
 
 ### Count Data with Poisson
@@ -284,7 +288,7 @@ let formula = Formula::new()
         Term::Linear { col_name: "predictor".to_string() },
     ]);
 
-let model = GamlssModel::fit(&counts, &data, &formula, &Poisson::new())?;
+let model = GamlssModel::fit(&data, &counts, &formula, &Poisson::new())?;
 ```
 
 ### Binary/Binomial Data
@@ -299,11 +303,11 @@ let formula = Formula::new()
     ]);
 
 // Fixed number of trials
-let model = GamlssModel::fit(&successes, &data, &formula, &Binomial::new(20))?;
+let model = GamlssModel::fit(&data, &successes, &formula, &Binomial::new(20))?;
 
 // Or varying trials per observation
 let trials = Array1::from_vec(vec![10.0, 15.0, 20.0, 25.0]);
-let model = GamlssModel::fit(&successes, &data, &formula, &Binomial::with_trials(trials))?;
+let model = GamlssModel::fit(&data, &successes, &formula, &Binomial::with_trials(trials))?;
 ```
 
 ### Heavy-Tailed Data with Student-t
@@ -319,7 +323,7 @@ let formula = Formula::new()
     .with_terms("sigma", vec![Term::Intercept])
     .with_terms("nu", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&y, &data, &formula, &StudentT::new())?;
+let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new())?;
 ```
 
 ### Mixed Effects Model
@@ -335,7 +339,7 @@ let formula = Formula::new()
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new())?;
+let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```
 
 ### Overdispersed Count Data
@@ -350,7 +354,7 @@ let formula = Formula::new()
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&counts, &data, &formula, &NegativeBinomial::new())?;
+let model = GamlssModel::fit(&data, &counts, &formula, &NegativeBinomial::new())?;
 ```
 
 ### Proportion/Rate Data
@@ -365,7 +369,7 @@ let formula = Formula::new()
     ])
     .with_terms("phi", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&proportions, &data, &formula, &Beta::new())?;
+let model = GamlssModel::fit(&data, &proportions, &formula, &Beta::new())?;
 ```
 
 ### Duration/Positive Continuous Data
@@ -380,7 +384,7 @@ let formula = Formula::new()
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
-let model = GamlssModel::fit(&durations, &data, &formula, &Gamma::new())?;
+let model = GamlssModel::fit(&data, &durations, &formula, &Gamma::new())?;
 ```
 
 ## Error Handling
@@ -390,12 +394,18 @@ The library uses `GamlssError` for error handling:
 ```rust
 use gamlss_rs::GamlssError;
 
-match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
+match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
     Ok(model) => {
         // Use the fitted model
     }
     Err(GamlssError::Input(msg)) => {
         eprintln!("Input error: {}", msg);
+    }
+    Err(GamlssError::MissingVariable { name }) => {
+        eprintln!("Variable '{}' not found in data", name);
+    }
+    Err(GamlssError::NonFiniteValues { name, count }) => {
+        eprintln!("Variable '{}' has {} non-finite values", name, count);
     }
     Err(GamlssError::Convergence(iters)) => {
         eprintln!("Failed to converge after {} iterations", iters);
@@ -412,15 +422,16 @@ match GamlssModel::fit(&y, &data, &formula, &Gaussian::new()) {
 |-------|-------------|
 | `Input` | Invalid input data or formula |
 | `MissingVariable` | Required variable not found in data |
-| `MissingFormula` | Formula missing for a distribution parameter |
-| `NonFiniteValues` | Variable contains NaN or Inf values (includes count) |
+| `MissingFormula` | Formula missing terms for a distribution parameter |
+| `NonFiniteValues` | Variable contains NaN or Inf values (includes count of non-finite values) |
 | `EmptyData` | No observations provided |
 | `Convergence` | Algorithm failed to converge after N iterations |
-| `Optimization` | Smoothing parameter optimization failed |
-| `Linalg` | Linear algebra computation failed |
+| `Optimization` | Smoothing parameter optimization (L-BFGS) failed |
+| `Linalg` | Linear algebra computation failed (Cholesky, matrix solve, etc.) |
 | `UnknownParameter` | Unknown parameter for the given distribution |
 | `Shape` | Array shape mismatch |
-| `Internal` | Internal computation error |
+| `ComputationError` | Internal computation error (ShapeError from ndarray) |
+| `Internal` | Internal computation error (other) |
 
 ## Serialization & WASM
 
@@ -442,8 +453,10 @@ let (model, dist_name) = GamlssModel::from_json(&json)?;
 For browser-based fitting and prediction, build with the `wasm` feature:
 
 ```bash
-wasm-pack build --no-default-features --features wasm --target web
+wasm-pack build --no-default-features --features wasm
 ```
+
+Note: Do not use the `--target web` flag, as it can cause issues with wasm-pack 0.14.0.
 
 ### Fitting in the Browser
 
@@ -465,7 +478,7 @@ const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001 });
 const model2 = WasmGamlssModel.fitWithConfig(y, data, formula, "Gaussian", config);
 ```
 
-Supported distributions: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`.
+Supported distributions: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`. Note: `Binomial` is not supported in WASM as it requires state (number of trials) that cannot be recovered from the distribution name alone.
 
 ### Loading Pre-fitted Models
 
@@ -491,14 +504,21 @@ const diagnostics = JSON.parse(model.diagnosticsJson());
 
 ## Dependencies
 
-- [ndarray](https://crates.io/crates/ndarray) - N-dimensional arrays
-- [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - Linear algebra via OpenBLAS (optional: `openblas` feature)
-- [faer](https://crates.io/crates/faer) - Pure Rust linear algebra (optional: `pure-rust` feature)
-- [argmin](https://crates.io/crates/argmin) - L-BFGS optimization
-- [statrs](https://crates.io/crates/statrs) - Statistical functions
-- [rayon](https://crates.io/crates/rayon) - Parallel computation (optional: `parallel` feature)
-- [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) - Serialization (optional: `serialization` feature)
-- [wasm-bindgen](https://crates.io/crates/wasm-bindgen) - JavaScript interop (optional: `wasm` feature)
+**Core dependencies**:
+- [ndarray](https://crates.io/crates/ndarray) - N-dimensional arrays (v0.17)
+- [argmin](https://crates.io/crates/argmin) - L-BFGS optimization (v0.11)
+- [statrs](https://crates.io/crates/statrs) - Statistical functions (v0.18)
+- [rand](https://crates.io/crates/rand) - Random number generation (v0.10)
+
+**Linear algebra backends** (select one):
+- [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - OpenBLAS backend (v0.18, `openblas` feature)
+- [faer](https://crates.io/crates/faer) - Pure Rust backend (v0.24, `pure-rust` feature)
+
+**Optional dependencies**:
+- [rayon](https://crates.io/crates/rayon) - Parallel computation (v1.11, `parallel` feature)
+- [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) - Serialization (`serialization` feature)
+- [wasm-bindgen](https://crates.io/crates/wasm-bindgen) - JavaScript interop (v0.2, `wasm` feature)
+- [pyo3](https://crates.io/crates/pyo3) - Python bindings (v0.28, `python` feature)
 
 ## Project Structure
 
