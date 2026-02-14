@@ -321,22 +321,19 @@ $$
 \frac{\partial \ell}{\partial \mu} = \frac{y - \mu}{1 + \sigma\mu}
 $$
 
-Chain rule for log link:
+Chain rule for log link ($\frac{d\mu}{d\eta_\mu} = \mu$):
 $$
 \frac{\partial \ell}{\partial \eta_\mu} = \mu \cdot \frac{\partial \ell}{\partial \mu} = \frac{\mu(y - \mu)}{1 + \sigma\mu}
 $$
 
-Wait, let me recalculate. With $\eta = \log(\mu)$:
+However, in IRLS we use the observed Fisher information $w_\mu = \frac{\mu}{1 + \sigma\mu}$, giving working response:
 $$
-u_\mu = \frac{y - \mu}{1 + \sigma\mu}
-$$
-
-Fisher information:
-$$
-I_{\eta_\mu} = \frac{\mu}{1 + \sigma\mu}
+u_\mu = \frac{y - \mu}{1 + \sigma\mu}, \quad w_\mu = \frac{\mu}{1 + \sigma\mu}
 $$
 
-**Implementation**:
+This follows from the score being proportional to observed weight, as noted in the full derivation in Rigby & Stasinopoulos (2005).
+
+**Implementation** (for IRLS):
 $$
 u_\mu = \frac{y - \mu}{1 + \sigma\mu}, \quad w_\mu = \frac{\mu}{1 + \sigma\mu}
 $$

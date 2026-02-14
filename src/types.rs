@@ -1,3 +1,9 @@
+//! Type-safe wrappers for core data structures used throughout GAMLSS fitting.
+//!
+//! This module provides newtypes that prevent common mistakes (e.g., confusing coefficient vectors
+//! with penalty matrices) while providing ergonomic access via Deref to underlying ndarray types.
+//! It also includes trait implementations for the argmin optimization library.
+
 use argmin_math::ArgminScaledSub;
 use argmin_math::{
     ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminScaledAdd,

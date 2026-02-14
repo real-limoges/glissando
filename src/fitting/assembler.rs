@@ -107,14 +107,41 @@ fn assemble_smooth(
 
 /// Assemble the design matrix and penalty matrices from formula terms.
 ///
-/// Constructs the combined model matrix X by concatenating columns for each term
-/// (intercept, linear, smooth), and builds the corresponding penalty matrices
-/// for smooth terms.
+/// Constructs the combined model matrix X and associated penalty matrices S_j
+/// for fitting the penalized least squares problem:
+///   minimize (z - X·beta)'·W·(z - X·beta) + sum_j lambda_j · beta'·S_j·beta
+///
+/// The design matrix is built by horizontally concatenating basis matrices for each term
+/// in order: [Intercept | Linear_1 | Linear_2 | ... | Smooth_1 | Smooth_2 | ...]
+///
+/// Each smooth term contributes one or more penalty matrices (e.g., tensor products have 2).
+/// Penalties are assembled as block-diagonal matrices in the full coefficient space.
+///
+/// # Algorithm
+/// 1. For each term (in order):
+///    - Intercept: n_obs × 1 matrix of ones
+///    - Linear(x): n_obs × 1 matrix with x values
+///    - Smooth: basis matrix from splines/random effects + corresponding penalty matrix
+/// 2. Horizontally concatenate all basis parts → X (n_obs × total_coeffs)
+/// 3. Embed penalty blocks at correct offsets → penalty matrices (total_coeffs × total_coeffs)
+///
+/// # Arguments
+/// * `data` - DataSet with predictor variables
+/// * `n_obs` - Number of observations (required for building intercept)
+/// * `terms` - Formula terms in order (from Formula::terms)
 ///
 /// # Returns
-/// * `ModelMatrix` - Combined design matrix (n_obs × total_coeffs)
-/// * `Vec<PenaltyMatrix>` - Penalty matrices for each smooth term
-/// * `usize` - Total number of coefficients
+/// * `ModelMatrix` - Combined design matrix (n_obs × total_coeffs), wrapped for type safety
+/// * `Vec<PenaltyMatrix>` - Penalty matrices S_j, each (total_coeffs × total_coeffs)
+/// * `usize` - Total number of coefficients (for reference)
+///
+/// # Performance Notes
+/// - Linear time in n_obs and polynomial in n_coeffs (for penalty assembly)
+/// - Memory: O(n_obs · total_coeffs) for design matrix + O(sum of penalty matrix sizes)
+/// - Penalties are block-sparse: only non-zero blocks are stored (see PenaltyMatrix)
+///
+/// # See Also
+/// See docs/mathematics.md section 5 for penalty matrix mathematical details.
 pub fn assemble_model_matrices(
     data: &DataSet,
     n_obs: usize,

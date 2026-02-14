@@ -1,3 +1,16 @@
+//! GAMLSS fitting implementation via the Rigby-Stasinopoulos (RS) algorithm.
+//!
+//! The RS algorithm iteratively cycles through distribution parameters, fitting each as a
+//! penalized additive model while holding others fixed. For each parameter:
+//!
+//! 1. Compute score (u) and Fisher information (w) from the distribution
+//! 2. Form working response: z = η + u/w
+//! 3. Optimize smoothing parameters (λ) via GCV using L-BFGS
+//! 4. Solve penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z
+//! 5. Update linear predictor: η = X·β
+//!
+//! The module also handles posterior inference (sampling from the approximate posterior of coefficients).
+
 pub mod assembler;
 pub mod inference;
 mod solver;

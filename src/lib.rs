@@ -20,7 +20,7 @@
 //!     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }])
 //!     .with_terms("sigma", vec![Term::Intercept]);
 //!
-//! let model = GamlssModel::fit( &data,&y, &formula, &Gaussian::new()).unwrap();
+//! let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 //! ```
 
 pub mod diagnostics;
@@ -30,13 +30,13 @@ pub mod fitting;
 mod linalg;
 mod math;
 pub mod preprocessing;
+#[cfg(feature = "python")]
+mod python;
 mod splines;
 mod terms;
 mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
-#[cfg(feature = "python")]
-mod python;
 
 pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;

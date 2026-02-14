@@ -1212,7 +1212,7 @@ name = "gamlss_benchmark"
 version = "0.1.0"
 dependencies = [
  "gamlss_rs",
- "ndarray 0.16.1",
+ "ndarray 0.17.2",
  "polars",
  "serde",
  "serde_json",
