@@ -1,3 +1,6 @@
+// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+#![cfg(not(feature = "python"))]
+
 use gamlss_rs::{distributions::StudentT, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use rand::prelude::*;
@@ -51,7 +54,7 @@ fn test_student_t_recovery() {
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
     formulas.add_terms("nu".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formulas, &StudentT::new()).expect("Fit failed");
+    let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new()).expect("Fit failed");
 
     // assertions
     let mu_coeffs = &model.models["mu"].coefficients;

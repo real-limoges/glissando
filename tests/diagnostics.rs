@@ -1,3 +1,6 @@
+// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+#![cfg(not(feature = "python"))]
+
 mod common;
 
 use common::Generator;
@@ -116,7 +119,7 @@ fn test_total_edf() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let edf = total_edf(&model.models);
 
@@ -146,7 +149,7 @@ fn test_diagnostics_with_fitted_model() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Extract fitted values
     let mu = &model.models["mu"].fitted_values;

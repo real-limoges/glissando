@@ -1,3 +1,6 @@
+// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+#![cfg(not(feature = "python"))]
+
 mod common;
 
 use common::Generator;
@@ -26,7 +29,7 @@ fn test_predict_on_training_data() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Predict on the same data
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
@@ -65,7 +68,7 @@ fn test_predict_on_new_data() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Create new data
     let mut new_data = DataSet::new();
@@ -110,7 +113,7 @@ fn test_predict_with_se() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let results = model.predict_with_se(&data, &Gaussian::new()).unwrap();
 
@@ -162,7 +165,7 @@ fn test_predict_poisson() {
         ],
     );
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Poisson::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     // Predict on training data
     let predictions = model.predict(&data, &Poisson::new()).unwrap();
@@ -196,7 +199,7 @@ fn test_posterior_samples() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Get posterior samples for mu
     let samples = model.posterior_samples("mu", 100);
@@ -246,7 +249,7 @@ fn test_predict_samples() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Get prediction samples
     let pred_samples = model.predict_samples(&data, &Gaussian::new(), 50).unwrap();
@@ -290,7 +293,7 @@ fn test_predict_with_smooth() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Predict on training data
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
@@ -341,7 +344,7 @@ fn test_predict_missing_column_error() {
     );
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
-    let model = GamlssModel::fit(&y, &data, &formula, &Gaussian::new()).unwrap();
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Try to predict on data missing the 'x' column
     let mut bad_data = DataSet::new();

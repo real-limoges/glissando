@@ -75,7 +75,7 @@ impl WasmGamlssModel {
         let formula = parse_formula_json(formula_json)?;
         let family = get_distribution(distribution).map_err(|e| JsError::new(&e.to_string()))?;
 
-        let model = GamlssModel::fit(&y, &data, &formula, family.as_ref())
+        let model = GamlssModel::fit(&data, &y, &formula, family.as_ref())
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         Ok(WasmGamlssModel {
@@ -103,7 +103,7 @@ impl WasmGamlssModel {
         let config: FitConfig =
             serde_json::from_str(config_json).map_err(|e| JsError::new(&e.to_string()))?;
 
-        let model = GamlssModel::fit_with_config(&y, &data, &formula, family.as_ref(), config)
+        let model = GamlssModel::fit_with_config(&data, &y, &formula, family.as_ref(), config)
             .map_err(|e| JsError::new(&e.to_string()))?;
 
         Ok(WasmGamlssModel {
