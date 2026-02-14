@@ -6,7 +6,7 @@ use gamlss_rs::{
     DataSet, Formula, GamlssError, GamlssModel, Term,
 };
 use ndarray::Array1;
-use rand::Rng;
+use rand::RngExt;
 
 #[test]
 fn test_missing_variable_in_data() {
