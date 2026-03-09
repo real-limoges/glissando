@@ -1,3 +1,8 @@
+//! Penalized weighted least squares (PWLS) solver and GCV smoothing parameter optimization.
+//!
+//! Uses Cholesky decomposition for solving the PWLS system and L-BFGS (via argmin)
+//! for optimizing smoothing parameters (lambda) by minimizing the GCV score.
+
 use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
 use crate::linalg;
 use argmin::core::Gradient;
@@ -26,7 +31,7 @@ pub(crate) struct GamlssCost<'a> {
     pub(crate) x_matrix: &'a ModelMatrix,
     pub(crate) z: &'a Array1<f64>,
     pub(crate) w: &'a Array1<f64>,
-    pub(crate) penalty_matrices: &'a Vec<PenaltyMatrix>,
+    pub(crate) penalty_matrices: &'a [PenaltyMatrix],
 }
 
 impl<'a> CostFunction for GamlssCost<'a> {
@@ -135,7 +140,7 @@ pub(crate) fn run_optimization(
     x_model: &ModelMatrix,
     z: &Array1<f64>,
     w: &Array1<f64>,
-    penalty_matrices: &Vec<PenaltyMatrix>,
+    penalty_matrices: &[PenaltyMatrix],
     initial_lambdas: Option<&Array1<f64>>,
 ) -> Result<Array1<f64>, GamlssError> {
     let n_penalties = penalty_matrices.len();
@@ -160,7 +165,9 @@ pub(crate) fn run_optimization(
         _ => LogLambdas(Array1::<f64>::zeros(n_penalties)),
     };
 
-    // First, check if starting point is already good enough
+    // Check if starting point is already good enough.
+    // Intentional fallback: if cost computation fails (e.g., singular matrix at initial lambdas),
+    // treat it as worst-case so we proceed with optimization rather than aborting.
     let initial_cost = cost_function.cost(&initial_log_lambdas).unwrap_or(f64::MAX);
 
     // If we have a warm start and the cost is very low, skip optimization

@@ -1,3 +1,8 @@
+//! Posterior sampling for approximate Bayesian inference on fitted coefficients.
+//!
+//! Draws samples from N(β̂, V_β) via Cholesky decomposition of the posterior
+//! covariance matrix, enabling credible interval estimation for smooth terms.
+
 use super::{Coefficients, CovarianceMatrix};
 use crate::linalg;
 use ndarray::{Array1, Array2};

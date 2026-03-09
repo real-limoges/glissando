@@ -8,8 +8,8 @@
 //! # Quick start
 //!
 //! ```rust,no_run
-//! use gamlss_rs::{GamlssModel, DataSet, Formula, Term};
-//! use gamlss_rs::distributions::Gaussian;
+//! use glissando::{GamlssModel, DataSet, Formula, Term};
+//! use glissando::distributions::Gaussian;
 //! use ndarray::Array1;
 //!
 //! let y = Array1::from_vec(vec![2.1, 4.0, 5.9, 8.1, 10.0]);

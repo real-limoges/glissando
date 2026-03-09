@@ -1,3 +1,9 @@
+//! Batch-optimized digamma and trigamma functions over `Array1<f64>`.
+//!
+//! Provides vectorized special function evaluation with optional Rayon parallelism
+//! for large arrays (n >= 10,000). Uses recurrence relations for small arguments
+//! and asymptotic expansions for large arguments.
+
 use ndarray::Array1;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

@@ -4,7 +4,7 @@
 mod common;
 
 use common::Generator;
-use gamlss_rs::{
+use glissando::{
     distributions::{Gaussian, Poisson},
     DataSet, Formula, GamlssModel, Smooth, Term,
 };

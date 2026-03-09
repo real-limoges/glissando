@@ -4,7 +4,7 @@
 mod common;
 
 use common::Generator;
-use gamlss_rs::{
+use glissando::{
     distributions::{Gaussian, Poisson},
     DataSet, Formula, GamlssModel, Smooth, Term,
 };
@@ -179,7 +179,7 @@ fn test_spline_partition_of_unity() {
 
     let n_obs = data.n_obs().unwrap();
     let (mm, _, _) =
-        gamlss_rs::fitting::assembler::assemble_model_matrices(&data, n_obs, &[term]).unwrap();
+        glissando::fitting::assembler::assemble_model_matrices(&data, n_obs, &[term]).unwrap();
 
     // Check each row of the spline basis part of the ModelMatrix. each row sums to 1-ish
     for row in mm.0.rows() {

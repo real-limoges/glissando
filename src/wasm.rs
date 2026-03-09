@@ -1,3 +1,8 @@
+//! WebAssembly bindings via wasm-bindgen for browser-based GAMLSS fitting and prediction.
+//!
+//! Provides [`WasmGamlssModel`] with JSON-based I/O for use from JavaScript.
+//! Feature-gated behind the `wasm` feature flag.
+
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
