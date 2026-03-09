@@ -23,7 +23,7 @@ echo ""
 # Step 1: Build Rust binary
 echo "[1/4] Building Rust binary..."
 cd "${REPO_ROOT}"
-if cargo build --release -p gamlss_benchmark --bin compare_fit 2>/dev/null; then
+if cargo build --release -p glissando_benchmark --bin compare_fit 2>/dev/null; then
     RUST_BINARY="${REPO_ROOT}/target/release/compare_fit"
     echo "      Built: ${RUST_BINARY}"
 else

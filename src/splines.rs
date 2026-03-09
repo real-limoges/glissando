@@ -1,3 +1,8 @@
+//! B-spline basis construction and penalty matrices for P-spline smoothing.
+//!
+//! Provides routines for building B-spline basis matrices, difference-based penalty
+//! matrices, and Kronecker product utilities used by tensor product smooth terms.
+
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayViewMut1};
 
 /// Compute the Kronecker product of two matrices: C = A ⊗ B.
@@ -106,7 +111,8 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
         if !sorted_x.is_empty() {
             for i in 1..=num_interior_knots {
                 let quantile = i as f64 / (num_interior_knots + 1) as f64;
-                let idx = (quantile * (sorted_x.len() - 1) as f64).round() as usize;
+                let idx = ((quantile * (sorted_x.len() - 1) as f64).round() as usize)
+                    .min(sorted_x.len() - 1);
                 knots.push(sorted_x[idx]);
             }
         } else {
@@ -128,6 +134,10 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
 
 fn find_knot_span(x: f64, degree: usize, n_splines: usize, knots: &[f64]) -> usize {
     if knots.is_empty() {
+        return 0;
+    }
+
+    if degree >= knots.len() {
         return 0;
     }
 

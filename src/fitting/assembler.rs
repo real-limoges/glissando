@@ -1,3 +1,8 @@
+//! Design matrix and penalty matrix assembly from formula terms.
+//!
+//! Converts a [`Formula`] into numeric [`ModelMatrix`] and [`PenaltyMatrix`] structures
+//! that feed into the penalized weighted least squares solver.
+
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
     create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,

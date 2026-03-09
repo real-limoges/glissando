@@ -1,0 +1,23 @@
+{
+  "name": "glissando",
+  "type": "module",
+  "description": "GAMLSS implementation in Rust — generalized additive models for location, scale, and shape",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/real-limoges/glissando"
+  },
+  "files": [
+    "glissando_bg.wasm",
+    "glissando.js",
+    "glissando_bg.js",
+    "glissando.d.ts"
+  ],
+  "main": "glissando.js",
+  "types": "glissando.d.ts",
+  "sideEffects": [
+    "./glissando.js",
+    "./snippets/*"
+  ]
+}

@@ -1,3 +1,8 @@
+//! Input validation for model fitting.
+//!
+//! Checks datasets, response variables, and formulas for consistency, finite values,
+//! and correct dimensionality before fitting begins.
+
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
 use crate::types::{DataSet, Formula};

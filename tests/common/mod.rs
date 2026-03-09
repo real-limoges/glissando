@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use gamlss_rs::DataSet;
+use glissando::DataSet;
 use ndarray::Array1;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal, Poisson};

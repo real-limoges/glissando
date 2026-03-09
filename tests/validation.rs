@@ -4,7 +4,7 @@
 mod common;
 
 use common::Generator;
-use gamlss_rs::{
+use glissando::{
     distributions::{Gaussian, Poisson},
     DataSet, Formula, GamlssError, GamlssModel, Term,
 };
@@ -260,7 +260,7 @@ fn test_spline_smooth_recovery() {
     let mut formulas = Formula::new();
     formulas.add_terms(
         "mu".to_string(),
-        vec![Term::Smooth(gamlss_rs::Smooth::PSpline1D {
+        vec![Term::Smooth(glissando::Smooth::PSpline1D {
             col_name: "x".to_string(),
             n_splines: 15,
             degree: 3,
