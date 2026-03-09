@@ -1,7 +1,10 @@
 [package]
-name = "gamlss_rs"
+name = "glissando"
 version = "0.1.0"
 edition = "2021"
+description = "GAMLSS implementation in Rust — generalized additive models for location, scale, and shape"
+license = "MIT"
+repository = "https://github.com/real-limoges/glissando"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -11,7 +14,7 @@ default = ["openblas", "parallel"]
 
 # Backend selection (mutually exclusive in practice)
 openblas = ["ndarray-linalg", "argmin-math/ndarray_latest"]
-pure-rust = ["faer", "argmin-math/faer_latest"]
+pure-rust = ["faer"]
 
 # Serialization support (serde + ndarray/serde)
 serialization = ["serde", "serde_json", "ndarray/serde"]

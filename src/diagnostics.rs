@@ -10,12 +10,19 @@ const MIN_POSITIVE: f64 = 1e-10;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelDiagnostics {
+    /// Pearson residuals (standardized by distribution variance).
     pub pearson_residuals: Array1<f64>,
+    /// Raw response residuals (y - fitted mu).
     pub response_residuals: Array1<f64>,
+    /// Total effective degrees of freedom across all parameters.
     pub total_edf: f64,
+    /// Akaike Information Criterion.
     pub aic: f64,
+    /// Bayesian Information Criterion.
     pub bic: f64,
+    /// Model log-likelihood evaluated at fitted parameters.
     pub log_likelihood: f64,
+    /// Number of observations.
     pub n_obs: usize,
 }
 
