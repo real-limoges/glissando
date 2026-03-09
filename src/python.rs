@@ -1,3 +1,8 @@
+//! Python bindings via PyO3 for the glissando GAMLSS library.
+//!
+//! Exposes model fitting and prediction through NumPy arrays, enabling use from Python.
+//! Feature-gated behind the `python` feature flag.
+
 use ndarray::Array1;
 use numpy::{PyReadonlyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -390,7 +395,7 @@ impl PyGamlssModel {
 }
 
 #[pymodule]
-fn gamlss_rs(m: &Bound<PyModule>) -> PyResult<()> {
+fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyGamlssModel>()?;
     m.add_class::<PyGaussian>()?;
     m.add_class::<PyPoisson>()?;

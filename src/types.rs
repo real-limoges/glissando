@@ -182,22 +182,27 @@ impl_deref_for_matrix_wrapper!(ModelMatrix);
 pub struct DataSet(pub HashMap<String, Array1<f64>>);
 
 impl DataSet {
+    /// Creates an empty dataset.
     pub fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Returns the column with the given name, if present.
     pub fn column(&self, name: &str) -> Option<&Array1<f64>> {
         self.0.get(name)
     }
 
+    /// Returns the number of observations (rows), or `None` if the dataset is empty.
     pub fn n_obs(&self) -> Option<usize> {
         self.0.values().next().map(|v| v.len())
     }
 
+    /// Returns the number of columns in the dataset.
     pub fn n_columns(&self) -> usize {
         self.0.len()
     }
 
+    /// Inserts or replaces a named column.
     pub fn insert_column(&mut self, name: impl Into<String>, values: Array1<f64>) {
         self.0.insert(name.into(), values);
     }
@@ -239,19 +244,23 @@ impl From<HashMap<String, Array1<f64>>> for DataSet {
 pub struct Formula(pub HashMap<String, Vec<Term>>);
 
 impl Formula {
+    /// Creates an empty formula with no parameter terms.
     pub fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Builder method: adds terms for a distribution parameter, returning `self`.
     pub fn with_terms(mut self, param: impl Into<String>, terms: Vec<Term>) -> Self {
         self.0.insert(param.into(), terms);
         self
     }
 
+    /// Adds or replaces terms for a distribution parameter.
     pub fn add_terms(&mut self, param: impl Into<String>, terms: Vec<Term>) {
         self.0.insert(param.into(), terms);
     }
 
+    /// Returns the names of all distribution parameters in this formula.
     pub fn param_names(&self) -> Vec<&String> {
         self.0.keys().collect()
     }

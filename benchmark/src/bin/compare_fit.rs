@@ -1,13 +1,13 @@
 //! GAMLSS Comparison Framework: Rust Fitting Binary
 //!
-//! Reads parquet data, fits models using gamlss_rs,
+//! Reads parquet data, fits models using glissando,
 //! and outputs standardized JSON results for comparison with R/mgcv.
 //!
 //! Usage:
-//!   cargo run -p gamlss_benchmark --bin compare_fit -- --data path/to/data.parquet --scenario gaussian_linear --output result.json
+//!   cargo run -p glissando_benchmark --bin compare_fit -- --data path/to/data.parquet --scenario gaussian_linear --output result.json
 
-use gamlss_rs::distributions::{Beta, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
-use gamlss_rs::{DataSet, Formula, GamlssModel, Smooth, Term};
+use glissando::distributions::{Beta, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
+use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
 use serde::Serialize;
@@ -45,7 +45,7 @@ fn extract_column(df: &DataFrame, name: &str) -> Array1<f64> {
     Array1::from_vec(ca.into_no_null_iter().collect())
 }
 
-fn error_result(start: Instant, e: gamlss_rs::GamlssError) -> FitResult {
+fn error_result(start: Instant, e: glissando::GamlssError) -> FitResult {
     FitResult {
         converged: false,
         iterations: 0,

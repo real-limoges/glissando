@@ -1,6 +1,6 @@
 # Mathematical Foundations of GAMLSS
 
-This document provides detailed mathematical derivations for the GAMLSS implementation in `gamlss_rs`. It covers distribution-specific derivatives, special functions, numerical algorithms, and convergence theory.
+This document provides detailed mathematical derivations for the GAMLSS implementation in `glissando`. It covers distribution-specific derivatives, special functions, numerical algorithms, and convergence theory.
 
 ## Table of Contents
 

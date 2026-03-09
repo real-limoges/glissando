@@ -338,12 +338,12 @@ impl Distribution for StudentT {
                 .map(|(&nu_i, &z2_i)| (nu_i + 1.0) / (nu_i + z2_i))
                 .collect()
         } else {
-            let nu_slice = nu.as_slice().expect("nu array not contiguous");
-            let z_sq_slice = z_sq.as_slice().expect("z_sq array not contiguous");
+            let nu_vec = nu.to_vec();
+            let z_sq_vec = z_sq.to_vec();
             Array1::from_vec(
-                nu_slice
+                nu_vec
                     .par_iter()
-                    .zip(z_sq_slice.par_iter())
+                    .zip(z_sq_vec.par_iter())
                     .map(|(&nu_i, &z2_i)| (nu_i + 1.0) / (nu_i + z2_i))
                     .collect(),
             )
@@ -388,18 +388,18 @@ impl Distribution for StudentT {
                 .collect();
             (t3, t4)
         } else {
-            let nu_slice = nu.as_slice().expect("nu array not contiguous");
-            let z_sq_slice = z_sq.as_slice().expect("z_sq array not contiguous");
-            let w_robust_slice = w_robust.as_slice().expect("w_robust array not contiguous");
+            let nu_vec = nu.to_vec();
+            let z_sq_vec = z_sq.to_vec();
+            let w_robust_vec = w_robust.to_vec();
 
-            let t3: Vec<f64> = nu_slice
+            let t3: Vec<f64> = nu_vec
                 .par_iter()
-                .zip(z_sq_slice.par_iter())
+                .zip(z_sq_vec.par_iter())
                 .map(|(&nu_i, &z2_i)| (1.0 + z2_i / nu_i).ln())
                 .collect();
             let t4: Vec<f64> = (0..n)
                 .into_par_iter()
-                .map(|i| (w_robust_slice[i] * z_sq_slice[i] - 1.0) / nu_slice[i])
+                .map(|i| (w_robust_vec[i] * z_sq_vec[i] - 1.0) / nu_vec[i])
                 .collect();
             (Array1::from_vec(t3), Array1::from_vec(t4))
         };
@@ -441,12 +441,12 @@ impl Distribution for StudentT {
                 .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(MIN_WEIGHT))
                 .collect()
         } else {
-            let i_nu_slice = i_nu.as_slice().expect("i_nu array not contiguous");
-            let nu_slice = nu.as_slice().expect("nu array not contiguous");
+            let i_nu_vec = i_nu.to_vec();
+            let nu_vec = nu.to_vec();
             Array1::from_vec(
-                i_nu_slice
+                i_nu_vec
                     .par_iter()
-                    .zip(nu_slice.par_iter())
+                    .zip(nu_vec.par_iter())
                     .map(|(&i, &nu_i)| (i * nu_i.powi(2)).abs().max(MIN_WEIGHT))
                     .collect(),
             )
@@ -638,12 +638,12 @@ impl Distribution for NegativeBinomial {
                 .map(|(&s, &m)| 1.0 + s * m)
                 .collect()
         } else {
-            let sigma_slice = sigma_safe.as_slice().expect("sigma array not contiguous");
-            let mu_slice = mu_safe.as_slice().expect("mu array not contiguous");
+            let sigma_vec = sigma_safe.to_vec();
+            let mu_vec = mu_safe.to_vec();
             Array1::from_vec(
-                sigma_slice
+                sigma_vec
                     .par_iter()
-                    .zip(mu_slice.par_iter())
+                    .zip(mu_vec.par_iter())
                     .map(|(&s, &m)| 1.0 + s * m)
                     .collect(),
             )

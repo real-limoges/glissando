@@ -1,10 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use gamlss_rs::distributions::{
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use glissando::distributions::{
     Beta, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
 use ndarray::Array1;
 use statrs::function::gamma::digamma as statrs_digamma;
 use std::collections::HashMap;
+use std::hint::black_box;
 
 fn generate_test_data(n: usize) -> (Array1<f64>, Array1<f64>, Array1<f64>, Array1<f64>) {
     // Generate realistic parameter values
@@ -151,7 +152,7 @@ fn bench_special_functions(c: &mut Criterion) {
 }
 
 fn bench_full_model_fit(c: &mut Criterion) {
-    use gamlss_rs::{DataSet, Formula, GamlssModel, Term};
+    use glissando::{DataSet, Formula, GamlssModel, Term};
 
     let mut group = c.benchmark_group("full_model_fit");
     group.sample_size(20); // Fewer samples for slower benchmarks

@@ -4,7 +4,7 @@
 mod common;
 
 use common::Generator;
-use gamlss_rs::{
+use glissando::{
     diagnostics::{
         compute_aic, compute_bic, loglik_gaussian, loglik_poisson, pearson_residuals_gaussian,
         pearson_residuals_poisson, response_residuals, total_edf,
