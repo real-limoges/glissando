@@ -24,21 +24,25 @@ enum FamilyType {
 }
 
 impl FamilyType {
+    fn as_distribution(&self) -> &dyn Distribution {
+        match self {
+            FamilyType::Gaussian(d) => d,
+            FamilyType::Poisson(d) => d,
+            FamilyType::Binomial(d) => d,
+            FamilyType::Gamma(d) => d,
+            FamilyType::NegativeBinomial(d) => d,
+            FamilyType::Beta(d) => d,
+            FamilyType::StudentT(d) => d,
+        }
+    }
+
     fn fit_model(
         &self,
         data: &DataSet,
         y: &Array1<f64>,
         formula: &Formula,
     ) -> Result<GamlssModel, GamlssError> {
-        match self {
-            FamilyType::Gaussian(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::Poisson(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::Binomial(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::Gamma(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::NegativeBinomial(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::Beta(d) => GamlssModel::fit(data, y, formula, d),
-            FamilyType::StudentT(d) => GamlssModel::fit(data, y, formula, d),
-        }
+        GamlssModel::fit(data, y, formula, self.as_distribution())
     }
 
     fn predict(
@@ -46,41 +50,34 @@ impl FamilyType {
         model: &GamlssModel,
         new_data: &DataSet,
     ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
-        match self {
-            FamilyType::Gaussian(d) => model.predict(new_data, d),
-            FamilyType::Poisson(d) => model.predict(new_data, d),
-            FamilyType::Binomial(d) => model.predict(new_data, d),
-            FamilyType::Gamma(d) => model.predict(new_data, d),
-            FamilyType::NegativeBinomial(d) => model.predict(new_data, d),
-            FamilyType::Beta(d) => model.predict(new_data, d),
-            FamilyType::StudentT(d) => model.predict(new_data, d),
-        }
+        model.predict(new_data, self.as_distribution())
     }
 }
 
 // Distribution wrapper classes
-#[pyclass(name = "Gaussian", frozen)]
-struct PyGaussian;
+macro_rules! py_distribution {
+    ($py_name:ident, $name:expr) => {
+        #[pyclass(name = $name, frozen)]
+        struct $py_name;
 
-#[pymethods]
-impl PyGaussian {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
+        #[pymethods]
+        impl $py_name {
+            #[new]
+            fn new() -> Self {
+                Self
+            }
+        }
+    };
 }
 
-#[pyclass(name = "Poisson", frozen)]
-struct PyPoisson;
+py_distribution!(PyGaussian, "Gaussian");
+py_distribution!(PyPoisson, "Poisson");
+py_distribution!(PyGamma, "Gamma");
+py_distribution!(PyNegativeBinomial, "NegativeBinomial");
+py_distribution!(PyBeta, "Beta");
+py_distribution!(PyStudentT, "StudentT");
 
-#[pymethods]
-impl PyPoisson {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-}
-
+// Binomial has state (n_trials), so it's defined manually.
 #[pyclass(name = "Binomial", frozen)]
 struct PyBinomial {
     n_trials: Vec<f64>,
@@ -91,50 +88,6 @@ impl PyBinomial {
     #[new]
     fn new(n_trials: Vec<f64>) -> Self {
         Self { n_trials }
-    }
-}
-
-#[pyclass(name = "Gamma", frozen)]
-struct PyGamma;
-
-#[pymethods]
-impl PyGamma {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[pyclass(name = "NegativeBinomial", frozen)]
-struct PyNegativeBinomial;
-
-#[pymethods]
-impl PyNegativeBinomial {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[pyclass(name = "Beta", frozen)]
-struct PyBeta;
-
-#[pymethods]
-impl PyBeta {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[pyclass(name = "StudentT", frozen)]
-struct PyStudentT;
-
-#[pymethods]
-impl PyStudentT {
-    #[new]
-    fn new() -> Self {
-        Self
     }
 }
 
@@ -167,14 +120,10 @@ fn py_dict_to_formula(py: Python, py_dict: &Bound<PyDict>) -> PyResult<Formula> 
 }
 
 fn parse_terms(py: Python, term_list: &Bound<pyo3::types::PyList>) -> PyResult<Vec<Term>> {
-    let mut terms = Vec::new();
-
-    for item in term_list.iter() {
-        let term = parse_single_term(py, &item)?;
-        terms.push(term);
-    }
-
-    Ok(terms)
+    term_list
+        .iter()
+        .map(|item| parse_single_term(py, &item))
+        .collect()
 }
 
 #[allow(deprecated)]
