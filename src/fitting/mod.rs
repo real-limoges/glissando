@@ -253,7 +253,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             model.edf = edf;
 
             param_diagnostics.insert(
-                param_key.clone(),
+                param_key,
                 ParamDiagnostic {
                     final_eta_change: eta_change,
                     final_lambda_change: lambda_change,
