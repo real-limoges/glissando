@@ -7,7 +7,7 @@
 //!
 //! # Quick start
 //!
-//! ```rust,no_run
+//! ```
 //! use glissando::{GamlssModel, DataSet, Formula, Term};
 //! use glissando::distributions::Gaussian;
 //! use ndarray::Array1;
@@ -21,6 +21,7 @@
 //!     .with_terms("sigma", vec![Term::Intercept]);
 //!
 //! let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+//! assert!(model.converged());
 //! ```
 
 pub mod diagnostics;
@@ -133,12 +134,35 @@ impl GamlssModel {
     ///
     /// Returns a HashMap with parameter names as keys and fitted values (on response scale)
     /// as values. The distribution is needed to obtain the appropriate link functions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use glissando::{GamlssModel, DataSet, Formula, Term};
+    /// use glissando::distributions::Gaussian;
+    /// use ndarray::Array1;
+    ///
+    /// let y = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    /// let mut data = DataSet::new();
+    /// data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
+    /// let formula = Formula::new()
+    ///     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".into() }])
+    ///     .with_terms("sigma", vec![Term::Intercept]);
+    /// let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+    ///
+    /// let mut new_data = DataSet::new();
+    /// new_data.insert_column("x", Array1::from_vec(vec![6.0, 7.0]));
+    /// let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
+    /// assert_eq!(preds["mu"].len(), 2);
+    /// ```
     pub fn predict<D: Distribution + ?Sized>(
         &self,
         new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
-        let n_obs = new_data.n_obs().unwrap_or(0);
+        let n_obs = new_data
+            .n_obs()
+            .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut predictions = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
@@ -163,7 +187,9 @@ impl GamlssModel {
         new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, PredictionResult>, GamlssError> {
-        let n_obs = new_data.n_obs().unwrap_or(0);
+        let n_obs = new_data
+            .n_obs()
+            .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
@@ -202,9 +228,8 @@ impl GamlssModel {
     /// Uses Cholesky decomposition of the covariance matrix to generate samples
     /// from the approximate posterior N(beta_hat, V_beta).
     pub fn posterior_samples(&self, param_name: &str, n_samples: usize) -> Vec<Coefficients> {
-        let fitted_param = match self.models.get(param_name) {
-            Some(p) => p,
-            None => return vec![],
+        let Some(fitted_param) = self.models.get(param_name) else {
+            return vec![];
         };
 
         fitting::sample_posterior(
@@ -227,7 +252,9 @@ impl GamlssModel {
         family: &D,
         n_samples: usize,
     ) -> Result<HashMap<String, Vec<Array1<f64>>>, GamlssError> {
-        let n_obs = new_data.n_obs().unwrap_or(0);
+        let n_obs = new_data
+            .n_obs()
+            .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {

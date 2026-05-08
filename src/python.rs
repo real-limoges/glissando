@@ -1,18 +1,20 @@
-//! Python bindings via PyO3 for the glissando GAMLSS library.
+//! Python bindings via PyO3.
 //!
-//! Exposes model fitting and prediction through NumPy arrays, enabling use from Python.
-//! Feature-gated behind the `python` feature flag.
+//! Exposes model fitting and prediction over NumPy arrays. Term and family parsing
+//! lives in `terms::py_parse` and `distributions` so this file stays a thin
+//! marshalling layer between Python and the core Rust API.
 
 use ndarray::Array1;
 use numpy::{PyReadonlyArray1, ToPyArray};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 
-use crate::{distributions::*, DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
+use crate::terms::py_parse;
+use crate::{distributions::*, DataSet, Formula, GamlssError, GamlssModel};
 
-// Internal enum to dispatch to concrete distribution types
+/// Internal enum dispatching to a concrete Distribution while preserving its concrete type.
 enum FamilyType {
     Gaussian(Gaussian),
     Poisson(Poisson),
@@ -54,7 +56,7 @@ impl FamilyType {
     }
 }
 
-// Distribution wrapper classes
+// Stateless distribution wrappers — the Python class carries no data.
 macro_rules! py_distribution {
     ($py_name:ident, $name:expr) => {
         #[pyclass(name = $name, frozen)]
@@ -77,7 +79,7 @@ py_distribution!(PyNegativeBinomial, "NegativeBinomial");
 py_distribution!(PyBeta, "Beta");
 py_distribution!(PyStudentT, "StudentT");
 
-// Binomial has state (n_trials), so it's defined manually.
+/// Binomial carries `n_trials` state, so it gets a manual `pyclass`.
 #[pyclass(name = "Binomial", frozen)]
 struct PyBinomial {
     n_trials: Vec<f64>,
@@ -91,125 +93,27 @@ impl PyBinomial {
     }
 }
 
-// Helper functions
-fn py_dict_to_dataset(_py: Python, py_dict: &Bound<PyDict>) -> PyResult<DataSet> {
+fn py_dict_to_dataset(py_dict: &Bound<'_, PyDict>) -> PyResult<DataSet> {
     let mut dataset = DataSet::new();
-
     for (key, value) in py_dict.iter() {
         let col_name: String = key.extract()?;
         let array: PyReadonlyArray1<f64> = value.extract()?;
         dataset.insert_column(col_name, array.as_array().to_owned());
     }
-
     Ok(dataset)
 }
 
-#[allow(deprecated)]
-fn py_dict_to_formula(py: Python, py_dict: &Bound<PyDict>) -> PyResult<Formula> {
+fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
-
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
-        // Use borrowed downcast for iterator values
-        let term_list: &Bound<pyo3::types::PyList> = terms.downcast()?;
-        let rust_terms = parse_terms(py, term_list)?;
-        formula.add_terms(param_name, rust_terms);
+        let term_list: &Bound<pyo3::types::PyList> = terms.cast()?;
+        formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
     }
-
     Ok(formula)
 }
 
-fn parse_terms(py: Python, term_list: &Bound<pyo3::types::PyList>) -> PyResult<Vec<Term>> {
-    term_list
-        .iter()
-        .map(|item| parse_single_term(py, &item))
-        .collect()
-}
-
-#[allow(deprecated)]
-fn parse_single_term(_py: Python, item: &Bound<PyAny>) -> PyResult<Term> {
-    // Each term is a tuple: ("intercept",) or ("linear", "x") or ("smooth", "x", {...})
-    let tuple: &Bound<PyTuple> = item.downcast()?;
-
-    if tuple.len() == 0 {
-        return Err(PyValueError::new_err("Empty term tuple"));
-    }
-
-    let term_type: String = tuple.get_item(0)?.extract()?;
-
-    match term_type.as_str() {
-        "intercept" => Ok(Term::Intercept),
-
-        "linear" => {
-            if tuple.len() != 2 {
-                return Err(PyValueError::new_err(
-                    "Linear term requires: ('linear', 'col_name')",
-                ));
-            }
-            let col_name: String = tuple.get_item(1)?.extract()?;
-            Ok(Term::Linear { col_name })
-        }
-
-        "smooth" => {
-            if tuple.len() < 2 {
-                return Err(PyValueError::new_err(
-                    "Smooth term requires at least: ('smooth', 'col_name')",
-                ));
-            }
-            let col_name: String = tuple.get_item(1)?.extract()?;
-
-            // Optional kwargs dict for smooth parameters
-            #[allow(deprecated)]
-            let (n_splines, degree, penalty_order) = if tuple.len() >= 3 {
-                let kwargs_item = tuple.get_item(2)?;
-                let kwargs: &Bound<PyDict> = kwargs_item.downcast()?;
-                let n_splines = kwargs
-                    .get_item("n_splines")?
-                    .map(|v| v.extract::<usize>())
-                    .transpose()?
-                    .unwrap_or(10);
-                let degree = kwargs
-                    .get_item("degree")?
-                    .map(|v| v.extract::<usize>())
-                    .transpose()?
-                    .unwrap_or(3);
-                let penalty_order = kwargs
-                    .get_item("penalty_order")?
-                    .map(|v| v.extract::<usize>())
-                    .transpose()?
-                    .unwrap_or(2);
-                (n_splines, degree, penalty_order)
-            } else {
-                (10, 3, 2)
-            };
-
-            Ok(Term::Smooth(Smooth::PSpline1D {
-                col_name,
-                n_splines,
-                degree,
-                penalty_order,
-            }))
-        }
-
-        "random" => {
-            if tuple.len() != 2 {
-                return Err(PyValueError::new_err(
-                    "Random effect requires: ('random', 'col_name')",
-                ));
-            }
-            let col_name: String = tuple.get_item(1)?.extract()?;
-            Ok(Term::Smooth(Smooth::RandomEffect { col_name }))
-        }
-
-        _ => Err(PyValueError::new_err(format!(
-            "Unknown term type: {}. Use 'intercept', 'linear', 'smooth', or 'random'",
-            term_type
-        ))),
-    }
-}
-
-fn extract_family(_py: Python, family_obj: &Bound<PyAny>) -> PyResult<FamilyType> {
-    // Try each distribution type
+fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyGaussian>>().is_ok() {
         return Ok(FamilyType::Gaussian(Gaussian::new()));
     }
@@ -217,8 +121,9 @@ fn extract_family(_py: Python, family_obj: &Bound<PyAny>) -> PyResult<FamilyType
         return Ok(FamilyType::Poisson(Poisson::new()));
     }
     if let Ok(b) = family_obj.extract::<PyRef<PyBinomial>>() {
-        let n_trials = Array1::from_vec(b.n_trials.clone());
-        return Ok(FamilyType::Binomial(Binomial::with_trials(n_trials)));
+        return Ok(FamilyType::Binomial(Binomial::with_trials(
+            Array1::from_vec(b.n_trials.clone()),
+        )));
     }
     if family_obj.extract::<PyRef<PyGamma>>().is_ok() {
         return Ok(FamilyType::Gamma(Gamma::new()));
@@ -234,11 +139,10 @@ fn extract_family(_py: Python, family_obj: &Bound<PyAny>) -> PyResult<FamilyType
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), or StudentT()"
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), or StudentT()",
     ))
 }
 
-// Main model wrapper
 #[pyclass(name = "GamlssModel")]
 struct PyGamlssModel {
     inner: GamlssModel,
@@ -266,33 +170,18 @@ impl PyGamlssModel {
     /// -------
     /// GamlssModel
     ///     Fitted model object
-    ///
-    /// Examples
-    /// --------
-    /// >>> model = GamlssModel.fit(
-    /// ...     data={'x': [1.0, 2.0, 3.0, 4.0, 5.0]},
-    /// ...     y=[2.1, 4.0, 5.9, 8.1, 10.0],
-    /// ...     formula={
-    /// ...         'mu': [('intercept',), ('linear', 'x')],
-    /// ...         'sigma': [('intercept',)]
-    /// ...     },
-    /// ...     family=Gaussian()
-    /// ... )
     #[staticmethod]
     fn fit(
-        py: Python,
         data: &Bound<PyDict>,
         y: PyReadonlyArray1<f64>,
         formula: &Bound<PyDict>,
         family: &Bound<PyAny>,
     ) -> PyResult<Self> {
-        // Convert inputs
-        let dataset = py_dict_to_dataset(py, data)?;
+        let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
-        let rust_formula = py_dict_to_formula(py, formula)?;
-        let family_type = extract_family(py, family)?;
+        let rust_formula = py_dict_to_formula(formula)?;
+        let family_type = extract_family(family)?;
 
-        // Fit model
         let model = family_type
             .fit_model(&dataset, &y_array, &rust_formula)
             .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
@@ -303,41 +192,21 @@ impl PyGamlssModel {
         })
     }
 
-    /// Predict fitted values for new data.
-    ///
-    /// Parameters
-    /// ----------
-    /// new_data : dict
-    ///     Dictionary mapping column names to 1D arrays
-    ///
-    /// Returns
-    /// -------
-    /// dict
-    ///     Dictionary mapping parameter names to predicted values (1D arrays)
-    fn predict(&self, py: Python, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
-        let dataset = py_dict_to_dataset(py, new_data)?;
-
+    /// Predict fitted values for new data. Returns `{param_name: array}`.
+    fn predict(&self, py: Python<'_>, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
+        let dataset = py_dict_to_dataset(new_data)?;
         let predictions = self
             .family
             .predict(&self.inner, &dataset)
             .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
 
-        // Convert HashMap<String, Array1<f64>> to Python dict
         let py_dict = PyDict::new(py);
         for (param_name, values) in predictions {
-            let py_array = values.to_pyarray(py);
-            py_dict.set_item(param_name, py_array)?;
+            py_dict.set_item(param_name, values.to_pyarray(py))?;
         }
-
         Ok(py_dict.into())
     }
 
-    /// Check if the model converged.
-    ///
-    /// Returns
-    /// -------
-    /// bool
-    ///     True if the model converged, False otherwise
     fn converged(&self) -> bool {
         self.inner.converged()
     }

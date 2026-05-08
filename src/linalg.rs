@@ -1,88 +1,98 @@
-//! Linear algebra backend abstraction layer.
+//! Linear algebra backend abstraction.
 //!
-//! This module provides a unified interface for linear algebra operations,
-//! supporting multiple backends:
-//! - `openblas`: Uses ndarray-linalg with OpenBLAS (default, highest performance)
-//! - `pure-rust`: Uses nalgebra for pure Rust implementation (WASM-compatible, no relaxed SIMD)
+//! Two mutually exclusive backends are selected at compile time:
+//! - `openblas` (default): `ndarray-linalg` with system OpenBLAS — fastest on native targets.
+//! - `pure-rust`: `nalgebra` — no system dependencies, WASM-compatible.
 //!
-//! The backend is selected at compile time via feature flags.
+//! Each backend module exposes the same `solve`, `inv`, and `cholesky_lower` functions,
+//! and the file-level `pub use` re-exports the active backend's set.
 
 use crate::GamlssError;
-use ndarray::{Array1, Array2};
 
 /// Result type for linear algebra operations.
 pub type Result<T> = std::result::Result<T, GamlssError>;
 
-// =============================================================================
-// OpenBLAS Backend (default)
-// =============================================================================
-
 #[cfg(feature = "openblas")]
-pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-    use ndarray_linalg::Solve;
-    Ok(a.solve(b)?)
-}
+mod backend {
+    use super::Result;
+    use ndarray::{Array1, Array2};
+    use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
-#[cfg(feature = "openblas")]
-pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-    use ndarray_linalg::Inverse;
-    Ok(a.inv()?)
-}
+    pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
+        Ok(a.solve(b)?)
+    }
 
-#[cfg(feature = "openblas")]
-pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
-    use ndarray_linalg::{Cholesky, UPLO};
-    Ok(a.cholesky(UPLO::Lower)?)
-}
+    pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
+        Ok(a.inv()?)
+    }
 
-// =============================================================================
-// Pure Rust Backend (nalgebra) - WASM compatible, no relaxed SIMD
-// =============================================================================
-
-#[cfg(feature = "pure-rust")]
-pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-    let a_na = to_dmatrix(a);
-    let b_na = nalgebra::DVector::from_iterator(b.len(), b.iter().copied());
-    let x = a_na.lu().solve(&b_na).ok_or_else(|| {
-        GamlssError::Linalg("Linear system is singular or ill-conditioned".to_string())
-    })?;
-    Ok(Array1::from_iter(x.iter().copied()))
+    pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
+        Ok(a.cholesky(UPLO::Lower)?)
+    }
 }
 
 #[cfg(feature = "pure-rust")]
-pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-    let a_na = to_dmatrix(a);
-    let inv = a_na.try_inverse().ok_or_else(|| {
-        GamlssError::Linalg("Matrix is singular, cannot compute inverse".to_string())
-    })?;
-    Ok(from_dmatrix(&inv))
+mod backend {
+    use super::Result;
+    use crate::GamlssError;
+    use nalgebra::{DMatrix, DVector};
+    use ndarray::{Array1, Array2};
+
+    /// Convert an `Array2<f64>` (row-major in standard layout) to a column-major nalgebra `DMatrix`.
+    ///
+    /// Uses the underlying contiguous slice when available (a memcpy plus a transpose);
+    /// falls back to element-wise iteration for non-standard layouts.
+    fn to_dmatrix(arr: &Array2<f64>) -> DMatrix<f64> {
+        let (nrows, ncols) = arr.dim();
+        match arr.as_slice() {
+            // `as_slice` returns row-major data; `from_row_slice` matches that layout.
+            Some(s) => DMatrix::from_row_slice(nrows, ncols, s),
+            None => DMatrix::from_iterator(nrows, ncols, arr.t().iter().copied()),
+        }
+    }
+
+    /// Convert a column-major nalgebra `DMatrix` back to a row-major `Array2<f64>`.
+    fn from_dmatrix(mat: &DMatrix<f64>) -> Array2<f64> {
+        let (nrows, ncols) = (mat.nrows(), mat.ncols());
+        // `mat.as_slice()` is column-major; build row-major Array2 by reading columns.
+        let mut out = Array2::<f64>::zeros((nrows, ncols));
+        for j in 0..ncols {
+            for i in 0..nrows {
+                out[[i, j]] = mat[(i, j)];
+            }
+        }
+        out
+    }
+
+    pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
+        let a_na = to_dmatrix(a);
+        let b_na = DVector::from_iterator(b.len(), b.iter().copied());
+        let x = a_na.lu().solve(&b_na).ok_or_else(|| {
+            GamlssError::Linalg("Linear system is singular or ill-conditioned".to_string())
+        })?;
+        Ok(Array1::from_iter(x.iter().copied()))
+    }
+
+    pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
+        let a_na = to_dmatrix(a);
+        let inv = a_na.try_inverse().ok_or_else(|| {
+            GamlssError::Linalg("Matrix is singular, cannot compute inverse".to_string())
+        })?;
+        Ok(from_dmatrix(&inv))
+    }
+
+    pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
+        let a_na = to_dmatrix(a);
+        let chol = a_na.cholesky().ok_or_else(|| {
+            GamlssError::Linalg(
+                "Cholesky decomposition failed (matrix not positive definite)".to_string(),
+            )
+        })?;
+        Ok(from_dmatrix(&chol.l()))
+    }
 }
 
-#[cfg(feature = "pure-rust")]
-pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
-    let a_na = to_dmatrix(a);
-    let chol = a_na.cholesky().ok_or_else(|| {
-        GamlssError::Linalg(
-            "Cholesky decomposition failed (matrix not positive definite)".to_string(),
-        )
-    })?;
-    Ok(from_dmatrix(&chol.l()))
-}
-
-#[cfg(feature = "pure-rust")]
-fn to_dmatrix(arr: &Array2<f64>) -> nalgebra::DMatrix<f64> {
-    let (nrows, ncols) = arr.dim();
-    nalgebra::DMatrix::from_fn(nrows, ncols, |i, j| arr[[i, j]])
-}
-
-#[cfg(feature = "pure-rust")]
-fn from_dmatrix(mat: &nalgebra::DMatrix<f64>) -> Array2<f64> {
-    Array2::from_shape_fn((mat.nrows(), mat.ncols()), |(i, j)| mat[(i, j)])
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
+pub use backend::{cholesky_lower, inv, solve};
 
 #[cfg(test)]
 mod tests {
@@ -93,10 +103,7 @@ mod tests {
     fn test_solve() {
         let a = array![[4.0, 2.0], [2.0, 3.0]];
         let b = array![8.0, 7.0];
-
         let x = solve(&a, &b).unwrap();
-
-        // Check Ax ≈ b
         let ax = a.dot(&x);
         assert!((ax[0] - b[0]).abs() < 1e-10);
         assert!((ax[1] - b[1]).abs() < 1e-10);
@@ -105,10 +112,7 @@ mod tests {
     #[test]
     fn test_inv() {
         let a = array![[4.0, 2.0], [2.0, 3.0]];
-
         let a_inv = inv(&a).unwrap();
-
-        // Check A * A^-1 ≈ I
         let identity = a.dot(&a_inv);
         assert!((identity[[0, 0]] - 1.0).abs() < 1e-10);
         assert!((identity[[1, 1]] - 1.0).abs() < 1e-10);
@@ -118,12 +122,8 @@ mod tests {
 
     #[test]
     fn test_cholesky() {
-        // Positive definite matrix
         let a = array![[4.0, 2.0], [2.0, 3.0]];
-
         let l = cholesky_lower(&a).unwrap();
-
-        // Check L * L^T ≈ A
         let lt = l.t().to_owned();
         let reconstructed = l.dot(&lt);
         assert!((reconstructed[[0, 0]] - a[[0, 0]]).abs() < 1e-10);
@@ -134,10 +134,8 @@ mod tests {
 
     #[test]
     fn test_cholesky_not_positive_definite() {
-        // Not positive definite (negative eigenvalue)
+        // Indefinite matrix (eigenvalues -1 and 3).
         let a = array![[1.0, 2.0], [2.0, 1.0]];
-
-        let result = cholesky_lower(&a);
-        assert!(result.is_err());
+        assert!(cholesky_lower(&a).is_err());
     }
 }
