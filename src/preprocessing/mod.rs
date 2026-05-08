@@ -92,3 +92,133 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distributions::Gaussian;
+    use crate::terms::Term;
+
+    fn gaussian_formula() -> Formula {
+        Formula::new()
+            .with_terms("mu", vec![Term::Intercept])
+            .with_terms("sigma", vec![Term::Intercept])
+    }
+
+    fn data_with(name: &str, values: Vec<f64>) -> DataSet {
+        let mut d = DataSet::new();
+        d.insert_column(name, Array1::from_vec(values));
+        d
+    }
+
+    #[test]
+    fn rejects_empty_response() {
+        let y = Array1::<f64>::zeros(0);
+        let data = DataSet::new();
+        let f = gaussian_formula();
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        assert!(matches!(err, GamlssError::EmptyData));
+    }
+
+    #[test]
+    fn rejects_non_finite_response() {
+        let y = Array1::from_vec(vec![1.0, f64::NAN, 3.0]);
+        let data = DataSet::new();
+        let f = gaussian_formula();
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        match err {
+            GamlssError::NonFiniteValues { count, .. } => assert_eq!(count, 1),
+            other => panic!("expected NonFiniteValues, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_formula_for_parameter() {
+        let y = Array1::from_vec(vec![1.0, 2.0]);
+        let data = DataSet::new();
+        let f = Formula::new().with_terms("mu", vec![Term::Intercept]);
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        match err {
+            GamlssError::MissingFormula { param } => assert_eq!(param, "sigma"),
+            other => panic!("expected MissingFormula, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_referenced_column() {
+        let y = Array1::from_vec(vec![1.0, 2.0]);
+        let data = DataSet::new();
+        let f = Formula::new()
+            .with_terms(
+                "mu",
+                vec![Term::Linear {
+                    col_name: "x".to_string(),
+                }],
+            )
+            .with_terms("sigma", vec![Term::Intercept]);
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        match err {
+            GamlssError::MissingVariable { name } => assert_eq!(name, "x"),
+            other => panic!("expected MissingVariable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_mismatched_column_length() {
+        let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let data = data_with("x", vec![1.0, 2.0]); // length 2, y is length 3
+        let f = Formula::new()
+            .with_terms(
+                "mu",
+                vec![Term::Linear {
+                    col_name: "x".to_string(),
+                }],
+            )
+            .with_terms("sigma", vec![Term::Intercept]);
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        match err {
+            GamlssError::Input(s) => assert!(s.contains("'x'")),
+            other => panic!("expected Input, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_non_finite_in_covariate() {
+        let y = Array1::from_vec(vec![1.0, 2.0]);
+        let data = data_with("x", vec![1.0, f64::INFINITY]);
+        let f = Formula::new()
+            .with_terms(
+                "mu",
+                vec![Term::Linear {
+                    col_name: "x".to_string(),
+                }],
+            )
+            .with_terms("sigma", vec![Term::Intercept]);
+        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        match err {
+            GamlssError::NonFiniteValues { name, count } => {
+                assert_eq!(name, "x");
+                assert_eq!(count, 1);
+            }
+            other => panic!("expected NonFiniteValues, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn accepts_well_formed_input() {
+        let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let data = data_with("x", vec![0.5, 1.0, 1.5]);
+        let f = Formula::new()
+            .with_terms(
+                "mu",
+                vec![
+                    Term::Intercept,
+                    Term::Linear {
+                        col_name: "x".to_string(),
+                    },
+                ],
+            )
+            .with_terms("sigma", vec![Term::Intercept]);
+        validate_inputs(&y, &data, &f, &Gaussian).unwrap();
+    }
+}

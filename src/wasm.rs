@@ -6,10 +6,7 @@
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use crate::distributions::{
-    Beta, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
-};
-use crate::error::GamlssError;
+use crate::distributions::from_name as distribution_from_name;
 use crate::fitting::FitConfig;
 use crate::types::{DataSet, Formula};
 use crate::GamlssModel;
@@ -17,23 +14,6 @@ use ndarray::Array1;
 
 fn to_js_err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
-}
-
-/// Binomial is excluded because it requires state (n_trials) that
-/// cannot be recovered from the distribution name alone.
-fn get_distribution(name: &str) -> Result<Box<dyn Distribution>, GamlssError> {
-    match name {
-        "Gaussian" => Ok(Box::new(Gaussian)),
-        "Poisson" => Ok(Box::new(Poisson)),
-        "StudentT" => Ok(Box::new(StudentT)),
-        "Gamma" => Ok(Box::new(Gamma)),
-        "NegativeBinomial" => Ok(Box::new(NegativeBinomial)),
-        "Beta" => Ok(Box::new(Beta)),
-        _ => Err(GamlssError::Input(format!(
-            "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta",
-            name
-        ))),
-    }
 }
 
 /// Expects a JSON array of numbers, e.g. `[1.0, 2.0, 3.0]`.
@@ -81,7 +61,7 @@ impl WasmGamlssModel {
         let y = parse_y_json(y_json)?;
         let data = parse_data_json(data_json)?;
         let formula = parse_formula_json(formula_json)?;
-        let family = get_distribution(distribution).map_err(to_js_err)?;
+        let family = distribution_from_name(distribution).map_err(to_js_err)?;
 
         let model = GamlssModel::fit(&data, &y, &formula, family.as_ref()).map_err(to_js_err)?;
 
@@ -106,7 +86,7 @@ impl WasmGamlssModel {
         let y = parse_y_json(y_json)?;
         let data = parse_data_json(data_json)?;
         let formula = parse_formula_json(formula_json)?;
-        let family = get_distribution(distribution).map_err(to_js_err)?;
+        let family = distribution_from_name(distribution).map_err(to_js_err)?;
         let config: FitConfig = serde_json::from_str(config_json).map_err(to_js_err)?;
 
         let model = GamlssModel::fit_with_config(&data, &y, &formula, family.as_ref(), config)
@@ -129,13 +109,13 @@ impl WasmGamlssModel {
 
     #[wasm_bindgen(js_name = "toJson")]
     pub fn to_json(&self) -> Result<String, JsError> {
-        let family = get_distribution(&self.distribution_name).map_err(to_js_err)?;
+        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         self.model.to_json(family.as_ref()).map_err(to_js_err)
     }
 
     /// Input/output are JSON: `{"col": [values]}` → `{"param": [predictions]}`.
     pub fn predict(&self, data_json: &str) -> Result<String, JsError> {
-        let family = get_distribution(&self.distribution_name).map_err(to_js_err)?;
+        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let predictions = self
             .model
@@ -151,7 +131,7 @@ impl WasmGamlssModel {
 
     #[wasm_bindgen(js_name = "predictWithSe")]
     pub fn predict_with_se(&self, data_json: &str) -> Result<String, JsError> {
-        let family = get_distribution(&self.distribution_name).map_err(to_js_err)?;
+        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let results = self
             .model
@@ -207,7 +187,7 @@ impl WasmGamlssModel {
     /// where each inner array is one sample's predictions across all observations.
     #[wasm_bindgen(js_name = "predictSamples")]
     pub fn predict_samples(&self, data_json: &str, n_samples: usize) -> Result<String, JsError> {
-        let family = get_distribution(&self.distribution_name).map_err(to_js_err)?;
+        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let results = self
             .model
