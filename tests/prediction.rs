@@ -3,10 +3,10 @@
 
 mod common;
 
-use common::Generator;
+use common::{linear_intercepts, smooth_intercepts, Generator};
 use glissando::{
     distributions::{Gaussian, Poisson},
-    DataSet, Formula, GamlssModel, Smooth, Term,
+    DataSet, GamlssModel,
 };
 use ndarray::Array1;
 use rand::RngExt;
@@ -17,17 +17,7 @@ fn test_predict_on_training_data() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -56,17 +46,7 @@ fn test_predict_on_new_data() {
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(200, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -101,17 +81,7 @@ fn test_predict_with_se() {
     let mut rng = Generator::new(456);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -154,16 +124,7 @@ fn test_predict_poisson() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x));
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
+    let formula = linear_intercepts("x", &["mu"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
@@ -187,17 +148,7 @@ fn test_posterior_samples() {
     let mut rng = Generator::new(999);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -237,17 +188,7 @@ fn test_predict_samples() {
     let mut rng = Generator::new(111);
     let (y, data) = rng.linear_gaussian(50, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -281,17 +222,7 @@ fn test_predict_with_smooth() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x));
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 10,
-            degree: 3,
-            penalty_order: 2,
-        })],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = smooth_intercepts("x", 10, &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -332,17 +263,7 @@ fn test_predict_missing_column_error() {
     let mut rng = Generator::new(333);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 

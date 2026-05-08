@@ -114,11 +114,11 @@ pub fn assemble_model_matrices(
     n_obs: usize,
     terms: &[Term],
 ) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize), GamlssError> {
-    let mut model_matrix_parts = Vec::new();
-    let mut penalty_blocks = Vec::new();
+    let mut model_matrix_parts = Vec::with_capacity(terms.len());
+    let mut penalty_blocks: Vec<(usize, PenaltyMatrix)> = Vec::new();
     let mut total_coeffs = 0;
 
-    for term in terms.iter() {
+    for term in terms {
         match term {
             Term::Intercept => {
                 let part = Array1::ones(n_obs)
