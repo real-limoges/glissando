@@ -28,6 +28,11 @@ python = ["pyo3", "numpy", "serialization", "openblas", "parallel"]
 # Parallelism (incompatible with WASM)
 parallel = ["rayon"]
 
+# Test-only: enables Rust-side unit tests of the PyO3 bindings.
+# `pyo3/extension-module` (pulled in via `python`) prevents `cargo test` from linking
+# against libpython, so tests of `src/python.rs` must opt into `auto-initialize`.
+test-python = ["python", "pyo3/auto-initialize"]
+
 [dependencies]
 argmin = { version = "0.11.0"}
 ndarray = { version = "0.17" }
@@ -50,12 +55,13 @@ serde_json = { version = "1.0", optional = true }
 # Optional: WASM support
 wasm-bindgen = { version = "0.2.108", optional = true }
 
-# getrandom is a transitive dependency, but we explicitly depend on it to ensure
-# the correct features are enabled for WASM builds
-# Multiple versions needed due to transitive dependencies:
-#   v0.2 from statrs → nalgebra → rand 0.8
-#   v0.3 from argmin → rand 0.9
-#   v0.4 from our direct rand 0.10 dependency
+# getrandom is a transitive dependency, but we explicitly depend on three majors so
+# the right WASM features are enabled for each. The triplication tracks distinct rand
+# majors pinned by upstreams (verified against latest crates.io versions):
+#   v0.2 — pulled in by statrs 0.18 → rand 0.8
+#   v0.3 — pulled in by argmin 0.11 → rand 0.9
+#   v0.4 — pulled in by our direct rand 0.10 dependency
+# These cannot be collapsed without forking or upstream major-version bumps.
 getrandom_02 = { package = "getrandom", version = "0.2", optional = true, features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", optional = true, default-features = false, features = ["wasm_js"] }
 getrandom = { version = "0.4", optional = true, default-features = false, features = ["wasm_js"] }
@@ -71,7 +77,16 @@ version = "0.5.1"
 features = ["ndarray_latest-nolinalg"]
 
 [dev-dependencies]
+approx = "0.5"
+
+# criterion pulls rayon, proptest pulls wait-timeout — neither compiles for wasm32.
+# Scope both to non-wasm targets so wasm-pack test can build the test crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.8"
+proptest = "1.5"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
 
 [[bench]]
 name = "derivatives"

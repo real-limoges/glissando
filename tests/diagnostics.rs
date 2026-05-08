@@ -3,14 +3,14 @@
 
 mod common;
 
-use common::Generator;
+use common::{linear_intercepts, Generator};
 use glissando::{
     diagnostics::{
         compute_aic, compute_bic, loglik_gaussian, loglik_poisson, pearson_residuals_gaussian,
         pearson_residuals_poisson, response_residuals, total_edf,
     },
     distributions::Gaussian,
-    Formula, GamlssModel, Term,
+    GamlssModel,
 };
 use ndarray::Array1;
 
@@ -107,17 +107,7 @@ fn test_total_edf() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -137,17 +127,7 @@ fn test_diagnostics_with_fitted_model() {
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(200, 2.0, 5.0, 1.0);
 
-    let mut formula = Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
