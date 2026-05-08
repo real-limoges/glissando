@@ -10,6 +10,7 @@ export const wasmgamlssmodel_fitWithConfig: (a: number, b: number, c: number, d:
 export const wasmgamlssmodel_fittedValues: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_fromJson: (a: number, b: number) => [number, number, number];
 export const wasmgamlssmodel_predict: (a: number, b: number, c: number) => [number, number, number, number];
+export const wasmgamlssmodel_predictSamples: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasmgamlssmodel_predictWithSe: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_toJson: (a: number) => [number, number, number, number];
 export const __wbindgen_exn_store: (a: number) => void;

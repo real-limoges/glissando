@@ -11,13 +11,11 @@
   "files": [
     "glissando_bg.wasm",
     "glissando.js",
-    "glissando_bg.js",
     "glissando.d.ts"
   ],
   "main": "glissando.js",
   "types": "glissando.d.ts",
   "sideEffects": [
-    "./glissando.js",
     "./snippets/*"
   ]
 }
