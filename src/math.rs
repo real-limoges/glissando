@@ -4,14 +4,88 @@
 //! for large arrays (n >= 10,000). Uses recurrence relations for small arguments
 //! and asymptotic expansions for large arguments.
 
-use ndarray::Array1;
+use ndarray::{Array1, Zip};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use statrs::function::gamma::digamma as statrs_digamma;
 
-/// Below 10k observations, Rayon overhead exceeds the benefit of parallelization.
+/// Below this many elements, Rayon's scheduling overhead exceeds the gain from parallelizing.
 #[cfg(feature = "parallel")]
-const PARALLEL_THRESHOLD: usize = 10_000;
+pub(crate) const PARALLEL_THRESHOLD: usize = 10_000;
+
+/// Element-wise map over two `Array1<f64>`s, parallelized for large inputs.
+///
+/// Below [`PARALLEL_THRESHOLD`] elements (or when the `parallel` feature is off) the
+/// computation runs sequentially via `ndarray::Zip`. Above the threshold, it uses
+/// Rayon over the underlying slices, falling back to sequential iteration when an
+/// input is not contiguous (so callers don't need to worry about layout).
+#[inline]
+pub(crate) fn par_zip_map<F>(a: &Array1<f64>, b: &Array1<f64>, f: F) -> Array1<f64>
+where
+    F: Fn(f64, f64) -> f64 + Send + Sync,
+{
+    #[cfg(feature = "parallel")]
+    {
+        if a.len() >= PARALLEL_THRESHOLD {
+            if let (Some(av), Some(bv)) = (a.as_slice(), b.as_slice()) {
+                let result: Vec<f64> = av
+                    .par_iter()
+                    .zip(bv.par_iter())
+                    .map(|(&x, &y)| f(x, y))
+                    .collect();
+                return Array1::from_vec(result);
+            }
+        }
+    }
+    Zip::from(a).and(b).map_collect(|&x, &y| f(x, y))
+}
+
+/// Element-wise map over a single `Array1<f64>`, parallelized for large inputs.
+#[inline]
+pub(crate) fn par_map<F>(a: &Array1<f64>, f: F) -> Array1<f64>
+where
+    F: Fn(f64) -> f64 + Send + Sync,
+{
+    #[cfg(feature = "parallel")]
+    {
+        if a.len() >= PARALLEL_THRESHOLD {
+            if let Some(av) = a.as_slice() {
+                let result: Vec<f64> = av.par_iter().map(|&v| f(v)).collect();
+                return Array1::from_vec(result);
+            }
+        }
+    }
+    a.mapv(f)
+}
+
+/// Three-input variant of [`par_zip_map`].
+#[inline]
+pub(crate) fn par_zip3_map<F>(
+    a: &Array1<f64>,
+    b: &Array1<f64>,
+    c: &Array1<f64>,
+    f: F,
+) -> Array1<f64>
+where
+    F: Fn(f64, f64, f64) -> f64 + Send + Sync,
+{
+    #[cfg(feature = "parallel")]
+    {
+        if a.len() >= PARALLEL_THRESHOLD {
+            if let (Some(av), Some(bv), Some(cv)) = (a.as_slice(), b.as_slice(), c.as_slice()) {
+                let result: Vec<f64> = (0..av.len())
+                    .into_par_iter()
+                    .map(|i| f(av[i], bv[i], cv[i]))
+                    .collect();
+                return Array1::from_vec(result);
+            }
+        }
+    }
+    Zip::from(a)
+        .and(b)
+        .and(c)
+        .map_collect(|&x, &y, &z| f(x, y, z))
+}
 
 /// Digamma function: psi(x) = d/dx log(Gamma(x)).
 /// Delegates to statrs. For arrays, use [`digamma_batch`] instead.
@@ -53,52 +127,16 @@ pub fn trigamma(x: f64) -> f64 {
     expansion + result
 }
 
-/// Vectorized digamma over an array. Parallelizes via Rayon when n >= 10k.
+/// Vectorized digamma over an array. Parallelizes via Rayon when n >= [`PARALLEL_THRESHOLD`].
 #[inline]
 pub fn digamma_batch(x: &Array1<f64>) -> Array1<f64> {
-    #[cfg(feature = "parallel")]
-    {
-        let n = x.len();
-        if n < PARALLEL_THRESHOLD {
-            x.mapv(statrs_digamma)
-        } else {
-            let result: Vec<f64> = x
-                .as_slice()
-                .expect("input array not contiguous")
-                .par_iter()
-                .map(|&v| statrs_digamma(v))
-                .collect();
-            Array1::from_vec(result)
-        }
-    }
-    #[cfg(not(feature = "parallel"))]
-    {
-        x.mapv(statrs_digamma)
-    }
+    par_map(x, statrs_digamma)
 }
 
-/// Vectorized trigamma over an array. Parallelizes via Rayon when n >= 10k.
+/// Vectorized trigamma over an array. Parallelizes via Rayon when n >= [`PARALLEL_THRESHOLD`].
 #[inline]
 pub fn trigamma_batch(x: &Array1<f64>) -> Array1<f64> {
-    #[cfg(feature = "parallel")]
-    {
-        let n = x.len();
-        if n < PARALLEL_THRESHOLD {
-            x.mapv(trigamma)
-        } else {
-            let result: Vec<f64> = x
-                .as_slice()
-                .expect("input array not contiguous")
-                .par_iter()
-                .map(|&v| trigamma(v))
-                .collect();
-            Array1::from_vec(result)
-        }
-    }
-    #[cfg(not(feature = "parallel"))]
-    {
-        x.mapv(trigamma)
-    }
+    par_map(x, trigamma)
 }
 
 #[cfg(test)]
@@ -151,6 +189,73 @@ mod tests {
                 result[i],
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn trigamma_returns_nan_for_non_positive() {
+        assert!(trigamma(0.0).is_nan());
+        assert!(trigamma(-1.0).is_nan());
+    }
+
+    #[test]
+    fn par_zip_map_sequential_for_small() {
+        let a = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let b = Array1::from_vec(vec![10.0, 20.0, 30.0]);
+        let r = par_zip_map(&a, &b, |x, y| x + y);
+        assert_eq!(r.to_vec(), vec![11.0, 22.0, 33.0]);
+    }
+
+    #[test]
+    fn par_map_sequential_for_small() {
+        let a = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let r = par_map(&a, |x| x * 2.0);
+        assert_eq!(r.to_vec(), vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn par_zip3_map_sequential_for_small() {
+        let a = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let b = Array1::from_vec(vec![10.0, 20.0, 30.0]);
+        let c = Array1::from_vec(vec![100.0, 200.0, 300.0]);
+        let r = par_zip3_map(&a, &b, &c, |x, y, z| x + y + z);
+        assert_eq!(r.to_vec(), vec![111.0, 222.0, 333.0]);
+    }
+
+    /// Exercise the parallel branch by using an array large enough to cross PARALLEL_THRESHOLD.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn par_zip_map_parallel_branch_matches_sequential() {
+        let n = PARALLEL_THRESHOLD + 100;
+        let a = Array1::from_iter((0..n).map(|i| i as f64));
+        let b = Array1::from_iter((0..n).map(|i| (n - i) as f64));
+        let r = par_zip_map(&a, &b, |x, y| x + y);
+        for i in 0..n {
+            assert_eq!(r[i], n as f64);
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn par_map_parallel_branch_matches_sequential() {
+        let n = PARALLEL_THRESHOLD + 50;
+        let a = Array1::from_iter((0..n).map(|i| i as f64));
+        let r = par_map(&a, |x| x * 2.0);
+        for i in 0..n {
+            assert_eq!(r[i], 2.0 * i as f64);
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn par_zip3_map_parallel_branch_matches_sequential() {
+        let n = PARALLEL_THRESHOLD + 25;
+        let a = Array1::from_elem(n, 1.0);
+        let b = Array1::from_elem(n, 2.0);
+        let c = Array1::from_elem(n, 3.0);
+        let r = par_zip3_map(&a, &b, &c, |x, y, z| x + y + z);
+        for v in r.iter() {
+            assert_eq!(*v, 6.0);
         }
     }
 }

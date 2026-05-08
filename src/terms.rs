@@ -89,3 +89,102 @@ impl Smooth {
         }
     }
 }
+
+/// Parsing utilities for the Python FFI: lifts term parsing out of `python.rs`
+/// so the FFI surface stays a thin marshalling layer.
+#[cfg(feature = "python")]
+pub(crate) mod py_parse {
+    use super::{Smooth, Term};
+    use pyo3::exceptions::PyValueError;
+    use pyo3::prelude::*;
+    use pyo3::types::{PyDict, PyTuple};
+
+    /// Defaults for `Smooth::PSpline1D` when omitted from the Python tuple's kwargs.
+    const DEFAULT_N_SPLINES: usize = 10;
+    const DEFAULT_DEGREE: usize = 3;
+    const DEFAULT_PENALTY_ORDER: usize = 2;
+
+    /// Parse a Python list of term tuples into `Vec<Term>`.
+    pub fn parse_terms(term_list: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term>> {
+        term_list
+            .iter()
+            .map(|item| parse_single_term(&item))
+            .collect()
+    }
+
+    /// Parse one term tuple. Supported shapes:
+    /// - `("intercept",)`
+    /// - `("linear", "col_name")`
+    /// - `("smooth", "col_name")` or `("smooth", "col_name", {kwargs})`
+    /// - `("random", "col_name")`
+    fn parse_single_term(item: &Bound<'_, PyAny>) -> PyResult<Term> {
+        let tuple: &Bound<PyTuple> = item.cast()?;
+        if tuple.is_empty() {
+            return Err(PyValueError::new_err("Empty term tuple"));
+        }
+
+        let term_type: String = tuple.get_item(0)?.extract()?;
+        match term_type.as_str() {
+            "intercept" => Ok(Term::Intercept),
+            "linear" => {
+                if tuple.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "Linear term requires: ('linear', 'col_name')",
+                    ));
+                }
+                let col_name: String = tuple.get_item(1)?.extract()?;
+                Ok(Term::Linear { col_name })
+            }
+            "smooth" => parse_smooth(tuple),
+            "random" => {
+                if tuple.len() != 2 {
+                    return Err(PyValueError::new_err(
+                        "Random effect requires: ('random', 'col_name')",
+                    ));
+                }
+                let col_name: String = tuple.get_item(1)?.extract()?;
+                Ok(Term::Smooth(Smooth::RandomEffect { col_name }))
+            }
+            other => Err(PyValueError::new_err(format!(
+                "Unknown term type: {}. Use 'intercept', 'linear', 'smooth', or 'random'",
+                other
+            ))),
+        }
+    }
+
+    fn parse_smooth(tuple: &Bound<'_, PyTuple>) -> PyResult<Term> {
+        if tuple.len() < 2 {
+            return Err(PyValueError::new_err(
+                "Smooth term requires at least: ('smooth', 'col_name')",
+            ));
+        }
+        let col_name: String = tuple.get_item(1)?.extract()?;
+
+        let (n_splines, degree, penalty_order) = if tuple.len() >= 3 {
+            let kwargs_item = tuple.get_item(2)?;
+            let kwargs: &Bound<PyDict> = kwargs_item.cast()?;
+            (
+                kwarg_or(kwargs, "n_splines", DEFAULT_N_SPLINES)?,
+                kwarg_or(kwargs, "degree", DEFAULT_DEGREE)?,
+                kwarg_or(kwargs, "penalty_order", DEFAULT_PENALTY_ORDER)?,
+            )
+        } else {
+            (DEFAULT_N_SPLINES, DEFAULT_DEGREE, DEFAULT_PENALTY_ORDER)
+        };
+
+        Ok(Term::Smooth(Smooth::PSpline1D {
+            col_name,
+            n_splines,
+            degree,
+            penalty_order,
+        }))
+    }
+
+    fn kwarg_or(kwargs: &Bound<'_, PyDict>, key: &str, default: usize) -> PyResult<usize> {
+        Ok(kwargs
+            .get_item(key)?
+            .map(|v| v.extract::<usize>())
+            .transpose()?
+            .unwrap_or(default))
+    }
+}
