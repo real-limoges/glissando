@@ -6,7 +6,6 @@ build-backend = "maturin"
 name = "glissando"
 version = "0.1.0"
 description = "Python bindings for the glissando library - GAMLSS (Generalized Additive Models for Location, Scale, and Shape)"
-readme = "docs/PYTHON_USAGE.md"
 requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }
 keywords = ["statistics", "regression", "gamlss", "generalized-additive-models"]
@@ -36,5 +35,7 @@ dev = [
 
 [tool.maturin]
 features = ["python"]
-python-source = "python"
 module-name = "glissando"
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

@@ -89,8 +89,8 @@ pub fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> 
 
 /// Clamped knots with interior knots at data quantiles.
 fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
-    let min_val = x.iter().fold(f64::INFINITY, |a, &b| a.min(b));
-    let max_val = x.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+    let min_val = x.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_val = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     let safe_n_splines = n_splines.max(degree + 1);
     let num_total_knots = safe_n_splines + degree + 1;
@@ -106,7 +106,7 @@ fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
     if num_interior_knots > 0 {
         let mut sorted_x = x.to_vec();
         sorted_x.retain(|v| v.is_finite());
-        sorted_x.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_x.sort_unstable_by(|a, b| a.total_cmp(b));
 
         if !sorted_x.is_empty() {
             for i in 1..=num_interior_knots {
@@ -215,4 +215,257 @@ pub fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f64> {
         }
     }
     d_matrix.t().dot(&d_matrix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array, Array2};
+    #[cfg(not(target_arch = "wasm32"))]
+    use proptest::prelude::*;
+
+    // --- kronecker_product ---
+
+    #[test]
+    fn kronecker_product_dimensions() {
+        let a = Array2::<f64>::zeros((2, 3));
+        let b = Array2::<f64>::zeros((4, 5));
+        let c = kronecker_product(&a, &b);
+        assert_eq!(c.dim(), (8, 15));
+    }
+
+    #[test]
+    fn kronecker_product_with_identities_is_identity() {
+        let i2 = Array2::<f64>::eye(2);
+        let i3 = Array2::<f64>::eye(3);
+        let k = kronecker_product(&i2, &i3);
+        let i6 = Array2::<f64>::eye(6);
+        assert_eq!(k, i6);
+    }
+
+    #[test]
+    fn kronecker_product_block_structure() {
+        let a = ndarray::arr2(&[[1.0, 2.0], [3.0, 4.0]]);
+        let b = ndarray::arr2(&[[0.0, 5.0], [6.0, 7.0]]);
+        let c = kronecker_product(&a, &b);
+        // Top-left 2x2 block = a[0,0] * b
+        assert_eq!(c[[0, 0]], 0.0);
+        assert_eq!(c[[0, 1]], 5.0);
+        assert_eq!(c[[1, 0]], 6.0);
+        assert_eq!(c[[1, 1]], 7.0);
+        // Top-right 2x2 block = a[0,1] * b
+        assert_eq!(c[[0, 2]], 0.0);
+        assert_eq!(c[[0, 3]], 10.0);
+        // Bottom-right 2x2 block = a[1,1] * b
+        assert_eq!(c[[2, 2]], 0.0);
+        assert_eq!(c[[3, 3]], 28.0);
+    }
+
+    // --- row_kronecker_into ---
+
+    #[test]
+    fn row_kronecker_into_matches_naive() {
+        let a = Array1::from_vec(vec![1.0, 2.0, 3.0]);
+        let b = Array1::from_vec(vec![10.0, 20.0]);
+        let mut out = Array1::<f64>::zeros(6);
+        row_kronecker_into(a.view(), b.view(), out.view_mut());
+        assert_eq!(out.to_vec(), vec![10.0, 20.0, 20.0, 40.0, 30.0, 60.0]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest! {
+        #[test]
+        fn row_kronecker_into_matches_outer_product_flatten(
+            a_vec in proptest::collection::vec(-10.0f64..10.0, 1..6),
+            b_vec in proptest::collection::vec(-10.0f64..10.0, 1..6),
+        ) {
+            let a = Array1::from_vec(a_vec.clone());
+            let b = Array1::from_vec(b_vec.clone());
+            let mut out = Array1::<f64>::zeros(a.len() * b.len());
+            row_kronecker_into(a.view(), b.view(), out.view_mut());
+            for i in 0..a.len() {
+                for j in 0..b.len() {
+                    let expected = a_vec[i] * b_vec[j];
+                    let actual = out[i * b.len() + j];
+                    prop_assert!((expected - actual).abs() < 1e-12);
+                }
+            }
+        }
+    }
+
+    // --- create_basis_matrix ---
+
+    #[test]
+    fn basis_matrix_shape() {
+        let x = Array1::linspace(0.0, 1.0, 50);
+        let b = create_basis_matrix(&x, 10, 3);
+        assert_eq!(b.dim(), (50, 10));
+    }
+
+    #[test]
+    fn basis_matrix_non_negative() {
+        let x = Array1::linspace(0.0, 1.0, 50);
+        let b = create_basis_matrix(&x, 10, 3);
+        for &v in b.iter() {
+            assert!(
+                v >= -1e-12,
+                "basis value {} negative beyond fp tolerance",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn basis_matrix_partition_of_unity_in_interior() {
+        // B-spline basis sums to 1 in the interior of the knot range.
+        // Use evenly spaced x and skip the first/last few rows where boundary effects apply.
+        let x = Array1::linspace(0.0, 1.0, 100);
+        let b = create_basis_matrix(&x, 12, 3);
+        for row in b.outer_iter().skip(20).take(60) {
+            let s: f64 = row.iter().sum();
+            assert!((s - 1.0).abs() < 1e-9, "interior row sum {} not ≈ 1", s);
+        }
+    }
+
+    #[test]
+    fn basis_matrix_degenerate_returns_zeros() {
+        // n_splines <= degree → returns zeros.
+        let x = Array1::linspace(0.0, 1.0, 5);
+        let b = create_basis_matrix(&x, 3, 3);
+        assert!(b.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn basis_matrix_handles_constant_x() {
+        // All-equal x is degenerate but must not panic or produce NaN.
+        let x = Array1::from_elem(10, 0.5);
+        let b = create_basis_matrix(&x, 8, 3);
+        assert_eq!(b.dim(), (10, 8));
+        assert!(b.iter().all(|v| v.is_finite()));
+    }
+
+    // --- create_penalty_matrix ---
+
+    fn is_symmetric(m: &Array2<f64>, eps: f64) -> bool {
+        let (r, c) = m.dim();
+        if r != c {
+            return false;
+        }
+        for i in 0..r {
+            for j in 0..r {
+                if (m[[i, j]] - m[[j, i]]).abs() > eps {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn is_psd(m: &Array2<f64>) -> bool {
+        // A matrix M = D'D is automatically PSD; verify by checking x'Mx >= 0 for random x.
+        // Cheap stand-in for an eigenvalue computation that doesn't need a linalg backend.
+        let n = m.dim().0;
+        let mut rng = StdRngStub::new(42);
+        for _ in 0..20 {
+            let v: Array1<f64> = Array::from_shape_fn(n, |_| rng.next() - 0.5);
+            let q = v.dot(&m.dot(&v));
+            if q < -1e-9 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Tiny LCG for test-only deterministic numbers (no rand dep needed in the test scope).
+    struct StdRngStub {
+        state: u64,
+    }
+    impl StdRngStub {
+        fn new(seed: u64) -> Self {
+            Self { state: seed.max(1) }
+        }
+        fn next(&mut self) -> f64 {
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((self.state >> 33) as f64) / (1u64 << 31) as f64
+        }
+    }
+
+    #[test]
+    fn penalty_matrix_order2_shape_and_symmetry() {
+        let p = create_penalty_matrix(10, 2);
+        assert_eq!(p.dim(), (10, 10));
+        assert!(is_symmetric(&p, 1e-12));
+    }
+
+    #[test]
+    fn penalty_matrix_order1_shape_and_symmetry() {
+        let p = create_penalty_matrix(8, 1);
+        assert_eq!(p.dim(), (8, 8));
+        assert!(is_symmetric(&p, 1e-12));
+    }
+
+    #[test]
+    fn penalty_matrix_psd_order2() {
+        let p = create_penalty_matrix(10, 2);
+        assert!(is_psd(&p));
+    }
+
+    #[test]
+    fn penalty_matrix_psd_order1() {
+        let p = create_penalty_matrix(10, 1);
+        assert!(is_psd(&p));
+    }
+
+    #[test]
+    fn penalty_matrix_order1_constant_in_null_space() {
+        // First-order difference penalty has constant vectors in its null space.
+        let p = create_penalty_matrix(8, 1);
+        let ones = Array1::from_elem(8, 1.0);
+        let q = ones.dot(&p.dot(&ones));
+        assert!(
+            q.abs() < 1e-10,
+            "constant should lie in null space, got {}",
+            q
+        );
+    }
+
+    #[test]
+    fn penalty_matrix_order2_linear_in_null_space() {
+        // Second-order difference penalty has linear vectors in its null space.
+        let p = create_penalty_matrix(8, 2);
+        let lin: Array1<f64> = Array1::from_iter((0..8).map(|i| i as f64));
+        let q = lin.dot(&p.dot(&lin));
+        assert!(
+            q.abs() < 1e-10,
+            "linear should lie in null space, got {}",
+            q
+        );
+    }
+
+    #[test]
+    fn penalty_matrix_degenerate_when_order_ge_n_splines() {
+        let p = create_penalty_matrix(2, 3);
+        assert_eq!(p.dim(), (2, 2));
+        assert!(p.iter().all(|&v| v == 0.0));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest! {
+        #[test]
+        fn penalty_matrix_always_symmetric(
+            n_splines in 4usize..20,
+            order in 1usize..3,
+        ) {
+            let p = create_penalty_matrix(n_splines, order);
+            prop_assert_eq!(p.dim(), (n_splines, n_splines));
+            for i in 0..n_splines {
+                for j in 0..n_splines {
+                    prop_assert!((p[[i, j]] - p[[j, i]]).abs() < 1e-12);
+                }
+            }
+        }
+    }
 }

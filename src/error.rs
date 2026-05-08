@@ -74,3 +74,92 @@ impl From<ShapeError> for GamlssError {
         GamlssError::Shape(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    fn display_optimization() {
+        let s = format!("{}", GamlssError::Optimization("lbfgs failed".into()));
+        assert!(s.contains("Optimization failed"));
+        assert!(s.contains("lbfgs failed"));
+    }
+
+    #[test]
+    fn display_shape() {
+        let s = format!("{}", GamlssError::Shape("bad dim".into()));
+        assert!(s.contains("Array shape error"));
+    }
+
+    #[test]
+    fn display_convergence() {
+        let s = format!("{}", GamlssError::Convergence(42));
+        assert!(s.contains("42"));
+    }
+
+    #[test]
+    fn display_input() {
+        let s = format!("{}", GamlssError::Input("bad".into()));
+        assert!(s.contains("Invalid input"));
+    }
+
+    #[test]
+    fn display_unknown_parameter() {
+        let s = format!(
+            "{}",
+            GamlssError::UnknownParameter {
+                distribution: "Gaussian".into(),
+                param: "zeta".into(),
+            }
+        );
+        assert!(s.contains("zeta"));
+        assert!(s.contains("Gaussian"));
+    }
+
+    #[test]
+    fn display_missing_variable() {
+        let s = format!("{}", GamlssError::MissingVariable { name: "x".into() });
+        assert!(s.contains("'x'"));
+    }
+
+    #[test]
+    fn display_non_finite_values() {
+        let s = format!(
+            "{}",
+            GamlssError::NonFiniteValues {
+                name: "y".into(),
+                count: 3
+            }
+        );
+        assert!(s.contains("3"));
+        assert!(s.contains("'y'"));
+    }
+
+    #[test]
+    fn display_missing_formula() {
+        let s = format!(
+            "{}",
+            GamlssError::MissingFormula {
+                param: "sigma".into()
+            }
+        );
+        assert!(s.contains("sigma"));
+    }
+
+    #[test]
+    fn display_empty_data() {
+        let s = format!("{}", GamlssError::EmptyData);
+        assert!(s.contains("Empty"));
+    }
+
+    #[test]
+    fn from_shape_error() {
+        // Trigger a real ShapeError by reshaping incompatibly.
+        let res: Result<_, _> = Array2::<f64>::zeros((2, 3)).into_shape_with_order((4, 4));
+        let err = res.unwrap_err();
+        let g: GamlssError = err.into();
+        assert!(matches!(g, GamlssError::Shape(_)));
+    }
+}
