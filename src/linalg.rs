@@ -3,7 +3,7 @@
 //! This module provides a unified interface for linear algebra operations,
 //! supporting multiple backends:
 //! - `openblas`: Uses ndarray-linalg with OpenBLAS (default, highest performance)
-//! - `pure-rust`: Uses faer for pure Rust implementation (WASM-compatible)
+//! - `pure-rust`: Uses nalgebra for pure Rust implementation (WASM-compatible, no relaxed SIMD)
 //!
 //! The backend is selected at compile time via feature flags.
 
@@ -36,96 +36,48 @@ pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
 }
 
 // =============================================================================
-// Pure Rust Backend (faer) - WASM compatible
+// Pure Rust Backend (nalgebra) - WASM compatible, no relaxed SIMD
 // =============================================================================
 
 #[cfg(feature = "pure-rust")]
 pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-    use faer::linalg::solvers::Solve;
-
-    // Convert ndarray -> faer
-    let a_faer = ndarray_to_faer_mat(a);
-    let b_faer = ndarray_to_faer_col(b);
-
-    // Solve using LU decomposition with partial pivoting
-    let plu = a_faer.partial_piv_lu();
-    let x_faer = plu.solve(&b_faer);
-
-    // Convert back to ndarray
-    faer_col_to_ndarray(&x_faer)
+    let a_na = to_dmatrix(a);
+    let b_na = nalgebra::DVector::from_iterator(b.len(), b.iter().copied());
+    let x = a_na.lu().solve(&b_na).ok_or_else(|| {
+        GamlssError::Linalg("Linear system is singular or ill-conditioned".to_string())
+    })?;
+    Ok(Array1::from_iter(x.iter().copied()))
 }
 
 #[cfg(feature = "pure-rust")]
 pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-    use faer::linalg::solvers::DenseSolveCore;
-
-    // Convert ndarray -> faer
-    let a_faer = ndarray_to_faer_mat(a);
-
-    // Compute inverse using LU decomposition
-    let plu = a_faer.partial_piv_lu();
-    let inv_faer = plu.inverse();
-
-    // Convert back to ndarray
-    faer_mat_to_ndarray(&inv_faer)
+    let a_na = to_dmatrix(a);
+    let inv = a_na.try_inverse().ok_or_else(|| {
+        GamlssError::Linalg("Matrix is singular, cannot compute inverse".to_string())
+    })?;
+    Ok(from_dmatrix(&inv))
 }
 
 #[cfg(feature = "pure-rust")]
 pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
-    // Convert ndarray -> faer
-    let a_faer = ndarray_to_faer_mat(a);
-
-    // Compute Cholesky decomposition (LLT)
-    // llt() decomposes A = LL^H where L is lower triangular
-    let chol = a_faer.llt(faer::Side::Lower).map_err(|_| {
+    let a_na = to_dmatrix(a);
+    let chol = a_na.cholesky().ok_or_else(|| {
         GamlssError::Linalg(
             "Cholesky decomposition failed (matrix not positive definite)".to_string(),
         )
     })?;
-
-    // Extract the lower triangular matrix
-    let l_ref = chol.L();
-
-    // Convert to owned Mat and then to ndarray
-    let l_faer = l_ref.to_owned();
-    faer_mat_to_ndarray(&l_faer)
+    Ok(from_dmatrix(&chol.l()))
 }
 
-// =============================================================================
-// Conversion Helpers: ndarray <-> faer
-// =============================================================================
-
 #[cfg(feature = "pure-rust")]
-fn ndarray_to_faer_mat(arr: &Array2<f64>) -> faer::Mat<f64> {
-    use faer::Mat;
-
+fn to_dmatrix(arr: &Array2<f64>) -> nalgebra::DMatrix<f64> {
     let (nrows, ncols) = arr.dim();
-
-    // Note: ndarray is row-major, faer is column-major
-    // We need to transpose during conversion
-    Mat::from_fn(nrows, ncols, |i, j| arr[[i, j]])
+    nalgebra::DMatrix::from_fn(nrows, ncols, |i, j| arr[[i, j]])
 }
 
 #[cfg(feature = "pure-rust")]
-fn ndarray_to_faer_col(arr: &Array1<f64>) -> faer::Col<f64> {
-    use faer::Col;
-
-    let n = arr.len();
-    Col::from_fn(n, |i| arr[i])
-}
-
-#[cfg(feature = "pure-rust")]
-fn faer_mat_to_ndarray(mat: &faer::Mat<f64>) -> Result<Array2<f64>> {
-    let (nrows, ncols) = (mat.nrows(), mat.ncols());
-    let result = Array2::from_shape_fn((nrows, ncols), |(i, j)| mat[(i, j)]);
-    Ok(result)
-}
-
-#[cfg(feature = "pure-rust")]
-fn faer_col_to_ndarray(col: &faer::Col<f64>) -> Result<Array1<f64>> {
-    let n = col.nrows();
-    let result = Array1::from_shape_fn(n, |i| col[i]);
-    Ok(result)
+fn from_dmatrix(mat: &nalgebra::DMatrix<f64>) -> Array2<f64> {
+    Array2::from_shape_fn((mat.nrows(), mat.ncols()), |(i, j)| mat[(i, j)])
 }
 
 // =============================================================================

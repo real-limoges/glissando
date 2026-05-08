@@ -177,6 +177,35 @@ export class WasmGamlssModel {
         }
     }
     /**
+     * Generate prediction samples by sampling from the posterior distribution of coefficients.
+     *
+     * Returns JSON: `{"mu": [[s1_v1, s1_v2, ...], [s2_v1, ...], ...], "sigma": [...]}`
+     * where each inner array is one sample's predictions across all observations.
+     * @param {string} data_json
+     * @param {number} n_samples
+     * @returns {string}
+     */
+    predictSamples(data_json, n_samples) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_predictSamples(this.__wbg_ptr, ptr0, len0, n_samples);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
      * @param {string} data_json
      * @returns {string}
      */
@@ -238,6 +267,9 @@ export function __wbg_call_389efe28435a9388() { return handleError(function (arg
     const ret = arg0.call(arg1);
     return ret;
 }, arguments); }
+export function __wbg_getRandomValues_2a91986308c74a93() { return handleError(function (arg0, arg1) {
+    globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+}, arguments); }
 export function __wbg_new_no_args_1c7c842f08d00ebb(arg0, arg1) {
     const ret = new Function(getStringFromWasm0(arg0, arg1));
     return ret;
@@ -288,6 +320,11 @@ function addToExternrefTable0(obj) {
 function getArrayF64FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 let cachedFloat64ArrayMemory0 = null;
