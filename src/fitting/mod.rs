@@ -170,8 +170,6 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut final_change = f64::MAX;
     let mut param_diagnostics = HashMap::new();
 
-    let param_names: Vec<String> = models.keys().cloned().collect();
-
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
         let mut max_diff = 0.0;
@@ -179,21 +177,20 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         for param_name in family.parameters() {
             let param_key = param_name.to_string();
 
-            // Build current parameter values on response scale (batched)
-            let current_params: HashMap<&str, Array1<f64>> = param_names
+            // Snapshot every parameter on the response scale; derivatives() expects all of them.
+            let current_params: HashMap<&str, Array1<f64>> = family
+                .parameters()
                 .iter()
                 .map(|name| {
-                    let model = &models[name];
+                    let model = &models[*name];
                     let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-                    (name.as_str(), fitted_values)
+                    (*name, fitted_values)
                 })
                 .collect();
-
-            // Create reference map for batched derivatives call
             let params_ref: HashMap<&str, &Array1<f64>> =
                 current_params.iter().map(|(k, v)| (*k, v)).collect();
 
-            // Single batched call replaces n_obs individual calls
+            // One batched call replaces n_obs individual ones.
             let all_derivs = family.derivatives(y, &params_ref)?;
             let (deriv_u, deriv_w) = all_derivs.get(*param_name).ok_or_else(|| {
                 GamlssError::Input(format!("No derivation for {} found", param_name))
