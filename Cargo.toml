@@ -14,7 +14,7 @@ default = ["openblas", "parallel"]
 
 # Backend selection (mutually exclusive in practice)
 openblas = ["ndarray-linalg", "argmin-math/ndarray_latest"]
-pure-rust = ["faer"]
+pure-rust = ["nalgebra"]
 
 # Serialization support (serde + ndarray/serde)
 serialization = ["serde", "serde_json", "ndarray/serde"]
@@ -38,7 +38,7 @@ thiserror = { version = "2.0" }
 
 # Optional: Linear algebra backends
 ndarray-linalg = { version = "0.18", features = ["openblas-system"], optional = true }
-faer = { version = "0.24", default-features = false, optional = true }
+nalgebra = { version = "0.33", optional = true }
 
 # Optional: Parallelism
 rayon = { version = "1.11", optional = true }
