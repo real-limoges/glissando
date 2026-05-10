@@ -1,0 +1,26 @@
+---
+source: tests/regression.rs
+expression: snap
+---
+converged: true
+iterations: 10
+coefficients:
+  mu:
+    - "6.6634e1"
+    - "-3.6852e1"
+    - "3.5218e0"
+    - "4.1336e1"
+    - "6.3459e1"
+    - "7.4550e1"
+  sigma:
+    - "4.7556e-1"
+edf:
+  mu: "6.0000e0"
+  sigma: "1.0000e0"
+lambdas:
+  mu:
+    - "4.1216e-9"
+  sigma: []
+log_likelihood: "-2.2734e2"
+aic: "4.6868e2"
+bic: "4.8819e2"
