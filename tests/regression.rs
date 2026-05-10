@@ -19,6 +19,7 @@
 // First-time creation: `INSTA_UPDATE=auto cargo test --test regression`, then
 // `cargo insta accept` to commit the `.snap` files.
 #![cfg(not(feature = "python"))]
+#![cfg(not(target_arch = "wasm32"))]
 
 mod common;
 
