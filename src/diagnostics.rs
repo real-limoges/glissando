@@ -82,9 +82,7 @@ pub fn response_residuals(y: &Array1<f64>, expected: &Array1<f64>) -> Array1<f64
 
 /// Snapshot of fitted parameters on the response scale, in the shape the
 /// [`Distribution`] trait expects.
-fn fitted_params_view(
-    models: &HashMap<String, FittedParameter>,
-) -> HashMap<&str, &Array1<f64>> {
+fn fitted_params_view(models: &HashMap<String, FittedParameter>) -> HashMap<&str, &Array1<f64>> {
     models
         .iter()
         .map(|(k, v)| (k.as_str(), &v.fitted_values))
@@ -196,8 +194,7 @@ mod tests {
         let y = array![1.0, 2.0, 3.0];
         let mu = array![1.5, 2.0, 2.5];
         let sigma = array![0.5, 0.5, 0.5];
-        let params: HashMap<&str, &Array1<f64>> =
-            HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
         let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
         assert!((r[0] - (-1.0)).abs() < 1e-10);
         assert!((r[1] - 0.0).abs() < 1e-10);
@@ -210,8 +207,7 @@ mod tests {
         let y = array![0.0];
         let mu = array![0.0];
         let sigma = array![0.0];
-        let params: HashMap<&str, &Array1<f64>> =
-            HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
         let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
         assert!(r.iter().all(|v| v.is_finite()));
     }

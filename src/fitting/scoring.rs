@@ -68,9 +68,9 @@ pub(super) fn step<D: Distribution + ?Sized>(
 
     // 2. Score and Fisher info for the target parameter.
     let all_derivs = family.derivatives(y, &params_ref)?;
-    let (deriv_u, deriv_w) = all_derivs.get(target_param).ok_or_else(|| {
-        GamlssError::Input(format!("No derivation for {} found", target_param))
-    })?;
+    let (deriv_u, deriv_w) = all_derivs
+        .get(target_param)
+        .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", target_param)))?;
 
     let target = models.get(target_param).ok_or_else(|| {
         GamlssError::Internal(format!("Model for parameter '{}' not found", target_param))
@@ -98,8 +98,13 @@ pub(super) fn step<D: Distribution + ?Sized>(
     };
 
     // 5. Penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z.
-    let (new_beta, cov_matrix, edf) =
-        fit_pwls(&target.x_matrix, &z, &w, &target.penalty_matrices, &best_lambdas)?;
+    let (new_beta, cov_matrix, edf) = fit_pwls(
+        &target.x_matrix,
+        &z,
+        &w,
+        &target.penalty_matrices,
+        &best_lambdas,
+    )?;
 
     let new_eta = target.x_matrix.dot(&new_beta.0);
     let max_diff = (&new_beta.0 - &target.beta.0)
