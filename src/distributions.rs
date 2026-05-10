@@ -116,10 +116,7 @@ pub trait Distribution: Debug + Send + Sync {
     ///
     /// Distinct from the Fisher-information weight returned by [`Self::derivatives`],
     /// which is on the linear-predictor scale.
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError>;
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError>;
 
     /// Marginal `E[Y_i | params_i]` on the response scale.
     ///
@@ -274,10 +271,7 @@ impl Distribution for Poisson {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         Ok(require(self, params, "mu")?.to_owned())
     }
 
@@ -358,10 +352,7 @@ impl Distribution for Gaussian {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let sigma = require(self, params, "sigma")?;
         Ok(sigma.mapv(|s| s * s))
     }
@@ -483,10 +474,7 @@ impl Distribution for StudentT {
 
     /// `Var(Y) = σ²·ν/(ν−2)` for `ν > 2`. For `ν ≤ 2` the variance is undefined; we
     /// clamp the denominator at `MIN_POSITIVE` so Pearson residuals stay finite.
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
         Ok(par_zip_map(sigma, nu, |s, nu_i| {
@@ -586,10 +574,7 @@ impl Distribution for Gamma {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         Ok(par_zip_map(mu, sigma, |m, s| m * m * s * s))
@@ -688,10 +673,7 @@ impl Distribution for NegativeBinomial {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         Ok(par_zip_map(mu, sigma, |m, s| m + s * m * m))
@@ -808,10 +790,7 @@ impl Distribution for Beta {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let phi = require(self, params, "phi")?;
         Ok(par_zip_map(mu, phi, |m, p| {
@@ -908,10 +887,7 @@ impl Distribution for Binomial {
         }))
     }
 
-    fn variance(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let n = self.trials(mu.len());
         Ok(par_zip_map(n.as_ref(), mu, |ni, mi| {
@@ -1290,10 +1266,7 @@ mod tests {
 
     #[test]
     fn loglik_gaussian_matches_manual_formula() {
-        let owned = [
-            ("mu", array![0.0]),
-            ("sigma", array![1.0]),
-        ];
+        let owned = [("mu", array![0.0]), ("sigma", array![1.0])];
         let p = params_view(&owned);
         let ll = Gaussian.loglik(&array![0.0], &p).unwrap();
         let expected = -0.5 * (2.0 * std::f64::consts::PI).ln();
@@ -1338,7 +1311,9 @@ mod tests {
             ("sigma", array![0.5, 0.5, 0.5]),
         ];
         let p = params_view(&owned);
-        let ll = NegativeBinomial.loglik(&array![0.0, 5.0, 10.0], &p).unwrap();
+        let ll = NegativeBinomial
+            .loglik(&array![0.0, 5.0, 10.0], &p)
+            .unwrap();
         assert!(ll.is_finite());
     }
 
@@ -1395,10 +1370,7 @@ mod tests {
     #[test]
     fn variance_studentt_clamps_at_low_nu() {
         // ν ≤ 2 is undefined; clamp keeps the value finite for downstream Pearson math.
-        let owned = [
-            ("sigma", array![1.0]),
-            ("nu", array![1.5]),
-        ];
+        let owned = [("sigma", array![1.0]), ("nu", array![1.5])];
         let p = params_view(&owned);
         let v = StudentT.variance(&p).unwrap();
         assert!(v[0].is_finite());
@@ -1407,10 +1379,7 @@ mod tests {
 
     #[test]
     fn variance_gamma_is_mu_squared_sigma_squared() {
-        let owned = [
-            ("mu", array![2.0, 3.0]),
-            ("sigma", array![0.5, 0.5]),
-        ];
+        let owned = [("mu", array![2.0, 3.0]), ("sigma", array![0.5, 0.5])];
         let p = params_view(&owned);
         let v = Gamma.variance(&p).unwrap();
         // μ²σ² = 4·0.25 = 1; 9·0.25 = 2.25.
@@ -1420,10 +1389,7 @@ mod tests {
 
     #[test]
     fn variance_gaussian_is_sigma_squared() {
-        let owned = [
-            ("mu", array![0.0, 0.0]),
-            ("sigma", array![2.0, 3.0]),
-        ];
+        let owned = [("mu", array![0.0, 0.0]), ("sigma", array![2.0, 3.0])];
         let p = params_view(&owned);
         let v = Gaussian.variance(&p).unwrap();
         assert!((v[0] - 4.0).abs() < 1e-12);
@@ -1440,10 +1406,7 @@ mod tests {
 
     #[test]
     fn variance_negative_binomial_is_mu_plus_sigma_mu_squared() {
-        let owned = [
-            ("mu", array![2.0]),
-            ("sigma", array![0.5]),
-        ];
+        let owned = [("mu", array![2.0]), ("sigma", array![0.5])];
         let p = params_view(&owned);
         let v = NegativeBinomial.variance(&p).unwrap();
         // 2 + 0.5·4 = 4
@@ -1452,10 +1415,7 @@ mod tests {
 
     #[test]
     fn variance_beta_uses_mu_one_minus_mu_over_one_plus_phi() {
-        let owned = [
-            ("mu", array![0.5]),
-            ("phi", array![3.0]),
-        ];
+        let owned = [("mu", array![0.5]), ("phi", array![3.0])];
         let p = params_view(&owned);
         let v = Beta.variance(&p).unwrap();
         // 0.5·0.5/(1+3) = 0.0625
@@ -1474,10 +1434,7 @@ mod tests {
 
     #[test]
     fn expected_value_default_is_mu() {
-        let owned = [
-            ("mu", array![1.0, 2.0]),
-            ("sigma", array![1.0, 1.0]),
-        ];
+        let owned = [("mu", array![1.0, 2.0]), ("sigma", array![1.0, 1.0])];
         let p = params_view(&owned);
         let e = Gaussian.expected_value(&p).unwrap();
         assert_eq!(e, array![1.0, 2.0]);

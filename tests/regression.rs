@@ -149,10 +149,14 @@ fn snapshot_gaussian_pspline() {
 fn intercept_plus_pspline_converges_for_poisson() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
-    let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
-    let model = GamlssModel::fit(&data, &y, &formula, &glissando::distributions::Poisson::new())
-        .unwrap();
+    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
+    let model = GamlssModel::fit(
+        &data,
+        &y,
+        &formula,
+        &glissando::distributions::Poisson::new(),
+    )
+    .unwrap();
     assert!(model.converged(), "should converge after sum-to-zero fix");
     assert!(model.diagnostics.iterations < 50);
 }
