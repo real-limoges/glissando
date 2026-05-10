@@ -223,6 +223,21 @@ impl GamlssModel {
         Ok(results)
     }
 
+    /// Compute aggregate diagnostics (residuals, log-likelihood, AIC, BIC, EDF)
+    /// for this fitted model against the observed response `y`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GamlssError` if a fitted parameter required by the family is missing
+    /// or the family's log-density / variance evaluation fails.
+    pub fn diagnostics<D: Distribution + ?Sized>(
+        &self,
+        family: &D,
+        y: &Array1<f64>,
+    ) -> Result<ModelDiagnostics, GamlssError> {
+        diagnostics::compute(&self.models, family, y)
+    }
+
     /// Sample from the posterior distribution of coefficients for a given parameter.
     ///
     /// Uses Cholesky decomposition of the covariance matrix to generate samples

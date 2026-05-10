@@ -39,6 +39,18 @@ cd benchmark
 ./run_comparison.sh
 ```
 
+After regeneration, `tests/mgcv_reference.rs` validates the glissando results
+against mgcv coefficient-by-coefficient and pointwise on fitted μ:
+
+```bash
+cargo test --test mgcv_reference -- --ignored
+```
+
+The test reads `benchmark/output/comparison_summary.json` (gitignored) and
+asserts agreement within scenario-aware tolerances (~1e-3 relative for linear
+models, ~5% for smooths). It is `#[ignore]`-gated because the comparison output
+must exist locally; CI without R cannot run it.
+
 ## Commands
 
 ### Build
