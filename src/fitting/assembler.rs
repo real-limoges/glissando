@@ -6,6 +6,7 @@
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
     create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
+    sum_to_zero_basis,
 };
 use crate::types::DataSet;
 use crate::ModelMatrix;
@@ -23,6 +24,7 @@ fn assemble_smooth(
     data: &DataSet,
     n_obs: usize,
     smooth: &Smooth,
+    apply_constraint: bool,
 ) -> Result<(Array2<f64>, Vec<PenaltyMatrix>), GamlssError> {
     match smooth {
         Smooth::PSpline1D {
@@ -35,7 +37,14 @@ fn assemble_smooth(
             let basis = create_basis_matrix(x_col, *n_splines, *degree);
             let penalty = create_penalty_matrix(*n_splines, *penalty_order);
 
-            Ok((basis, vec![PenaltyMatrix(penalty)]))
+            if apply_constraint && *n_splines >= 2 {
+                let z = sum_to_zero_basis(*n_splines);
+                let basis_c = basis.dot(&z);
+                let penalty_c = z.t().dot(&penalty).dot(&z);
+                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+            } else {
+                Ok((basis, vec![PenaltyMatrix(penalty)]))
+            }
         }
 
         Smooth::TensorProduct {
@@ -48,24 +57,45 @@ fn assemble_smooth(
             degree,
         } => {
             let x1 = get_col(data, col_name_1)?;
-            let b1 = create_basis_matrix(x1, *n_splines_1, *degree);
-            let s1 = create_penalty_matrix(*n_splines_1, *penalty_order_1);
+            let b1_raw = create_basis_matrix(x1, *n_splines_1, *degree);
+            let s1_raw = create_penalty_matrix(*n_splines_1, *penalty_order_1);
 
             let x2 = get_col(data, col_name_2)?;
-            let b2 = create_basis_matrix(x2, *n_splines_2, *degree);
-            let s2 = create_penalty_matrix(*n_splines_2, *penalty_order_2);
+            let b2_raw = create_basis_matrix(x2, *n_splines_2, *degree);
+            let s2_raw = create_penalty_matrix(*n_splines_2, *penalty_order_2);
 
-            let n_coeffs_total = *n_splines_1 * *n_splines_2;
+            // Apply sum-to-zero to each marginal independently when an Intercept is
+            // also on the parameter — the row-Kronecker of two partition-of-unity
+            // bases is itself partition-of-unity, so without this the tensor
+            // smooth makes [1 | B] rank-deficient too.
+            let (b1, s1, k1) = if apply_constraint && *n_splines_1 >= 2 {
+                let z1 = sum_to_zero_basis(*n_splines_1);
+                let b1 = b1_raw.dot(&z1);
+                let s1 = z1.t().dot(&s1_raw).dot(&z1);
+                let k1 = *n_splines_1 - 1;
+                (b1, s1, k1)
+            } else {
+                (b1_raw, s1_raw, *n_splines_1)
+            };
+            let (b2, s2, k2) = if apply_constraint && *n_splines_2 >= 2 {
+                let z2 = sum_to_zero_basis(*n_splines_2);
+                let b2 = b2_raw.dot(&z2);
+                let s2 = z2.t().dot(&s2_raw).dot(&z2);
+                let k2 = *n_splines_2 - 1;
+                (b2, s2, k2)
+            } else {
+                (b2_raw, s2_raw, *n_splines_2)
+            };
 
+            let n_coeffs_total = k1 * k2;
             let mut basis = Array2::<f64>::zeros((n_obs, n_coeffs_total));
-
             for i in 0..n_obs {
                 row_kronecker_into(b1.row(i), b2.row(i), basis.row_mut(i));
             }
 
-            // Anisotropic penalties: S1⊗I2 for x1 direction, I1⊗S2 for x2 direction
-            let i_k1 = Array2::<f64>::eye(*n_splines_1);
-            let i_k2 = Array2::<f64>::eye(*n_splines_2);
+            // Anisotropic penalties: S1⊗I2 for x1 direction, I1⊗S2 for x2 direction.
+            let i_k1 = Array2::<f64>::eye(k1);
+            let i_k2 = Array2::<f64>::eye(k2);
 
             let penalty_1 = kronecker_product(&s1, &i_k2);
             let penalty_2 = kronecker_product(&i_k1, &s2);
@@ -76,12 +106,10 @@ fn assemble_smooth(
         }
 
         Smooth::RandomEffect { col_name } => {
-            // Ridge-penalized indicators: equivalent to alpha ~ N(0, 1/lambda)
+            // Ridge-penalized indicators: equivalent to alpha ~ N(0, 1/lambda).
             let group_var = get_col(data, col_name)?;
 
-            // Find unique groups and create mapping
             let mut group_to_id: HashMap<String, usize> = HashMap::new();
-
             for val in group_var.iter() {
                 let key: String = val.to_string();
                 let next_id = group_to_id.len();
@@ -98,9 +126,18 @@ fn assemble_smooth(
                 }
             }
 
-            let penalty = Array2::<f64>::eye(n_groups);
-
-            Ok((basis, vec![PenaltyMatrix(penalty)]))
+            // Indicator basis is partition-of-unity (each row sums to 1), same
+            // rank-deficiency story as P-splines.
+            if apply_constraint && n_groups >= 2 {
+                let z = sum_to_zero_basis(n_groups);
+                let basis_c = basis.dot(&z);
+                // Z'·I·Z = Z'·Z = I_{k-1} since Z has orthonormal columns.
+                let penalty_c = Array2::<f64>::eye(n_groups - 1);
+                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+            } else {
+                let penalty = Array2::<f64>::eye(n_groups);
+                Ok((basis, vec![PenaltyMatrix(penalty)]))
+            }
         }
     }
 }
@@ -114,6 +151,12 @@ pub fn assemble_model_matrices(
     n_obs: usize,
     terms: &[Term],
 ) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize), GamlssError> {
+    // Smooth bases on this codebase (P-spline, tensor-product, random-effect indicator)
+    // are all partition-of-unity, so `1_n ∈ col(B)`. When an `Intercept` term is also
+    // present the design matrix is rank-deficient. Apply a sum-to-zero
+    // reparameterization to the smooths in that case to restore identifiability.
+    let has_intercept = terms.iter().any(|t| matches!(t, Term::Intercept));
+
     let mut model_matrix_parts = Vec::with_capacity(terms.len());
     let mut penalty_blocks: Vec<(usize, PenaltyMatrix)> = Vec::new();
     let mut total_coeffs = 0;
@@ -139,7 +182,7 @@ pub fn assemble_model_matrices(
                 total_coeffs += 1;
             }
             Term::Smooth(smooth) => {
-                let (basis, penalties) = assemble_smooth(data, n_obs, smooth)?;
+                let (basis, penalties) = assemble_smooth(data, n_obs, smooth, has_intercept)?;
                 let n_coeffs = basis.ncols();
                 model_matrix_parts.push(basis);
 
