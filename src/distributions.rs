@@ -7,6 +7,7 @@
 use crate::error::GamlssError;
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
+use statrs::function::gamma::ln_gamma;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -102,6 +103,43 @@ pub trait Distribution: Debug + Send + Sync {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult;
+
+    /// Per-observation log-density `log f(y_i | params_i)`, used to assemble the model
+    /// log-likelihood and observation-level diagnostics (WAIC, leave-one-out, etc.).
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError>;
+
+    /// Marginal `Var(Y_i | params_i)` on the response scale, used for Pearson residuals.
+    ///
+    /// Distinct from the Fisher-information weight returned by [`Self::derivatives`],
+    /// which is on the linear-predictor scale.
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError>;
+
+    /// Marginal `E[Y_i | params_i]` on the response scale.
+    ///
+    /// Default returns `params["mu"]` cloned. Distributions where `mu` is not the
+    /// expected value of `Y` (e.g. [`Binomial`] where `E[Y] = n·μ`) override.
+    fn expected_value(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        Ok(require(self, params, "mu")?.to_owned())
+    }
+
+    /// Total model log-likelihood: `Σ log f(y_i | params_i)`.
+    fn loglik(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<f64, GamlssError> {
+        Ok(self.loglik_pointwise(y, params)?.sum())
+    }
 
     /// Stable distribution name (e.g. `"Gaussian"`); used in error messages and
     /// for the WASM `from_name` lookup.
@@ -225,6 +263,24 @@ impl Distribution for Poisson {
         Ok(HashMap::from([("mu".to_string(), (u, w))]))
     }
 
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        Ok(par_zip_map(y, mu, |yi, mui| {
+            yi * mui.max(MIN_POSITIVE).ln() - mui - ln_gamma(yi + 1.0)
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        Ok(require(self, params, "mu")?.to_owned())
+    }
+
     fn name(&self) -> &'static str {
         "Poisson"
     }
@@ -285,6 +341,29 @@ impl Distribution for Gaussian {
             ("mu".to_string(), (u_mu, w_mu)),
             ("sigma".to_string(), (u_sigma, w_sigma)),
         ]))
+    }
+
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let log_2pi = (2.0 * std::f64::consts::PI).ln();
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let s = si.max(MIN_POSITIVE);
+            let z = (yi - mui) / s;
+            -0.5 * log_2pi - s.ln() - 0.5 * z * z
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let sigma = require(self, params, "sigma")?;
+        Ok(sigma.mapv(|s| s * s))
     }
 
     fn name(&self) -> &'static str {
@@ -379,6 +458,43 @@ impl Distribution for StudentT {
         ]))
     }
 
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+        let n = y.len();
+        let mut out = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let s = sigma[i].max(MIN_POSITIVE);
+            let nu_i = nu[i].max(MIN_POSITIVE);
+            let z = (y[i] - mu[i]) / s;
+            out[i] = ln_gamma((nu_i + 1.0) / 2.0)
+                - ln_gamma(nu_i / 2.0)
+                - 0.5 * (std::f64::consts::PI * nu_i).ln()
+                - s.ln()
+                - 0.5 * (nu_i + 1.0) * (1.0 + z * z / nu_i).ln();
+        }
+        Ok(out)
+    }
+
+    /// `Var(Y) = σ²·ν/(ν−2)` for `ν > 2`. For `ν ≤ 2` the variance is undefined; we
+    /// clamp the denominator at `MIN_POSITIVE` so Pearson residuals stay finite.
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+        Ok(par_zip_map(sigma, nu, |s, nu_i| {
+            let denom = (nu_i - 2.0).max(MIN_POSITIVE);
+            s * s * nu_i / denom
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "StudentT"
     }
@@ -452,6 +568,33 @@ impl Distribution for Gamma {
         ]))
     }
 
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let s = si.max(MIN_POSITIVE);
+            let alpha = 1.0 / (s * s);
+            let theta = mui * s * s;
+            (alpha - 1.0) * yi.max(MIN_POSITIVE).ln()
+                - yi / theta
+                - alpha * theta.ln()
+                - ln_gamma(alpha)
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip_map(mu, sigma, |m, s| m * m * s * s))
+    }
+
     fn name(&self) -> &'static str {
         "Gamma"
     }
@@ -506,14 +649,15 @@ impl Distribution for NegativeBinomial {
         let w_mu = &mu_safe / &one_plus_sigma_mu;
 
         // σ (log link, r = 1/σ):
-        //   dl/dσ = −(1/σ²)·[ψ(y+r) − ψ(r) − log(1+σμ) + (y−μ)/(1+σμ)]
-        //   dl/dη = σ · dl/dσ
+        //   dl/dr = ψ(y+r) − ψ(r) − log(1+σμ) + (μ−y)/(r+μ)
+        //   dl/dσ = −(1/σ²)·dl/dr,   dl/dη = σ·dl/dσ = −(1/σ)·dl/dr.
         let r = sigma_safe.mapv(|s| 1.0 / s);
         let y_plus_r = y + &r;
         let psi_y_r = digamma_batch(&y_plus_r);
         let psi_r = digamma_batch(&r);
         let log_term = one_plus_sigma_mu.mapv(|v| v.ln());
-        let ratio_term = (y - &mu_safe) / &one_plus_sigma_mu;
+        let r_plus_mu = &r + &mu_safe;
+        let ratio_term = (&mu_safe - y) / &r_plus_mu;
 
         let u_sigma = (-1.0 / &sigma_safe) * (&psi_y_r - &psi_r - &log_term + &ratio_term);
 
@@ -526,6 +670,31 @@ impl Distribution for NegativeBinomial {
             ("mu".to_string(), (u_mu, w_mu)),
             ("sigma".to_string(), (u_sigma, w_sigma)),
         ]))
+    }
+
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let r = 1.0 / si.max(MIN_POSITIVE);
+            let p = r / (r + mui);
+            ln_gamma(yi + r) - ln_gamma(r) - ln_gamma(yi + 1.0)
+                + r * p.max(MIN_POSITIVE).ln()
+                + yi * (1.0 - p).max(MIN_POSITIVE).ln()
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip_map(mu, sigma, |m, s| m + s * m * m))
     }
 
     fn name(&self) -> &'static str {
@@ -622,6 +791,35 @@ impl Distribution for Beta {
         ]))
     }
 
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let phi = require(self, params, "phi")?;
+        Ok(par_zip3_map(y, mu, phi, |yi, mui, phii| {
+            let alpha = mui * phii;
+            let beta = (1.0 - mui) * phii;
+            let yc = yi.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            ln_gamma(phii) - ln_gamma(alpha) - ln_gamma(beta)
+                + (alpha - 1.0) * yc.ln()
+                + (beta - 1.0) * (1.0 - yc).ln()
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let phi = require(self, params, "phi")?;
+        Ok(par_zip_map(mu, phi, |m, p| {
+            let m_clamped = m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            m_clamped * (1.0 - m_clamped) / (1.0 + p.max(MIN_POSITIVE))
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Beta"
     }
@@ -693,6 +891,42 @@ impl Distribution for Binomial {
         let w_mu = (n.as_ref() * &mu_1_minus_mu).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([("mu".to_string(), (u_mu, w_mu))]))
+    }
+
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let n = self.trials(y.len());
+        Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
+            let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            ln_gamma(ni + 1.0) - ln_gamma(yi + 1.0) - ln_gamma(ni - yi + 1.0)
+                + yi * m.ln()
+                + (ni - yi) * (1.0 - m).ln()
+        }))
+    }
+
+    fn variance(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let n = self.trials(mu.len());
+        Ok(par_zip_map(n.as_ref(), mu, |ni, mi| {
+            let m = mi.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            ni * m * (1.0 - m)
+        }))
+    }
+
+    fn expected_value(
+        &self,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let n = self.trials(mu.len());
+        Ok(n.as_ref() * mu)
     }
 
     fn name(&self) -> &'static str {
@@ -1042,6 +1276,371 @@ mod tests {
                 assert_eq!(param, "zeta");
             }
             other => panic!("expected UnknownParameter, got {:?}", other),
+        }
+    }
+
+    // --- loglik / variance / expected_value per distribution ---
+
+    /// Build a `params` view from owned arrays for test ergonomics.
+    fn params_view<'a>(
+        owned: &'a [(&'static str, Array1<f64>)],
+    ) -> HashMap<&'a str, &'a Array1<f64>> {
+        owned.iter().map(|(k, v)| (*k, v)).collect()
+    }
+
+    #[test]
+    fn loglik_gaussian_matches_manual_formula() {
+        let owned = [
+            ("mu", array![0.0]),
+            ("sigma", array![1.0]),
+        ];
+        let p = params_view(&owned);
+        let ll = Gaussian.loglik(&array![0.0], &p).unwrap();
+        let expected = -0.5 * (2.0 * std::f64::consts::PI).ln();
+        assert!((ll - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn loglik_poisson_matches_manual() {
+        // l = y log(μ) − μ − log Γ(y+1). y=0, μ=1 → −1.
+        let owned = [("mu", array![1.0])];
+        let p = params_view(&owned);
+        let ll = Poisson.loglik(&array![0.0], &p).unwrap();
+        assert!((ll - (-1.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn loglik_binomial_matches_manual() {
+        // n=2, y=1, mu=0.5 → log C(2,1) + 1·log(0.5) + 1·log(0.5) = log 2 + 2 log 0.5
+        let bin = Binomial::new(2);
+        let owned = [("mu", array![0.5])];
+        let p = params_view(&owned);
+        let ll = bin.loglik(&array![1.0], &p).unwrap();
+        let expected = 2.0_f64.ln() + 2.0 * 0.5_f64.ln();
+        assert!((ll - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn loglik_gamma_finite_on_typical_inputs() {
+        let owned = [
+            ("mu", array![2.0, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        let p = params_view(&owned);
+        let ll = Gamma.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn loglik_negative_binomial_finite() {
+        let owned = [
+            ("mu", array![1.0, 4.0, 8.0]),
+            ("sigma", array![0.5, 0.5, 0.5]),
+        ];
+        let p = params_view(&owned);
+        let ll = NegativeBinomial.loglik(&array![0.0, 5.0, 10.0], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn loglik_beta_finite() {
+        let owned = [
+            ("mu", array![0.2, 0.5, 0.8]),
+            ("phi", array![10.0, 10.0, 10.0]),
+        ];
+        let p = params_view(&owned);
+        let ll = Beta.loglik(&array![0.1, 0.5, 0.9], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn loglik_studentt_matches_cauchy_at_zero() {
+        // Student-t with ν=1, μ=0, σ=1 is standard Cauchy. Density at y=0 is 1/π.
+        let owned = [
+            ("mu", array![0.0]),
+            ("sigma", array![1.0]),
+            ("nu", array![1.0]),
+        ];
+        let p = params_view(&owned);
+        let ll = StudentT.loglik(&array![0.0], &p).unwrap();
+        let expected = -std::f64::consts::PI.ln();
+        assert!((ll - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn loglik_studentt_finite_on_typical_inputs() {
+        let owned = [
+            ("mu", array![0.0, 1.0, 2.0]),
+            ("sigma", array![1.0, 1.5, 0.5]),
+            ("nu", array![5.0, 10.0, 4.0]),
+        ];
+        let p = params_view(&owned);
+        let ll = StudentT.loglik(&array![0.5, 0.5, 1.5], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn variance_studentt_uses_sigma_sq_nu_over_nu_minus_two() {
+        let owned = [
+            ("mu", array![0.0]),
+            ("sigma", array![1.0]),
+            ("nu", array![4.0]),
+        ];
+        let p = params_view(&owned);
+        // σ²·ν/(ν−2) = 1·4/2 = 2.
+        let v = StudentT.variance(&p).unwrap();
+        assert!((v[0] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn variance_studentt_clamps_at_low_nu() {
+        // ν ≤ 2 is undefined; clamp keeps the value finite for downstream Pearson math.
+        let owned = [
+            ("sigma", array![1.0]),
+            ("nu", array![1.5]),
+        ];
+        let p = params_view(&owned);
+        let v = StudentT.variance(&p).unwrap();
+        assert!(v[0].is_finite());
+        assert!(v[0] > 0.0);
+    }
+
+    #[test]
+    fn variance_gamma_is_mu_squared_sigma_squared() {
+        let owned = [
+            ("mu", array![2.0, 3.0]),
+            ("sigma", array![0.5, 0.5]),
+        ];
+        let p = params_view(&owned);
+        let v = Gamma.variance(&p).unwrap();
+        // μ²σ² = 4·0.25 = 1; 9·0.25 = 2.25.
+        assert!((v[0] - 1.0).abs() < 1e-12);
+        assert!((v[1] - 2.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn variance_gaussian_is_sigma_squared() {
+        let owned = [
+            ("mu", array![0.0, 0.0]),
+            ("sigma", array![2.0, 3.0]),
+        ];
+        let p = params_view(&owned);
+        let v = Gaussian.variance(&p).unwrap();
+        assert!((v[0] - 4.0).abs() < 1e-12);
+        assert!((v[1] - 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn variance_poisson_is_mu() {
+        let owned = [("mu", array![1.0, 4.0, 9.0])];
+        let p = params_view(&owned);
+        let v = Poisson.variance(&p).unwrap();
+        assert_eq!(v, array![1.0, 4.0, 9.0]);
+    }
+
+    #[test]
+    fn variance_negative_binomial_is_mu_plus_sigma_mu_squared() {
+        let owned = [
+            ("mu", array![2.0]),
+            ("sigma", array![0.5]),
+        ];
+        let p = params_view(&owned);
+        let v = NegativeBinomial.variance(&p).unwrap();
+        // 2 + 0.5·4 = 4
+        assert!((v[0] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn variance_beta_uses_mu_one_minus_mu_over_one_plus_phi() {
+        let owned = [
+            ("mu", array![0.5]),
+            ("phi", array![3.0]),
+        ];
+        let p = params_view(&owned);
+        let v = Beta.variance(&p).unwrap();
+        // 0.5·0.5/(1+3) = 0.0625
+        assert!((v[0] - 0.0625).abs() < 1e-12);
+    }
+
+    #[test]
+    fn variance_binomial_is_n_mu_one_minus_mu() {
+        let bin = Binomial::new(10);
+        let owned = [("mu", array![0.3, 0.5])];
+        let p = params_view(&owned);
+        let v = bin.variance(&p).unwrap();
+        assert!((v[0] - 10.0 * 0.3 * 0.7).abs() < 1e-12);
+        assert!((v[1] - 10.0 * 0.5 * 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn expected_value_default_is_mu() {
+        let owned = [
+            ("mu", array![1.0, 2.0]),
+            ("sigma", array![1.0, 1.0]),
+        ];
+        let p = params_view(&owned);
+        let e = Gaussian.expected_value(&p).unwrap();
+        assert_eq!(e, array![1.0, 2.0]);
+    }
+
+    #[test]
+    fn expected_value_binomial_is_n_times_mu() {
+        let bin = Binomial::new(10);
+        let owned = [("mu", array![0.3, 0.5])];
+        let p = params_view(&owned);
+        let e = bin.expected_value(&p).unwrap();
+        assert!((e[0] - 3.0).abs() < 1e-12);
+        assert!((e[1] - 5.0).abs() < 1e-12);
+    }
+
+    // --- gradient consistency: analytic score u vs central-difference of loglik ---
+    //
+    // For each (distribution, parameter), perturb that parameter on the η-scale by ±ε
+    // (round-tripping through inv_link), evaluate `loglik_pointwise` at both points,
+    // and assert the central difference matches the analytic score returned by
+    // `derivatives()`. Catches sign errors and chain-rule slips that integration tests
+    // would only detect indirectly via slow / wrong convergence.
+
+    fn check_score_via_finite_diff<D: Distribution + ?Sized>(
+        family: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        target: &str,
+        tol: f64,
+    ) {
+        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let derivs = family.derivatives(y, &p).unwrap();
+        let analytic_u = derivs.get(target).unwrap().0.clone();
+
+        let link = family.default_link(target).unwrap();
+        let eps: f64 = 1e-6;
+        let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
+
+        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
+            owned.iter().map(|(k, v)| (*k, v.clone())).collect();
+
+        for i in 0..y.len() {
+            let mu_orig = owned[idx].1[i];
+            let eta = link.link(mu_orig);
+
+            perturbed[idx].1[i] = link.inv_link(eta + eps);
+            let p_plus: HashMap<&str, &Array1<f64>> =
+                perturbed.iter().map(|(k, v)| (*k, v)).collect();
+            let l_plus = family.loglik_pointwise(y, &p_plus).unwrap()[i];
+
+            perturbed[idx].1[i] = link.inv_link(eta - eps);
+            let p_minus: HashMap<&str, &Array1<f64>> =
+                perturbed.iter().map(|(k, v)| (*k, v)).collect();
+            let l_minus = family.loglik_pointwise(y, &p_minus).unwrap()[i];
+
+            perturbed[idx].1[i] = mu_orig;
+
+            let numeric_u = (l_plus - l_minus) / (2.0 * eps);
+            let scale = analytic_u[i].abs().max(1.0);
+            assert!(
+                (analytic_u[i] - numeric_u).abs() / scale < tol,
+                "{}::{} obs {}: analytic u={:.6e}, numeric u={:.6e}",
+                family.name(),
+                target,
+                i,
+                analytic_u[i],
+                numeric_u
+            );
+        }
+    }
+
+    #[test]
+    fn score_matches_finite_diff_poisson() {
+        let y = array![0.0, 3.0, 7.0, 12.0];
+        let owned = [("mu", array![1.0, 3.5, 6.0, 10.0])];
+        check_score_via_finite_diff(&Poisson, &y, &owned, "mu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_gaussian() {
+        let y = array![-1.0, 0.0, 1.0, 2.0];
+        let owned = [
+            ("mu", array![-0.5, 0.5, 0.5, 1.5]),
+            ("sigma", array![1.0, 1.5, 0.8, 1.2]),
+        ];
+        check_score_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_studentt() {
+        let y = array![-1.0, 0.5, 2.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, 1.0]),
+            ("sigma", array![1.0, 1.2, 0.8]),
+            ("nu", array![5.0, 8.0, 4.0]),
+        ];
+        check_score_via_finite_diff(&StudentT, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&StudentT, &y, &owned, "sigma", 1e-5);
+        check_score_via_finite_diff(&StudentT, &y, &owned, "nu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_gamma() {
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_negative_binomial() {
+        let y = array![0.0, 4.0, 10.0];
+        let owned = [
+            ("mu", array![1.0, 4.0, 8.0]),
+            ("sigma", array![0.5, 0.3, 0.4]),
+        ];
+        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_beta() {
+        let y = array![0.2, 0.5, 0.85];
+        let owned = [
+            ("mu", array![0.3, 0.5, 0.7]),
+            ("phi", array![10.0, 12.0, 8.0]),
+        ];
+        check_score_via_finite_diff(&Beta, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&Beta, &y, &owned, "phi", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_binomial() {
+        let bin = Binomial::new(10);
+        let y = array![3.0, 5.0, 8.0];
+        let owned = [("mu", array![0.3, 0.5, 0.7])];
+        check_score_via_finite_diff(&bin, &y, &owned, "mu", 1e-5);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest! {
+        #[test]
+        fn loglik_gaussian_pointwise_matches_naive(
+            n in 1usize..20,
+            mu_val in -5.0f64..5.0,
+            sigma_val in 0.1f64..3.0,
+        ) {
+            let y = Array1::from_iter((0..n).map(|i| i as f64 * 0.1));
+            let mu = Array1::from_elem(n, mu_val);
+            let sigma = Array1::from_elem(n, sigma_val);
+            let owned = [("mu", mu), ("sigma", sigma)];
+            let p = params_view(&owned);
+            let actual = Gaussian.loglik(&y, &p).unwrap();
+            let log_2pi = (2.0 * std::f64::consts::PI).ln();
+            let expected: f64 = (0..n).map(|i| {
+                let z = (y[i] - mu_val) / sigma_val;
+                -0.5 * log_2pi - sigma_val.ln() - 0.5 * z * z
+            }).sum();
+            prop_assert!((actual - expected).abs() < 1e-9);
         }
     }
 }
