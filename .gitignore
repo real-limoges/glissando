@@ -3,3 +3,5 @@ benchmark/output/
 benchmark/target/
 .idea/
 CLAUDE.md
+
+.venv-prepush/
