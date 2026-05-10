@@ -13,11 +13,11 @@
 
 pub mod assembler;
 pub mod inference;
+mod scoring;
 mod solver;
 
 use self::assembler::assemble_model_matrices;
 pub use self::inference::sample_posterior;
-use self::solver::{fit_pwls, run_optimization};
 
 use super::distributions::{Distribution, Link};
 use super::error::GamlssError;
@@ -28,9 +28,6 @@ use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
-
-/// Minimum weight for IRLS to prevent division by near-zero
-const MIN_WEIGHT: f64 = 1e-6;
 
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
@@ -99,16 +96,16 @@ pub struct FittedParameter {
     pub edf: f64,
 }
 
-struct FittingParameter {
-    terms: Vec<Term>,
-    link: Box<dyn Link>,
-    x_matrix: ModelMatrix,
-    penalty_matrices: Vec<PenaltyMatrix>,
-    beta: Coefficients,
-    eta: Array1<f64>,
-    lambdas: Array1<f64>,
-    covariance: Option<CovarianceMatrix>,
-    edf: f64,
+pub(super) struct FittingParameter {
+    pub(super) terms: Vec<Term>,
+    pub(super) link: Box<dyn Link>,
+    pub(super) x_matrix: ModelMatrix,
+    pub(super) penalty_matrices: Vec<PenaltyMatrix>,
+    pub(super) beta: Coefficients,
+    pub(super) eta: Array1<f64>,
+    pub(super) lambdas: Array1<f64>,
+    pub(super) covariance: Option<CovarianceMatrix>,
+    pub(super) edf: f64,
 }
 
 /// Fits a GAMLSS model using the RS (Rigby-Stasinopoulos) algorithm.
@@ -175,88 +172,27 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let mut max_diff = 0.0;
 
         for param_name in family.parameters() {
-            let param_key = param_name.to_string();
-
-            // Snapshot every parameter on the response scale; derivatives() expects all of them.
-            let current_params: HashMap<&str, Array1<f64>> = family
-                .parameters()
-                .iter()
-                .map(|name| {
-                    let model = &models[*name];
-                    let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-                    (*name, fitted_values)
-                })
-                .collect();
-            let params_ref: HashMap<&str, &Array1<f64>> =
-                current_params.iter().map(|(k, v)| (*k, v)).collect();
-
-            // One batched call replaces n_obs individual ones.
-            let all_derivs = family.derivatives(y, &params_ref)?;
-            let (deriv_u, deriv_w) = all_derivs.get(*param_name).ok_or_else(|| {
-                GamlssError::Input(format!("No derivation for {} found", param_name))
-            })?;
-
-            let model = models.get_mut(&param_key).ok_or_else(|| {
-                GamlssError::Internal(format!("Model for parameter '{}' not found", param_key))
-            })?;
-
-            // Fisher scoring: z = η + u/w forms working response for weighted least squares
-            let safe_w = deriv_w.mapv(|w: f64| w.max(MIN_WEIGHT));
-            let adjustment = deriv_u / &safe_w;
-            let safe_adjustment = adjustment.mapv(|v| v.clamp(-20.0, 20.0));
-
-            let z = &model.eta + &safe_adjustment;
-            let w = safe_w;
-
-            // Optimize lambdas (warm-start from previous values for faster convergence)
-            // Skip optimization if no penalty matrices (purely parametric model)
-            let best_lambdas = if model.penalty_matrices.is_empty() {
-                Array1::zeros(0)
-            } else {
-                run_optimization(
-                    &model.x_matrix,
-                    &z,
-                    &w,
-                    &model.penalty_matrices,
-                    Some(&model.lambdas),
-                )?
-            };
-
-            let (new_beta, cov_matrix, edf) = fit_pwls(
-                &model.x_matrix,
-                &z,
-                &w,
-                &model.penalty_matrices,
-                &best_lambdas,
-            )?;
-
-            // Use max absolute change for convergence
-            let diff = (&new_beta.0 - &model.beta.0)
-                .iter()
-                .map(|x| x.abs())
-                .fold(0.0_f64, |a, b| a.max(b));
-            if diff > max_diff {
-                max_diff = diff;
+            let update = scoring::step(family, y, &models, param_name)?;
+            if update.max_diff > max_diff {
+                max_diff = update.max_diff;
             }
-
-            let new_eta = model.x_matrix.dot(&new_beta.0);
-            let eta_change = (&new_eta - &model.eta).mapv(f64::abs).sum();
-            let lambda_change = (&best_lambdas - &model.lambdas).mapv(f64::abs).sum();
-
-            model.beta = new_beta;
-            model.eta = new_eta;
-            model.lambdas = best_lambdas;
-            model.covariance = Some(cov_matrix);
-            model.edf = edf;
-
             param_diagnostics.insert(
-                param_key,
+                param_name.to_string(),
                 ParamDiagnostic {
-                    final_eta_change: eta_change,
-                    final_lambda_change: lambda_change,
-                    edf,
+                    final_eta_change: update.eta_change,
+                    final_lambda_change: update.lambda_change,
+                    edf: update.edf,
                 },
             );
+
+            let model = models.get_mut(*param_name).ok_or_else(|| {
+                GamlssError::Internal(format!("Model for parameter '{}' not found", param_name))
+            })?;
+            model.beta = update.beta;
+            model.eta = update.eta;
+            model.lambdas = update.lambdas;
+            model.covariance = Some(update.covariance);
+            model.edf = update.edf;
         }
 
         final_iteration = cycle + 1;
