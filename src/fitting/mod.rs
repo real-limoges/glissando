@@ -288,8 +288,8 @@ pub fn sample_posterior(
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Result<Vec<Array1<f64>>, GamlssError> {
-    let l_factor = linalg::cholesky_lower(&v_beta.0)
-        .map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
+    let l_factor =
+        linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
 
     let mut rng_rs = rng();
     Ok(sample_from_cholesky(

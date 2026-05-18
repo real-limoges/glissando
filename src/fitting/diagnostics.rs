@@ -37,8 +37,8 @@ pub struct ModelDiagnostics {
 /// Computes Pearson residuals via the family's marginal moments:
 /// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.
 ///
-/// Variance is floored at [`MIN_POSITIVE`] before the square-root to keep
-/// residuals finite when the fitted variance is degenerate.
+/// Variance is floored at `MIN_POSITIVE = 1e-10` before the square-root to
+/// keep residuals finite when the fitted variance is degenerate.
 pub fn pearson_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,

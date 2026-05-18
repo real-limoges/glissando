@@ -34,7 +34,8 @@ impl Link for IdentityLink {
 
 /// Log link: `η = log(μ)`. Used for positive parameters (Poisson rate, Gamma mean).
 ///
-/// `link` clamps `log(μ)` to [`MIN_ETA`]; `inv_link` clamps `η` to [`MAX_ETA`].
+/// `link` clamps `log(μ)` from below at `MIN_ETA = -30.0`; `inv_link` clamps `η`
+/// from above at `MAX_ETA = 30.0` to keep `exp(η)` finite.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogLink;
 

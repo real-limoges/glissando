@@ -7,6 +7,19 @@
 //! Each backend module exposes the same `solve`, `inv`, and `cholesky_lower` functions,
 //! and the file-level `pub use` re-exports the active backend's set.
 
+// `openblas` and `pure-rust` define `mod backend { … }` with `#[cfg]` gates that
+// assume exactly one is active. Cargo's feature-unification across workspace
+// members can quietly activate both (e.g. `cargo --workspace --features pure-rust`
+// while the `benchmark` member forces `openblas`), producing a cryptic E0428
+// "name `backend` defined multiple times" instead of a useful diagnostic.
+#[cfg(all(feature = "openblas", feature = "pure-rust"))]
+compile_error!(
+    "Features `openblas` and `pure-rust` are mutually exclusive — pick one linear-algebra backend. \
+     If this fired while you ran `cargo --workspace … --features pure-rust`, the `benchmark` crate \
+     is unioning `openblas` on top of your override; run cargo on the library directly instead: \
+     `cargo test -p glissando --no-default-features --features pure-rust`."
+);
+
 use crate::GamlssError;
 
 /// Result type for linear algebra operations.
@@ -36,7 +49,9 @@ mod backend {
     }
 }
 
-#[cfg(feature = "pure-rust")]
+// `not(feature = "openblas")` keeps this mod gone when both features unify, so
+// only the `compile_error!` above fires — no cryptic E0428 alongside it.
+#[cfg(all(feature = "pure-rust", not(feature = "openblas")))]
 mod backend {
     use super::Result;
     use crate::GamlssError;
