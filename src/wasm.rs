@@ -25,7 +25,7 @@ fn parse_y_json(json: &str) -> Result<Array1<f64>, JsError> {
 /// Expects `{"col_name": [1.0, 2.0, ...], ...}`.
 fn parse_data_json(json: &str) -> Result<DataSet, JsError> {
     let raw: HashMap<String, Vec<f64>> = serde_json::from_str(json).map_err(to_js_err)?;
-    Ok(DataSet::from_vecs(raw))
+    DataSet::from_vecs(raw).map_err(to_js_err)
 }
 
 /// Expects `{"mu": [{"Intercept": null}, ...], "sigma": [...]}`.

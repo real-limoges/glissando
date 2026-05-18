@@ -98,7 +98,9 @@ fn py_dict_to_dataset(py_dict: &Bound<'_, PyDict>) -> PyResult<DataSet> {
     for (key, value) in py_dict.iter() {
         let col_name: String = key.extract()?;
         let array: PyReadonlyArray1<f64> = value.extract()?;
-        dataset.insert_column(col_name, array.as_array().to_owned());
+        dataset
+            .try_insert_column(col_name, array.as_array().to_owned())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     }
     Ok(dataset)
 }
