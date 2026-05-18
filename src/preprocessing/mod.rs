@@ -68,19 +68,20 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
         }
     }
 
-    // Validate all variables have correct length and contain finite values
-    for (name, arr) in data.iter() {
-        // Check length matches response
-        if arr.len() != n_obs {
+    // `DataSet` enforces that all columns share a length internally; we only need to
+    // check that length agrees with `y`. `n_obs()` returns `None` for empty datasets,
+    // which is fine — formulas may only reference `Intercept`, which doesn't need data.
+    if let Some(data_n_obs) = data.n_obs() {
+        if data_n_obs != n_obs {
             return Err(GamlssError::Input(format!(
-                "Variable '{}' has {} observations but response has {}",
-                name,
-                arr.len(),
-                n_obs
+                "Dataset has {} observations but response has {}",
+                data_n_obs, n_obs,
             )));
         }
+    }
 
-        // Check for non-finite values
+    // Check for non-finite values in every column.
+    for (name, arr) in data.iter() {
         let non_finite_count = arr.iter().filter(|v| !v.is_finite()).count();
         if non_finite_count > 0 {
             return Err(GamlssError::NonFiniteValues {
@@ -164,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_mismatched_column_length() {
+    fn rejects_dataset_length_mismatched_to_response() {
         let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
         let data = data_with("x", vec![1.0, 2.0]); // length 2, y is length 3
         let f = Formula::new()
@@ -177,7 +178,9 @@ mod tests {
             .with_terms("sigma", vec![Term::Intercept]);
         let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
         match err {
-            GamlssError::Input(s) => assert!(s.contains("'x'")),
+            GamlssError::Input(s) => {
+                assert!(s.contains("2 observations") && s.contains("response has 3"))
+            }
             other => panic!("expected Input, got {:?}", other),
         }
     }
