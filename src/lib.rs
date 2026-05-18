@@ -26,6 +26,8 @@
 
 pub mod distributions;
 mod error;
+#[cfg(any(feature = "python", feature = "wasm"))]
+mod ffi;
 pub mod fitting;
 mod linalg;
 mod math;

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use crate::distributions::from_name as distribution_from_name;
+use crate::ffi::FamilyType;
 use crate::fitting::FitConfig;
 use crate::types::{DataSet, Formula};
 use crate::GamlssModel;
@@ -40,7 +40,7 @@ fn parse_formula_json(json: &str) -> Result<Formula, JsError> {
 #[wasm_bindgen]
 pub struct WasmGamlssModel {
     model: GamlssModel,
-    distribution_name: String,
+    family: FamilyType,
 }
 
 #[wasm_bindgen]
@@ -61,14 +61,12 @@ impl WasmGamlssModel {
         let y = parse_y_json(y_json)?;
         let data = parse_data_json(data_json)?;
         let formula = parse_formula_json(formula_json)?;
-        let family = distribution_from_name(distribution).map_err(to_js_err)?;
+        let family = FamilyType::from_name(distribution).map_err(to_js_err)?;
 
-        let model = GamlssModel::fit(&data, &y, &formula, family.as_ref()).map_err(to_js_err)?;
+        let model =
+            GamlssModel::fit(&data, &y, &formula, family.as_distribution()).map_err(to_js_err)?;
 
-        Ok(WasmGamlssModel {
-            model,
-            distribution_name: distribution.to_string(),
-        })
+        Ok(WasmGamlssModel { model, family })
     }
 
     /// Fit a GAMLSS model with custom configuration.
@@ -86,40 +84,36 @@ impl WasmGamlssModel {
         let y = parse_y_json(y_json)?;
         let data = parse_data_json(data_json)?;
         let formula = parse_formula_json(formula_json)?;
-        let family = distribution_from_name(distribution).map_err(to_js_err)?;
+        let family = FamilyType::from_name(distribution).map_err(to_js_err)?;
         let config: FitConfig = serde_json::from_str(config_json).map_err(to_js_err)?;
 
-        let model = GamlssModel::fit_with_config(&data, &y, &formula, family.as_ref(), config)
-            .map_err(to_js_err)?;
+        let model =
+            GamlssModel::fit_with_config(&data, &y, &formula, family.as_distribution(), config)
+                .map_err(to_js_err)?;
 
-        Ok(WasmGamlssModel {
-            model,
-            distribution_name: distribution.to_string(),
-        })
+        Ok(WasmGamlssModel { model, family })
     }
 
     #[wasm_bindgen(js_name = "fromJson")]
     pub fn from_json(json: &str) -> Result<WasmGamlssModel, JsError> {
         let (model, distribution_name) = GamlssModel::from_json(json).map_err(to_js_err)?;
-        Ok(WasmGamlssModel {
-            model,
-            distribution_name,
-        })
+        let family = FamilyType::from_name(&distribution_name).map_err(to_js_err)?;
+        Ok(WasmGamlssModel { model, family })
     }
 
     #[wasm_bindgen(js_name = "toJson")]
     pub fn to_json(&self) -> Result<String, JsError> {
-        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
-        self.model.to_json(family.as_ref()).map_err(to_js_err)
+        self.model
+            .to_json(self.family.as_distribution())
+            .map_err(to_js_err)
     }
 
     /// Input/output are JSON: `{"col": [values]}` → `{"param": [predictions]}`.
     pub fn predict(&self, data_json: &str) -> Result<String, JsError> {
-        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let predictions = self
             .model
-            .predict(&new_data, family.as_ref())
+            .predict(&new_data, self.family.as_distribution())
             .map_err(to_js_err)?;
 
         let result: HashMap<String, Vec<f64>> = predictions
@@ -131,11 +125,10 @@ impl WasmGamlssModel {
 
     #[wasm_bindgen(js_name = "predictWithSe")]
     pub fn predict_with_se(&self, data_json: &str) -> Result<String, JsError> {
-        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let results = self
             .model
-            .predict_with_se(&new_data, family.as_ref())
+            .predict_with_se(&new_data, self.family.as_distribution())
             .map_err(to_js_err)?;
 
         let output: HashMap<String, PredictionWithSe> = results
@@ -187,11 +180,10 @@ impl WasmGamlssModel {
     /// where each inner array is one sample's predictions across all observations.
     #[wasm_bindgen(js_name = "predictSamples")]
     pub fn predict_samples(&self, data_json: &str, n_samples: usize) -> Result<String, JsError> {
-        let family = distribution_from_name(&self.distribution_name).map_err(to_js_err)?;
         let new_data = parse_data_json(data_json)?;
         let results = self
             .model
-            .predict_samples(&new_data, family.as_ref(), n_samples)
+            .predict_samples(&new_data, self.family.as_distribution(), n_samples)
             .map_err(to_js_err)?;
 
         let output: HashMap<String, Vec<Vec<f64>>> = results
