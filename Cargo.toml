@@ -17,7 +17,7 @@ openblas = ["ndarray-linalg", "argmin-math/ndarray_latest"]
 pure-rust = ["nalgebra"]
 
 # Serialization support (serde + ndarray/serde)
-serialization = ["serde", "serde_json", "ndarray/serde"]
+serialization = ["serde", "serde_json", "ndarray/serde", "indexmap/serde"]
 
 # WASM target (implies pure-rust + serialization, no parallel)
 wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom_02", "getrandom_03", "getrandom"]
@@ -35,6 +35,7 @@ test-python = ["python", "pyo3/auto-initialize"]
 
 [dependencies]
 argmin = { version = "0.11.0"}
+indexmap = { version = "2" }
 ndarray = { version = "0.17" }
 rand = { version = "0.10" }
 rand_distr = { version = "0.6" }
@@ -72,6 +73,16 @@ getrandom = { version = "0.4", optional = true, default-features = false, featur
 pyo3 = { version = "0.28.0", features = ["extension-module"], optional = true }
 numpy = { version = "0.28.0", optional = true }
 
+# `argmin-math 0.5.1` brings its own pin to `ndarray 0.16` + `ndarray-linalg 0.17`,
+# which coexist with our direct `ndarray 0.17` + `ndarray-linalg 0.18`. The
+# duplication shows up in `cargo tree --duplicates` and inflates binary size but
+# does not break the build: each `argmin-math` operation that hits an ndarray type
+# uses the older ndarray, and our solver/IRLS code goes through the newer one. The
+# top-level `ndarray_latest-nolinalg` feature is required for pure-rust builds
+# (gives argmin its ndarray ops without dragging ndarray-linalg into that backend);
+# the `openblas` feature additionally turns on `ndarray_latest` so argmin can use
+# the system OpenBLAS path. Consolidating the duplication requires an upstream
+# `argmin-math` release that bumps its ndarray pin — tracked, not actionable here.
 [dependencies.argmin-math]
 version = "0.5.1"
 features = ["ndarray_latest-nolinalg"]
@@ -85,7 +96,7 @@ serde_json = "1.0"
 # Scope both to non-wasm targets so wasm-pack test can build the test crate.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.8"
-insta = { version = "1", features = ["yaml"] }
+insta = { version = "1.40", features = ["yaml"] }
 proptest = "1.5"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

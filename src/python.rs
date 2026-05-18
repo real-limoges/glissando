@@ -6,55 +6,16 @@
 
 use ndarray::Array1;
 use numpy::{PyReadonlyArray1, ToPyArray};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
+use crate::distributions::{Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
+use crate::ffi::FamilyType;
+use crate::fitting::FitConfig;
 use crate::terms::py_parse;
-use crate::{distributions::*, DataSet, Formula, GamlssError, GamlssModel};
-
-/// Internal enum dispatching to a concrete Distribution while preserving its concrete type.
-enum FamilyType {
-    Gaussian(Gaussian),
-    Poisson(Poisson),
-    Binomial(Binomial),
-    Gamma(Gamma),
-    NegativeBinomial(NegativeBinomial),
-    Beta(Beta),
-    StudentT(StudentT),
-}
-
-impl FamilyType {
-    fn as_distribution(&self) -> &dyn Distribution {
-        match self {
-            FamilyType::Gaussian(d) => d,
-            FamilyType::Poisson(d) => d,
-            FamilyType::Binomial(d) => d,
-            FamilyType::Gamma(d) => d,
-            FamilyType::NegativeBinomial(d) => d,
-            FamilyType::Beta(d) => d,
-            FamilyType::StudentT(d) => d,
-        }
-    }
-
-    fn fit_model(
-        &self,
-        data: &DataSet,
-        y: &Array1<f64>,
-        formula: &Formula,
-    ) -> Result<GamlssModel, GamlssError> {
-        GamlssModel::fit(data, y, formula, self.as_distribution())
-    }
-
-    fn predict(
-        &self,
-        model: &GamlssModel,
-        new_data: &DataSet,
-    ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
-        model.predict(new_data, self.as_distribution())
-    }
-}
+use crate::{DataSet, Formula, GamlssModel};
 
 // Stateless distribution wrappers — the Python class carries no data.
 macro_rules! py_distribution {
@@ -98,7 +59,9 @@ fn py_dict_to_dataset(py_dict: &Bound<'_, PyDict>) -> PyResult<DataSet> {
     for (key, value) in py_dict.iter() {
         let col_name: String = key.extract()?;
         let array: PyReadonlyArray1<f64> = value.extract()?;
-        dataset.insert_column(col_name, array.as_array().to_owned());
+        dataset
+            .try_insert_column(col_name, array.as_array().to_owned())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     }
     Ok(dataset)
 }
@@ -143,6 +106,26 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     ))
 }
 
+fn fit_with_family(
+    family: &FamilyType,
+    data: &DataSet,
+    y: &Array1<f64>,
+    formula: &Formula,
+) -> PyResult<GamlssModel> {
+    GamlssModel::fit(data, y, formula, family.as_distribution())
+        .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
+}
+
+fn predict_with_family(
+    family: &FamilyType,
+    model: &GamlssModel,
+    new_data: &DataSet,
+) -> PyResult<HashMap<String, Array1<f64>>> {
+    model
+        .predict(new_data, family.as_distribution())
+        .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))
+}
+
 #[pyclass(name = "GamlssModel")]
 struct PyGamlssModel {
     inner: GamlssModel,
@@ -182,9 +165,50 @@ impl PyGamlssModel {
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
-        let model = family_type
-            .fit_model(&dataset, &y_array, &rust_formula)
-            .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
+        let model = fit_with_family(&family_type, &dataset, &y_array, &rust_formula)?;
+
+        Ok(Self {
+            inner: model,
+            family: family_type,
+        })
+    }
+
+    /// Fit a GAMLSS model with custom configuration.
+    ///
+    /// Parameters
+    /// ----------
+    /// data, y, formula, family : same as `fit`
+    /// config : dict
+    ///     Optional config keys: `max_iterations` (int), `tolerance` (float)
+    #[staticmethod]
+    fn fit_with_config(
+        data: &Bound<PyDict>,
+        y: PyReadonlyArray1<f64>,
+        formula: &Bound<PyDict>,
+        family: &Bound<PyAny>,
+        config: &Bound<PyDict>,
+    ) -> PyResult<Self> {
+        let dataset = py_dict_to_dataset(data)?;
+        let y_array = y.as_array().to_owned();
+        let rust_formula = py_dict_to_formula(formula)?;
+        let family_type = extract_family(family)?;
+
+        let mut fit_config = FitConfig::default();
+        if let Some(v) = config.get_item("max_iterations")? {
+            fit_config.max_iterations = v.extract()?;
+        }
+        if let Some(v) = config.get_item("tolerance")? {
+            fit_config.tolerance = v.extract()?;
+        }
+
+        let model = GamlssModel::fit_with_config(
+            &dataset,
+            &y_array,
+            &rust_formula,
+            family_type.as_distribution(),
+            fit_config,
+        )
+        .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
 
         Ok(Self {
             inner: model,
@@ -195,16 +219,93 @@ impl PyGamlssModel {
     /// Predict fitted values for new data. Returns `{param_name: array}`.
     fn predict(&self, py: Python<'_>, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
         let dataset = py_dict_to_dataset(new_data)?;
-        let predictions = self
-            .family
-            .predict(&self.inner, &dataset)
-            .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
+        let predictions = predict_with_family(&self.family, &self.inner, &dataset)?;
 
         let py_dict = PyDict::new(py);
         for (param_name, values) in predictions {
             py_dict.set_item(param_name, values.to_pyarray(py))?;
         }
         Ok(py_dict.into())
+    }
+
+    /// Predict with standard errors on the linear-predictor scale.
+    ///
+    /// Returns `{param_name: {"fitted": array, "eta": array, "se_eta": array}}`.
+    fn predict_with_se(&self, py: Python<'_>, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
+        let dataset = py_dict_to_dataset(new_data)?;
+        let results = self
+            .inner
+            .predict_with_se(&dataset, self.family.as_distribution())
+            .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
+
+        let py_dict = PyDict::new(py);
+        for (param_name, pr) in results {
+            let inner = PyDict::new(py);
+            inner.set_item("fitted", pr.fitted.to_pyarray(py))?;
+            inner.set_item("eta", pr.eta.to_pyarray(py))?;
+            inner.set_item("se_eta", pr.se_eta.to_pyarray(py))?;
+            py_dict.set_item(param_name, inner)?;
+        }
+        Ok(py_dict.into())
+    }
+
+    /// Generate `n_samples` prediction samples from the approximate posterior.
+    ///
+    /// Returns `{param_name: list[array]}` — each list has `n_samples` arrays
+    /// of length n_obs.
+    fn predict_samples(
+        &self,
+        py: Python<'_>,
+        new_data: &Bound<PyDict>,
+        n_samples: usize,
+    ) -> PyResult<Py<PyDict>> {
+        let dataset = py_dict_to_dataset(new_data)?;
+        let results = self
+            .inner
+            .predict_samples(&dataset, self.family.as_distribution(), n_samples)
+            .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
+
+        let py_dict = PyDict::new(py);
+        for (param_name, samples) in results {
+            let list = PyList::empty(py);
+            for s in samples {
+                list.append(s.to_pyarray(py))?;
+            }
+            py_dict.set_item(param_name, list)?;
+        }
+        Ok(py_dict.into())
+    }
+
+    /// Coefficient vector for a fitted parameter, as a numpy array.
+    fn coefficients<'py>(
+        &self,
+        py: Python<'py>,
+        param: &str,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let fitted = self.inner.models.get(param).ok_or_else(|| {
+            PyKeyError::new_err(format!(
+                "Parameter '{}' not found. Available: {:?}",
+                param,
+                self.inner.models.keys().collect::<Vec<_>>()
+            ))
+        })?;
+        Ok(fitted.coefficients.0.to_pyarray(py))
+    }
+
+    /// Fitted-values vector for a fitted parameter, as a numpy array.
+    fn fitted_values<'py>(
+        &self,
+        py: Python<'py>,
+        param: &str,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let fitted = self.inner.models.get(param).ok_or_else(|| {
+            PyKeyError::new_err(format!(
+                "Parameter '{}' not found. Available: {:?}",
+                param,
+                self.inner.models.keys().collect::<Vec<_>>()
+            ))
+        })?;
+        Ok(fitted.fitted_values.to_pyarray(py))
     }
 
     fn converged(&self) -> bool {

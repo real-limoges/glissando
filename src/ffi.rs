@@ -1,0 +1,69 @@
+//! Shared infrastructure for the `python` and `wasm` binding layers.
+//!
+//! Currently this module exists to host [`FamilyType`], a concrete enum that both
+//! bindings use to dispatch into the [`Distribution`](crate::distributions::Distribution)
+//! trait. Defining it once here keeps the two FFI surfaces in lockstep about which
+//! distributions are supported.
+
+#![cfg(any(feature = "python", feature = "wasm"))]
+
+use crate::distributions::{
+    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
+};
+use crate::error::GamlssError;
+
+/// Concrete distribution dispatched from a binding-layer payload (PyAny / JSON name).
+///
+/// Owning the concrete distribution (instead of a `Box<dyn Distribution>`) lets the
+/// binding layer keep the family alive across multiple `fit` / `predict` calls and
+/// avoids re-allocating a trait object on every call.
+pub(crate) enum FamilyType {
+    Gaussian(Gaussian),
+    Poisson(Poisson),
+    // Binomial is only constructed by the python binding (n_trials state can't be
+    // serialized into the wasm name-based JSON dispatch). Suppress dead_code warnings
+    // when only the wasm feature is enabled.
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
+    Binomial(Binomial),
+    Gamma(Gamma),
+    NegativeBinomial(NegativeBinomial),
+    Beta(Beta),
+    StudentT(StudentT),
+}
+
+impl FamilyType {
+    /// View the inner distribution as a trait object.
+    pub(crate) fn as_distribution(&self) -> &dyn Distribution {
+        match self {
+            FamilyType::Gaussian(d) => d,
+            FamilyType::Poisson(d) => d,
+            FamilyType::Binomial(d) => d,
+            FamilyType::Gamma(d) => d,
+            FamilyType::NegativeBinomial(d) => d,
+            FamilyType::Beta(d) => d,
+            FamilyType::StudentT(d) => d,
+        }
+    }
+
+    /// Construct a stateless distribution from its name.
+    ///
+    /// Mirrors [`crate::distributions::from_name`] but yields the concrete
+    /// `FamilyType` enum used by the binding layers. Excludes [`Binomial`] because
+    /// it requires `n_trials` state that cannot be recovered from a name alone —
+    /// bindings that support Binomial must construct that variant directly.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+    pub(crate) fn from_name(name: &str) -> Result<Self, GamlssError> {
+        match name {
+            "Gaussian" => Ok(FamilyType::Gaussian(Gaussian::new())),
+            "Poisson" => Ok(FamilyType::Poisson(Poisson::new())),
+            "StudentT" => Ok(FamilyType::StudentT(StudentT::new())),
+            "Gamma" => Ok(FamilyType::Gamma(Gamma::new())),
+            "NegativeBinomial" => Ok(FamilyType::NegativeBinomial(NegativeBinomial::new())),
+            "Beta" => Ok(FamilyType::Beta(Beta::new())),
+            other => Err(GamlssError::Input(format!(
+                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta",
+                other
+            ))),
+        }
+    }
+}
