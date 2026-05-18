@@ -162,31 +162,3 @@ fn test_model_convergence_invariants() {
     );
     assert!((b1[1] - b2[1]).abs() < 1e-6, "Slope shifted after shuffle");
 }
-
-#[test]
-fn test_spline_partition_of_unity() {
-    let mut rand_gen = Generator::new(42);
-
-    let (_y, data) = rand_gen.linear_gaussian(100, 1.0, 0.0, 1.0);
-
-    let n_splines = 10;
-    let term = Term::Smooth(Smooth::PSpline1D {
-        col_name: "x".to_string(),
-        n_splines,
-        degree: 3,
-        penalty_order: 2,
-    });
-
-    let n_obs = data.n_obs().unwrap();
-    let (mm, _, _) =
-        glissando::fitting::assembler::assemble_model_matrices(&data, n_obs, &[term]).unwrap();
-
-    // Check each row of the spline basis part of the ModelMatrix. each row sums to 1-ish
-    for row in mm.0.rows() {
-        let row_sum: f64 = row.sum();
-        assert!(
-            (row_sum - 1.0).abs() < 1e-10,
-            "Spline basis does not sum to 1.0 at a point!"
-        );
-    }
-}

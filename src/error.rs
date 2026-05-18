@@ -14,30 +14,31 @@ pub enum GamlssError {
     Optimization(String),
 
     /// Linear algebra operation failed (e.g., singular matrix).
-    #[cfg(feature = "openblas")]
-    #[error("Linear algebra error: {0}")]
-    Linalg(#[from] ndarray_linalg::error::LinalgError),
-
-    /// Linear algebra operation failed (e.g., singular matrix).
-    #[cfg(feature = "pure-rust")]
+    ///
+    /// Payload is stringified at the backend boundary so downstream pattern
+    /// matching is identical under both `openblas` and `pure-rust`.
     #[error("Linear algebra error: {0}")]
     Linalg(String),
+
+    /// Posterior covariance matrix is not positive definite, so a Cholesky factor
+    /// (and therefore a Gaussian-posterior sample) cannot be produced. Indicates
+    /// a degenerate fit — typically a rank-deficient design or a parameter at the
+    /// boundary of its support. Callers asking for posterior samples must handle
+    /// this rather than silently receiving an empty vector.
+    #[error("Posterior covariance is not positive definite (Cholesky failed)")]
+    PosteriorNotPositiveDefinite,
 
     /// Array shape mismatch.
     #[error("Array shape error: {0}")]
     Shape(String),
 
     /// RS algorithm did not converge within the iteration limit.
-    #[error("PIRLS algorithm failed to converge after {0} iterations")]
+    #[error("RS algorithm failed to converge after {0} iterations")]
     Convergence(usize),
 
     /// Invalid user input.
     #[error("Invalid input: {0}")]
     Input(String),
-
-    /// Computation error from ndarray shape operations.
-    #[error("ShapeError (Private): {0}")]
-    ComputationError(String),
 
     /// Requested parameter not defined by the distribution.
     #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
@@ -66,7 +67,10 @@ pub enum GamlssError {
 
 impl From<argmin::core::Error> for GamlssError {
     fn from(e: argmin::core::Error) -> Self {
-        GamlssError::Optimization(e.to_string())
+        // `argmin::core::Error` is `anyhow::Error`; `{:#}` walks the full source chain
+        // (e.g. "L-BFGS step failed: line search did not converge"), which `.to_string()`
+        // alone would truncate to just the top-level message.
+        GamlssError::Optimization(format!("{:#}", e))
     }
 }
 impl From<ShapeError> for GamlssError {
