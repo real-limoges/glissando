@@ -5,9 +5,10 @@
 //! [`Distribution`] trait. This module composes those primitives — it never
 //! hand-dispatches on the family name.
 
+use super::FittedParameter;
 use crate::distributions::Distribution;
-use crate::fitting::FittedParameter;
 use crate::GamlssError;
+use indexmap::IndexMap;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -36,8 +37,8 @@ pub struct ModelDiagnostics {
 /// Computes Pearson residuals via the family's marginal moments:
 /// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.
 ///
-/// Variance is floored at [`MIN_POSITIVE`] before the square-root to keep
-/// residuals finite when the fitted variance is degenerate.
+/// Variance is floored at `MIN_POSITIVE = 1e-10` before the square-root to
+/// keep residuals finite when the fitted variance is degenerate.
 pub fn pearson_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
@@ -71,7 +72,7 @@ pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
 }
 
 /// Sums effective degrees of freedom across all fitted parameters.
-pub fn total_edf(fitted_params: &HashMap<String, FittedParameter>) -> f64 {
+pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
     fitted_params.values().map(|p| p.edf).sum()
 }
 
@@ -82,7 +83,7 @@ pub fn response_residuals(y: &Array1<f64>, expected: &Array1<f64>) -> Array1<f64
 
 /// Snapshot of fitted parameters on the response scale, in the shape the
 /// [`Distribution`] trait expects.
-fn fitted_params_view(models: &HashMap<String, FittedParameter>) -> HashMap<&str, &Array1<f64>> {
+fn fitted_params_view(models: &IndexMap<String, FittedParameter>) -> HashMap<&str, &Array1<f64>> {
     models
         .iter()
         .map(|(k, v)| (k.as_str(), &v.fitted_values))
@@ -90,7 +91,7 @@ fn fitted_params_view(models: &HashMap<String, FittedParameter>) -> HashMap<&str
 }
 
 pub(crate) fn compute<D: Distribution + ?Sized>(
-    models: &HashMap<String, FittedParameter>,
+    models: &IndexMap<String, FittedParameter>,
     family: &D,
     y: &Array1<f64>,
 ) -> Result<ModelDiagnostics, GamlssError> {
@@ -174,7 +175,7 @@ mod tests {
 
     #[test]
     fn total_edf_sums_per_parameter_edf() {
-        let mut params = HashMap::new();
+        let mut params = IndexMap::new();
         params.insert("mu".to_string(), dummy_fitted_param(3.5));
         params.insert("sigma".to_string(), dummy_fitted_param(1.2));
         assert!((total_edf(&params) - 4.7).abs() < 1e-12);
@@ -182,7 +183,7 @@ mod tests {
 
     #[test]
     fn total_edf_empty_returns_zero() {
-        let params: HashMap<String, FittedParameter> = HashMap::new();
+        let params: IndexMap<String, FittedParameter> = IndexMap::new();
         assert_eq!(total_edf(&params), 0.0);
     }
 

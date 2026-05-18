@@ -46,6 +46,29 @@ jobs:
 
       - run: cargo clippy --workspace -- -D warnings
 
+  audit-duplicates:
+    # Fails if `cargo tree --duplicates` lists a crate not on the documented
+    # allowlist (rand/getrandom triple + argmin-math's older ndarray/lapack
+    # chain). Forces investigation when a new transitive duplicate appears.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libopenblas-dev \
+            gfortran
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: ./scripts/audit-duplicates.sh
+
   test-openblas:
     runs-on: ubuntu-latest
     steps:
