@@ -11,50 +11,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 
+use crate::distributions::{Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
+use crate::ffi::FamilyType;
 use crate::terms::py_parse;
-use crate::{distributions::*, DataSet, Formula, GamlssError, GamlssModel};
-
-/// Internal enum dispatching to a concrete Distribution while preserving its concrete type.
-enum FamilyType {
-    Gaussian(Gaussian),
-    Poisson(Poisson),
-    Binomial(Binomial),
-    Gamma(Gamma),
-    NegativeBinomial(NegativeBinomial),
-    Beta(Beta),
-    StudentT(StudentT),
-}
-
-impl FamilyType {
-    fn as_distribution(&self) -> &dyn Distribution {
-        match self {
-            FamilyType::Gaussian(d) => d,
-            FamilyType::Poisson(d) => d,
-            FamilyType::Binomial(d) => d,
-            FamilyType::Gamma(d) => d,
-            FamilyType::NegativeBinomial(d) => d,
-            FamilyType::Beta(d) => d,
-            FamilyType::StudentT(d) => d,
-        }
-    }
-
-    fn fit_model(
-        &self,
-        data: &DataSet,
-        y: &Array1<f64>,
-        formula: &Formula,
-    ) -> Result<GamlssModel, GamlssError> {
-        GamlssModel::fit(data, y, formula, self.as_distribution())
-    }
-
-    fn predict(
-        &self,
-        model: &GamlssModel,
-        new_data: &DataSet,
-    ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
-        model.predict(new_data, self.as_distribution())
-    }
-}
+use crate::{DataSet, Formula, GamlssModel};
 
 // Stateless distribution wrappers — the Python class carries no data.
 macro_rules! py_distribution {
@@ -145,6 +105,26 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     ))
 }
 
+fn fit_with_family(
+    family: &FamilyType,
+    data: &DataSet,
+    y: &Array1<f64>,
+    formula: &Formula,
+) -> PyResult<GamlssModel> {
+    GamlssModel::fit(data, y, formula, family.as_distribution())
+        .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
+}
+
+fn predict_with_family(
+    family: &FamilyType,
+    model: &GamlssModel,
+    new_data: &DataSet,
+) -> PyResult<HashMap<String, Array1<f64>>> {
+    model
+        .predict(new_data, family.as_distribution())
+        .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))
+}
+
 #[pyclass(name = "GamlssModel")]
 struct PyGamlssModel {
     inner: GamlssModel,
@@ -184,9 +164,7 @@ impl PyGamlssModel {
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
-        let model = family_type
-            .fit_model(&dataset, &y_array, &rust_formula)
-            .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
+        let model = fit_with_family(&family_type, &dataset, &y_array, &rust_formula)?;
 
         Ok(Self {
             inner: model,
@@ -197,10 +175,7 @@ impl PyGamlssModel {
     /// Predict fitted values for new data. Returns `{param_name: array}`.
     fn predict(&self, py: Python<'_>, new_data: &Bound<PyDict>) -> PyResult<Py<PyDict>> {
         let dataset = py_dict_to_dataset(new_data)?;
-        let predictions = self
-            .family
-            .predict(&self.inner, &dataset)
-            .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
+        let predictions = predict_with_family(&self.family, &self.inner, &dataset)?;
 
         let py_dict = PyDict::new(py);
         for (param_name, values) in predictions {
