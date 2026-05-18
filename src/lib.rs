@@ -48,16 +48,23 @@ pub use types::{Coefficients, CovarianceMatrix, DataSet, Formula};
 
 use distributions::Distribution;
 use fitting::assembler::assemble_model_matrices;
+use indexmap::IndexMap;
 use ndarray::Array1;
 use preprocessing::validate_inputs;
 use std::collections::HashMap;
+use std::fmt;
 
 /// A fitted GAMLSS model containing per-parameter results and convergence diagnostics.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamlssModel {
     /// Fitted results keyed by parameter name (e.g., "mu", "sigma").
-    pub models: HashMap<String, fitting::FittedParameter>,
+    ///
+    /// `IndexMap` preserves insertion order (matching `family.parameters()`), so
+    /// iteration over `models`, `posterior_samples`, and `predict_samples` is
+    /// deterministic — `HashMap`'s hash-order iteration previously caused
+    /// nondeterministic output of multi-parameter prediction samples.
+    pub models: IndexMap<String, fitting::FittedParameter>,
     /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
 }
@@ -243,19 +250,32 @@ impl GamlssModel {
     ///
     /// Uses Cholesky decomposition of the covariance matrix to generate samples
     /// from the approximate posterior N(beta_hat, V_beta).
-    pub fn posterior_samples(&self, param_name: &str, n_samples: usize) -> Vec<Coefficients> {
-        let Some(fitted_param) = self.models.get(param_name) else {
-            return vec![];
-        };
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GamlssError::UnknownParameter`] if `param_name` is not in the fitted
+    /// model, or [`GamlssError::PosteriorNotPositiveDefinite`] if the covariance is
+    /// not positive definite (degenerate fit).
+    pub fn posterior_samples(
+        &self,
+        param_name: &str,
+        n_samples: usize,
+    ) -> Result<Vec<Coefficients>, GamlssError> {
+        let fitted_param =
+            self.models
+                .get(param_name)
+                .ok_or_else(|| GamlssError::UnknownParameter {
+                    distribution: "<fitted model>".to_string(),
+                    param: param_name.to_string(),
+                })?;
 
-        fitting::sample_posterior(
+        let samples = fitting::sample_posterior(
             &fitted_param.coefficients,
             &fitted_param.covariance,
             n_samples,
-        )
-        .into_iter()
-        .map(Coefficients)
-        .collect()
+        )?;
+
+        Ok(samples.into_iter().map(Coefficients).collect())
     }
 
     /// Generate prediction samples by sampling from posterior and propagating through predictions.
@@ -280,7 +300,7 @@ impl GamlssModel {
                 &fitted_param.coefficients,
                 &fitted_param.covariance,
                 n_samples,
-            );
+            )?;
 
             let link = family.default_link(param_name)?;
 
@@ -309,6 +329,50 @@ pub struct PredictionResult {
     pub eta: Array1<f64>,
     /// Standard errors on the linear predictor scale.
     pub se_eta: Array1<f64>,
+}
+
+/// R-style summary: convergence status, per-parameter EDF, λ values, and the
+/// head of each coefficient vector. The full coefficient/covariance state is
+/// still available on the `models` field.
+impl fmt::Display for GamlssModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "GamlssModel: converged={}, iterations={}, final_change={:.3e}",
+            self.diagnostics.converged, self.diagnostics.iterations, self.diagnostics.final_change,
+        )?;
+        for (name, fitted) in &self.models {
+            let lambdas = if fitted.lambdas.is_empty() {
+                "[]".to_string()
+            } else {
+                let inner = fitted
+                    .lambdas
+                    .iter()
+                    .map(|l| format!("{:.4}", l))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", inner)
+            };
+            writeln!(
+                f,
+                "  {} (edf={:.3}, lambdas={})",
+                name, fitted.edf, lambdas
+            )?;
+            let coeffs = &fitted.coefficients.0;
+            let preview: Vec<String> = coeffs
+                .iter()
+                .take(6)
+                .map(|c| format!("{:.4}", c))
+                .collect();
+            let tail = if coeffs.len() > 6 {
+                format!(", … ({} more)", coeffs.len() - 6)
+            } else {
+                String::new()
+            };
+            writeln!(f, "    coefficients: [{}{}]", preview.join(", "), tail)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "serde")]

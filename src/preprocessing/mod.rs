@@ -224,4 +224,46 @@ mod tests {
             .with_terms("sigma", vec![Term::Intercept]);
         validate_inputs(&y, &data, &f, &Gaussian).unwrap();
     }
+
+    // Property tests — proptest is non-wasm only (the dev-dep is gated likewise).
+    #[cfg(not(target_arch = "wasm32"))]
+    mod prop {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// For any `y` containing at least one NaN or ±∞, validate_inputs
+            /// must return `NonFiniteValues` with `count` equal to the number
+            /// of non-finite entries — never silently accept the input.
+            #[test]
+            fn rejects_any_non_finite_y(
+                finite_vals in proptest::collection::vec(-1e6f64..1e6, 1..32),
+                n_nan in 0usize..6,
+                n_inf in 0usize..6,
+            ) {
+                // Build a y by interleaving finite and non-finite entries.
+                let mut y_vec = finite_vals.clone();
+                for _ in 0..n_nan { y_vec.push(f64::NAN); }
+                for _ in 0..n_inf { y_vec.push(f64::INFINITY); }
+                prop_assume!(!y_vec.is_empty());
+                let total_nonfinite = n_nan + n_inf;
+
+                let y = Array1::from_vec(y_vec);
+                let data = DataSet::new();
+                let f = gaussian_formula();
+                let result = validate_inputs(&y, &data, &f, &Gaussian);
+
+                if total_nonfinite == 0 {
+                    prop_assert!(result.is_ok());
+                } else {
+                    match result {
+                        Err(GamlssError::NonFiniteValues { count, .. }) => {
+                            prop_assert_eq!(count, total_nonfinite);
+                        }
+                        other => prop_assert!(false, "expected NonFiniteValues, got {:?}", other),
+                    }
+                }
+            }
+        }
+    }
 }
