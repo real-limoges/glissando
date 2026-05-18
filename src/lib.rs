@@ -42,7 +42,7 @@ pub use error::GamlssError;
 pub use fitting::diagnostics::{self, ModelDiagnostics};
 pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic};
 pub use terms::{Smooth, Term};
-pub use types::*;
+pub use types::{Coefficients, CovarianceMatrix, DataSet, Formula};
 
 use distributions::Distribution;
 use fitting::assembler::assemble_model_matrices;

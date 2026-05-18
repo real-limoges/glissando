@@ -11,7 +11,7 @@
 //!
 //! The module also handles posterior inference (sampling from the approximate posterior of coefficients).
 
-pub mod assembler;
+pub(crate) mod assembler;
 pub mod diagnostics;
 mod scoring;
 mod solver;
