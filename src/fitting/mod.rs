@@ -11,20 +11,22 @@
 //!
 //! The module also handles posterior inference (sampling from the approximate posterior of coefficients).
 
-pub mod assembler;
-pub mod inference;
+pub(crate) mod assembler;
+pub mod diagnostics;
 mod scoring;
 mod solver;
 
 use self::assembler::assemble_model_matrices;
-pub use self::inference::sample_posterior;
 
 use super::distributions::{Distribution, Link};
 use super::error::GamlssError;
 use super::terms::{Smooth, Term};
 use super::types::*;
-use ndarray::Array1;
-use std::collections::HashMap;
+use crate::linalg;
+use indexmap::IndexMap;
+use ndarray::{Array1, Array2};
+use rand::{rng, Rng};
+use rand_distr::{Distribution as _, StandardNormal};
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
@@ -60,8 +62,8 @@ pub struct FitDiagnostics {
     pub final_change: f64,
     /// Maximum gradient at convergence (if computed).
     pub max_gradient: Option<f64>,
-    /// Per-parameter diagnostic information.
-    pub param_diagnostics: HashMap<String, ParamDiagnostic>,
+    /// Per-parameter diagnostic information, ordered by `family.parameters()`.
+    pub param_diagnostics: IndexMap<String, ParamDiagnostic>,
 }
 
 /// Diagnostic information for a single distribution parameter.
@@ -74,10 +76,19 @@ pub struct ParamDiagnostic {
     pub final_lambda_change: f64,
     /// Effective degrees of freedom for this parameter's model.
     pub edf: f64,
+    /// Number of observations whose IRLS working weight hit the lower floor
+    /// in the final iteration. Non-zero values suggest degenerate Fisher info
+    /// (extreme score with vanishing curvature) — the fit may be unreliable.
+    pub weight_floor_hits: usize,
+    /// Number of observations whose Fisher-scoring step `u/w` was clipped to
+    /// `±MAX_STEP` in the final iteration. Non-zero values suggest the IRLS
+    /// step is being damped to keep η updates finite — typically transient
+    /// during early iterations, persistent at convergence indicates trouble.
+    pub step_cap_hits: usize,
 }
 
 /// Fitted results for a single distribution parameter (e.g., mu, sigma).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedParameter {
     /// Estimated regression coefficients (beta).
@@ -103,6 +114,11 @@ pub(super) struct FittingParameter {
     pub(super) penalty_matrices: Vec<PenaltyMatrix>,
     pub(super) beta: Coefficients,
     pub(super) eta: Array1<f64>,
+    /// Cached response-scale predictor `μ = link⁻¹(η)`. Kept in lockstep with
+    /// `eta` so the IRLS step can hand out `&μ` references to every parameter
+    /// instead of re-running `inv_link` on the full vector at each call —
+    /// eliminates K length-n allocations per Fisher-scoring step.
+    pub(super) mu: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
     pub(super) edf: f64,
@@ -120,9 +136,11 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     formula: &Formula,
     family: &D,
     config: &FitConfig,
-) -> Result<(HashMap<String, FittedParameter>, FitDiagnostics), GamlssError> {
+) -> Result<(IndexMap<String, FittedParameter>, FitDiagnostics), GamlssError> {
     let n_obs = y.len();
-    let mut models: HashMap<String, FittingParameter> = HashMap::new();
+    // `IndexMap` keeps insertion order = `family.parameters()` order so the
+    // resulting `GamlssModel.models` iterates deterministically downstream.
+    let mut models: IndexMap<String, FittingParameter> = IndexMap::new();
 
     for param_name in family.parameters() {
         let param_name_str = param_name.to_string();
@@ -138,12 +156,20 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let response_scale_start = family.initial_value(param_name, y);
         let eta_start = link.link(response_scale_start);
 
+        // Seed the intercept coefficient so the first IRLS step starts near
+        // η = link(initial μ). `beta[0]` is only the intercept when the leading
+        // term is `Term::Intercept`; for a smooth-only or leading-Linear formula
+        // we leave β = 0 and η = 0, which is consistent with X·β and IRLS will
+        // move us from there.
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
-        if total_coeffs > 0 {
+        let intercept_leads = matches!(terms.first(), Some(Term::Intercept));
+        let eta = if intercept_leads && total_coeffs > 0 {
             beta.0[0] = eta_start;
-        }
-
-        let eta = Array1::from_elem(n_obs, eta_start);
+            Array1::from_elem(n_obs, eta_start)
+        } else {
+            Array1::zeros(n_obs)
+        };
+        let mu = eta.mapv(|e| link.inv_link(e));
         let lambdas = Array1::<f64>::ones(penalty_matrices.len());
 
         models.insert(
@@ -155,6 +181,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 penalty_matrices,
                 beta,
                 eta,
+                mu,
                 lambdas,
                 covariance: None,
                 edf: 0.0,
@@ -165,7 +192,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut converged = false;
     let mut final_iteration = 0;
     let mut final_change = f64::MAX;
-    let mut param_diagnostics = HashMap::new();
+    let mut param_diagnostics: IndexMap<String, ParamDiagnostic> = IndexMap::new();
 
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
@@ -182,6 +209,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     final_eta_change: update.eta_change,
                     final_lambda_change: update.lambda_change,
                     edf: update.edf,
+                    weight_floor_hits: update.weight_floor_hits,
+                    step_cap_hits: update.step_cap_hits,
                 },
             );
 
@@ -190,6 +219,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             })?;
             model.beta = update.beta;
             model.eta = update.eta;
+            model.mu = update.mu;
             model.lambdas = update.lambdas;
             model.covariance = Some(update.covariance);
             model.edf = update.edf;
@@ -204,11 +234,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         }
     }
 
-    let mut final_results = HashMap::new();
+    let mut final_results: IndexMap<String, FittedParameter> = IndexMap::new();
 
     for (name, model) in models {
-        let fitted_values = model.eta.mapv(|e| model.link.inv_link(e));
-
         let covariance = model.covariance.ok_or_else(|| {
             GamlssError::Internal(format!(
                 "Covariance matrix not computed for parameter '{}'",
@@ -222,7 +250,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             terms: model.terms,
             lambdas: model.lambdas,
             eta: model.eta,
-            fitted_values,
+            // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
+            fitted_values: model.mu,
             edf: model.edf,
         };
         final_results.insert(name, fitted_param);
@@ -237,4 +266,58 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     };
 
     Ok((final_results, diagnostics))
+}
+
+// ============================================================================
+// Posterior sampling
+// ============================================================================
+
+/// Draws samples from the approximate posterior N(beta_hat, V_beta) via Cholesky decomposition.
+///
+/// Most callers should reach for [`crate::GamlssModel::posterior_samples`] or
+/// [`crate::GamlssModel::predict_samples`]; this is exposed for advanced consumers that
+/// already have a fitted `(β̂, V_β)` pair and want to drive sampling directly.
+///
+/// # Errors
+///
+/// Returns [`GamlssError::PosteriorNotPositiveDefinite`] if the Cholesky factorization
+/// of `v_beta` fails. A non-PD covariance signals a degenerate fit; callers should
+/// surface this rather than silently dropping the samples.
+pub fn sample_posterior(
+    beta_hat: &Coefficients,
+    v_beta: &CovarianceMatrix,
+    n_samples: usize,
+) -> Result<Vec<Array1<f64>>, GamlssError> {
+    let l_factor =
+        linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
+
+    let mut rng_rs = rng();
+    Ok(sample_from_cholesky(
+        &beta_hat.0,
+        &l_factor,
+        n_samples,
+        &mut rng_rs,
+    ))
+}
+
+pub(crate) fn sample_from_cholesky(
+    mean: &Array1<f64>,
+    l_factor: &Array2<f64>,
+    n_samples: usize,
+    rng: &mut impl Rng,
+) -> Vec<Array1<f64>> {
+    let dim = mean.len();
+
+    // Reuse a single length-`dim` buffer for the standard-normal draws; the
+    // matrix-vector product allocates the per-sample output.
+    let mut z = Array1::<f64>::zeros(dim);
+
+    (0..n_samples)
+        .map(|_| {
+            for v in z.iter_mut() {
+                *v = StandardNormal.sample(rng);
+            }
+            mean + l_factor.dot(&z)
+        })
+        .collect()
 }

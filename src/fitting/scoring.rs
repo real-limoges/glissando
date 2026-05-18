@@ -18,7 +18,8 @@ use super::FittingParameter;
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
-use ndarray::Array1;
+use indexmap::IndexMap;
+use ndarray::{Array1, Zip};
 use std::collections::HashMap;
 
 /// Lower bound for IRLS working weights, preventing division by near-zero.
@@ -34,6 +35,9 @@ pub(super) struct Update {
     pub beta: Coefficients,
     /// Linear predictor η = X·β.
     pub eta: Array1<f64>,
+    /// Response-scale predictor μ = link⁻¹(η); kept in lockstep with `eta`
+    /// so callers can avoid a second `inv_link` pass.
+    pub mu: Array1<f64>,
     /// Smoothing parameters on the response scale (not log).
     pub lambdas: Array1<f64>,
     pub covariance: CovarianceMatrix,
@@ -44,6 +48,10 @@ pub(super) struct Update {
     pub eta_change: f64,
     /// Sum of absolute changes in λ, recorded as a per-parameter diagnostic.
     pub lambda_change: f64,
+    /// Count of observations whose working weight `w` was clamped at `MIN_WEIGHT`.
+    pub weight_floor_hits: usize,
+    /// Count of observations whose `u/w` step was clipped at `±MAX_STEP`.
+    pub step_cap_hits: usize,
 }
 
 /// Run one Fisher-scoring step on `target_param`, given the current state of every
@@ -51,20 +59,16 @@ pub(super) struct Update {
 pub(super) fn step<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
-    models: &HashMap<String, FittingParameter>,
+    models: &IndexMap<String, FittingParameter>,
     target_param: &str,
 ) -> Result<Update, GamlssError> {
-    // 1. Snapshot every parameter on the response scale; derivatives() expects all of them.
-    let current_params: HashMap<&str, Array1<f64>> = family
+    // 1. Reference every parameter's cached μ; derivatives() expects all of them.
+    //    The cache is maintained by the outer loop so we don't re-run inv_link here.
+    let params_ref: HashMap<&str, &Array1<f64>> = family
         .parameters()
         .iter()
-        .map(|name| {
-            let model = &models[*name];
-            (*name, model.eta.mapv(|e| model.link.inv_link(e)))
-        })
+        .map(|name| (*name, &models[*name].mu))
         .collect();
-    let params_ref: HashMap<&str, &Array1<f64>> =
-        current_params.iter().map(|(k, v)| (*k, v)).collect();
 
     // 2. Score and Fisher info for the target parameter.
     let all_derivs = family.derivatives(y, &params_ref)?;
@@ -77,11 +81,42 @@ pub(super) fn step<D: Distribution + ?Sized>(
     })?;
 
     // 3. Working response z = η + u/w.  Floor weights and clamp the step in η units
-    //    so degenerate Fisher information can't blow up the IRLS update.
-    let safe_w = deriv_w.mapv(|w: f64| w.max(MIN_WEIGHT));
-    let adjustment = (deriv_u / &safe_w).mapv(|v| v.clamp(-MAX_STEP, MAX_STEP));
-    let z = &target.eta + &adjustment;
-    let w = safe_w;
+    //    so degenerate Fisher information can't blow up the IRLS update. Count how
+    //    often each guard fires so the caller can flag a degenerate fit.
+    //
+    //    A single `Zip::for_each` pass builds both `z` and the floored weights `w`
+    //    and tallies the clamp counters — two output allocations instead of the
+    //    four that mapv-chained intermediate arrays produced.
+    let n = target.eta.len();
+    let mut z = Array1::<f64>::zeros(n);
+    let mut w = Array1::<f64>::zeros(n);
+    let mut weight_floor_hits = 0usize;
+    let mut step_cap_hits = 0usize;
+    Zip::from(&target.eta)
+        .and(deriv_u)
+        .and(deriv_w)
+        .and(&mut z)
+        .and(&mut w)
+        .for_each(|&eta_i, &u_i, &w_i, z_out, w_out| {
+            let safe_w = if w_i < MIN_WEIGHT {
+                weight_floor_hits += 1;
+                MIN_WEIGHT
+            } else {
+                w_i
+            };
+            let step = u_i / safe_w;
+            let clipped = if step > MAX_STEP {
+                step_cap_hits += 1;
+                MAX_STEP
+            } else if step < -MAX_STEP {
+                step_cap_hits += 1;
+                -MAX_STEP
+            } else {
+                step
+            };
+            *z_out = eta_i + clipped;
+            *w_out = safe_w;
+        });
 
     // 4. Optimize λ via GCV.  Warm-start from previous values; fast-path purely
     //    parametric models with no penalties.
@@ -107,6 +142,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     )?;
 
     let new_eta = target.x_matrix.dot(&new_beta.0);
+    let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
     let max_diff = (&new_beta.0 - &target.beta.0)
         .iter()
         .map(|x| x.abs())
@@ -117,19 +153,22 @@ pub(super) fn step<D: Distribution + ?Sized>(
     Ok(Update {
         beta: new_beta,
         eta: new_eta,
+        mu: new_mu,
         lambdas: best_lambdas,
         covariance: cov_matrix,
         edf,
         max_diff,
         eta_change,
         lambda_change,
+        weight_floor_hits,
+        step_cap_hits,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::{Gaussian, IdentityLink, LogLink};
+    use crate::distributions::{Gaussian, IdentityLink, Link, LogLink};
     use crate::fitting::FittingParameter;
     use crate::terms::Term;
     use crate::types::ModelMatrix;
@@ -137,13 +176,17 @@ mod tests {
 
     fn intercept_only(eta_init: f64, n: usize) -> FittingParameter {
         let x = ModelMatrix(Array2::ones((n, 1)));
+        let link = IdentityLink;
+        let eta = Array1::from_elem(n, eta_init);
+        let mu = eta.mapv(|e| link.inv_link(e));
         FittingParameter {
             terms: vec![Term::Intercept],
-            link: Box::new(IdentityLink),
+            link: Box::new(link),
             x_matrix: x,
             penalty_matrices: vec![],
             beta: Coefficients(array![eta_init]),
-            eta: Array1::from_elem(n, eta_init),
+            eta,
+            mu,
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
@@ -152,13 +195,17 @@ mod tests {
 
     fn intercept_only_log(eta_init: f64, n: usize) -> FittingParameter {
         let x = ModelMatrix(Array2::ones((n, 1)));
+        let link = LogLink;
+        let eta = Array1::from_elem(n, eta_init);
+        let mu = eta.mapv(|e| link.inv_link(e));
         FittingParameter {
             terms: vec![Term::Intercept],
-            link: Box::new(LogLink),
+            link: Box::new(link),
             x_matrix: x,
             penalty_matrices: vec![],
             beta: Coefficients(array![eta_init]),
-            eta: Array1::from_elem(n, eta_init),
+            eta,
+            mu,
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
@@ -171,7 +218,7 @@ mod tests {
         // step from μ=0 should move β toward ȳ.
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0]; // ȳ = 3
         let n = y.len();
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n)); // σ = 1
 
@@ -188,7 +235,7 @@ mod tests {
     fn step_returns_finite_diagnostics() {
         let y = array![1.0, 2.0, 3.0];
         let n = y.len();
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
@@ -204,7 +251,7 @@ mod tests {
         // step() takes &HashMap; ensure caller's state is unchanged after the call.
         let y = array![1.0, 2.0, 3.0];
         let n = y.len();
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
@@ -236,13 +283,15 @@ mod tests {
             penalty_matrices: vec![PenaltyMatrix(penalty)],
             beta: Coefficients(Array1::zeros(n_splines)),
             eta: Array1::from_elem(n, 0.0),
+            // μ = inv_link(η) = η for IdentityLink.
+            mu: Array1::from_elem(n, 0.0),
             lambdas: Array1::ones(1),
             covariance: None,
             edf: 0.0,
         };
         let sigma = intercept_only_log(0.0, n);
 
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("mu".to_string(), mu);
         models.insert("sigma".to_string(), sigma);
 
@@ -257,7 +306,7 @@ mod tests {
     fn step_errors_when_target_not_in_family_parameters() {
         let y = array![1.0, 2.0];
         let n = y.len();
-        let mut models = HashMap::new();
+        let mut models = IndexMap::new();
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 

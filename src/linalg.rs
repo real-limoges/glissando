@@ -7,6 +7,19 @@
 //! Each backend module exposes the same `solve`, `inv`, and `cholesky_lower` functions,
 //! and the file-level `pub use` re-exports the active backend's set.
 
+// `openblas` and `pure-rust` define `mod backend { … }` with `#[cfg]` gates that
+// assume exactly one is active. Cargo's feature-unification across workspace
+// members can quietly activate both (e.g. `cargo --workspace --features pure-rust`
+// while the `benchmark` member forces `openblas`), producing a cryptic E0428
+// "name `backend` defined multiple times" instead of a useful diagnostic.
+#[cfg(all(feature = "openblas", feature = "pure-rust"))]
+compile_error!(
+    "Features `openblas` and `pure-rust` are mutually exclusive — pick one linear-algebra backend. \
+     If this fired while you ran `cargo --workspace … --features pure-rust`, the `benchmark` crate \
+     is unioning `openblas` on top of your override; run cargo on the library directly instead: \
+     `cargo test -p glissando --no-default-features --features pure-rust`."
+);
+
 use crate::GamlssError;
 
 /// Result type for linear algebra operations.
@@ -15,23 +28,30 @@ pub type Result<T> = std::result::Result<T, GamlssError>;
 #[cfg(feature = "openblas")]
 mod backend {
     use super::Result;
+    use crate::GamlssError;
     use ndarray::{Array1, Array2};
     use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
+    fn lin<E: std::fmt::Display>(e: E) -> GamlssError {
+        GamlssError::Linalg(e.to_string())
+    }
+
     pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-        Ok(a.solve(b)?)
+        a.solve(b).map_err(lin)
     }
 
     pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-        Ok(a.inv()?)
+        a.inv().map_err(lin)
     }
 
     pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
-        Ok(a.cholesky(UPLO::Lower)?)
+        a.cholesky(UPLO::Lower).map_err(lin)
     }
 }
 
-#[cfg(feature = "pure-rust")]
+// `not(feature = "openblas")` keeps this mod gone when both features unify, so
+// only the `compile_error!` above fires — no cryptic E0428 alongside it.
+#[cfg(all(feature = "pure-rust", not(feature = "openblas")))]
 mod backend {
     use super::Result;
     use crate::GamlssError;
@@ -54,14 +74,12 @@ mod backend {
     /// Convert a column-major nalgebra `DMatrix` back to a row-major `Array2<f64>`.
     fn from_dmatrix(mat: &DMatrix<f64>) -> Array2<f64> {
         let (nrows, ncols) = (mat.nrows(), mat.ncols());
-        // `mat.as_slice()` is column-major; build row-major Array2 by reading columns.
-        let mut out = Array2::<f64>::zeros((nrows, ncols));
-        for j in 0..ncols {
-            for i in 0..nrows {
-                out[[i, j]] = mat[(i, j)];
-            }
-        }
-        out
+        // `mat.transpose().as_slice()` materializes the matrix in row-major order
+        // (transposing column-major → column-major-of-transpose = row-major-of-original).
+        // `from_shape_vec` then takes that contiguous slice without a per-element copy.
+        let transposed = mat.transpose();
+        Array2::from_shape_vec((nrows, ncols), transposed.as_slice().to_vec())
+            .expect("dim of transposed nalgebra slice matches (nrows, ncols)")
     }
 
     pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {

@@ -73,9 +73,13 @@ where
     {
         if a.len() >= PARALLEL_THRESHOLD {
             if let (Some(av), Some(bv), Some(cv)) = (a.as_slice(), b.as_slice(), c.as_slice()) {
-                let result: Vec<f64> = (0..av.len())
-                    .into_par_iter()
-                    .map(|i| f(av[i], bv[i], cv[i]))
+                // Iterator chain avoids the per-element bounds check that the
+                // indexed `(0..len).map(|i| av[i]…)` form pays.
+                let result: Vec<f64> = av
+                    .par_iter()
+                    .zip(bv.par_iter())
+                    .zip(cv.par_iter())
+                    .map(|((&x, &y), &z)| f(x, y, z))
                     .collect();
                 return Array1::from_vec(result);
             }

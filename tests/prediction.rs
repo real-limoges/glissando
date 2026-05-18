@@ -153,7 +153,7 @@ fn test_posterior_samples() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Get posterior samples for mu
-    let samples = model.posterior_samples("mu", 100);
+    let samples = model.posterior_samples("mu", 100).unwrap();
 
     assert_eq!(samples.len(), 100, "Should have 100 samples");
 
@@ -256,6 +256,95 @@ fn test_predict_with_smooth() {
         "Prediction at x=2*pi should be near 0, got {}",
         mu_pred[idx_2pi]
     );
+}
+
+// ----------------------------------------------------------------------------
+// Phase F.3 — predict_with_se / predict_samples coverage for non-Gaussian link
+// ----------------------------------------------------------------------------
+
+#[test]
+fn predict_with_se_for_poisson_log_link() {
+    // Poisson uses log link, so fitted (response scale) ≠ eta (link scale).
+    // Verifies both the SE calculation and the inv_link composition on a
+    // distribution where they differ.
+    let mut rng = Generator::new(202);
+    let n = 200;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (1.0 + 0.5 * xi).exp();
+            rng.rng.sample(rand_distr::Poisson::new(mu).unwrap())
+        })
+        .collect();
+    let y = Array1::from_vec(y);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(x));
+
+    let formula = linear_intercepts("x", &["mu"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
+    let results = model.predict_with_se(&data, &Poisson::new()).unwrap();
+    let mu = &results["mu"];
+
+    assert_eq!(mu.fitted.len(), n);
+    assert_eq!(mu.eta.len(), n);
+    assert_eq!(mu.se_eta.len(), n);
+    for i in 0..n {
+        // fitted = exp(eta) for log link, so fitted > 0 and finite.
+        assert!(mu.fitted[i] > 0.0 && mu.fitted[i].is_finite());
+        // se_eta should be strictly positive (covariance is PD).
+        assert!(mu.se_eta[i] > 0.0, "se_eta[{}] = {} ≤ 0", i, mu.se_eta[i]);
+        // For log link, fitted ≠ eta.
+        assert!(
+            (mu.fitted[i] - mu.eta[i]).abs() > 1e-6,
+            "log link should make fitted ≠ eta, but at i={} both are {:.6}",
+            i,
+            mu.fitted[i]
+        );
+        // fitted ≈ exp(eta) by construction.
+        let expected = mu.eta[i].exp();
+        assert!(
+            (mu.fitted[i] - expected).abs() < 1e-10,
+            "fitted[{}] = {} ≠ exp(eta[{}]) = {}",
+            i,
+            mu.fitted[i],
+            i,
+            expected
+        );
+    }
+}
+
+#[test]
+fn predict_samples_shape_matches_request_for_poisson() {
+    let mut rng = Generator::new(303);
+    let n = 150;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| {
+            let mu = (0.5 + 0.3 * xi).exp();
+            rng.rng.sample(rand_distr::Poisson::new(mu).unwrap())
+        })
+        .collect();
+    let y = Array1::from_vec(y);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(x.clone()));
+
+    let formula = linear_intercepts("x", &["mu"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
+
+    for &n_samples in &[1usize, 10, 100] {
+        let samples = model
+            .predict_samples(&data, &Poisson::new(), n_samples)
+            .unwrap();
+        let mu_samples = &samples["mu"];
+        assert_eq!(mu_samples.len(), n_samples, "outer dim should be n_samples");
+        for s in mu_samples {
+            assert_eq!(s.len(), n, "inner dim should be n_obs");
+            // Log link guarantees positive predictions.
+            assert!(s.iter().all(|v| *v > 0.0 && v.is_finite()));
+        }
+    }
 }
 
 #[test]
