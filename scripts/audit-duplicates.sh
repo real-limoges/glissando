@@ -22,6 +22,13 @@ cd "$repo_root"
 # `rand`/`getrandom` triple and the `argmin-math` ndarray/ndarray-linalg
 # situation; the transitive duplicates (rand_core, rand_chacha, rand_distr,
 # lapack-sys, lax) follow mechanically from those root duplications.
+#
+# Platform-conditional entries — these only appear on Linux CI runners (not on
+# the macOS dev tree), pulled in via dev/test infrastructure crates that aren't
+# under our control:
+#   - `rustix` — used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
+#     coverage/test scaffolding. Long-standing dual-version coexistence in the
+#     Rust ecosystem; benign for our purposes.
 ALLOWLIST=(
   getrandom
   lapack-sys
@@ -32,6 +39,7 @@ ALLOWLIST=(
   rand_chacha
   rand_core
   rand_distr
+  rustix
 )
 
 # Extract the set of duplicated crate names from `cargo tree --duplicates`.
