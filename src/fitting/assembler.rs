@@ -8,8 +8,7 @@ use crate::splines::{
     create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
     sum_to_zero_basis,
 };
-use crate::types::DataSet;
-use crate::ModelMatrix;
+use crate::types::{DataSet, ModelMatrix};
 use ndarray::concatenate;
 use ndarray::{s, Array1, Array2, Axis};
 use std::collections::HashMap;
@@ -146,7 +145,7 @@ fn assemble_smooth(
 ///
 /// Horizontally concatenates basis matrices for each term (intercept, linear, smooth)
 /// and embeds penalty blocks at the correct offsets in the full coefficient space.
-pub fn assemble_model_matrices(
+pub(crate) fn assemble_model_matrices(
     data: &DataSet,
     n_obs: usize,
     terms: &[Term],
@@ -164,20 +163,13 @@ pub fn assemble_model_matrices(
     for term in terms {
         match term {
             Term::Intercept => {
-                let part = Array1::ones(n_obs)
-                    .into_shape_with_order((n_obs, 1))
-                    .map_err(|err| GamlssError::ComputationError(err.to_string()))?;
+                let part = Array1::ones(n_obs).into_shape_with_order((n_obs, 1))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }
             Term::Linear { col_name } => {
                 let x_col_vec = get_col(data, col_name)?;
-                let part: Array2<f64> = x_col_vec
-                    .to_owned()
-                    .into_shape_with_order((n_obs, 1))
-                    .map_err(|err: ndarray::ShapeError| {
-                        GamlssError::ComputationError(err.to_string())
-                    })?;
+                let part: Array2<f64> = x_col_vec.to_owned().into_shape_with_order((n_obs, 1))?;
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }
@@ -217,4 +209,37 @@ pub fn assemble_model_matrices(
         .collect::<Vec<_>>();
 
     Ok((x_model, penalty_matrices, total_coeffs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terms::Smooth;
+
+    #[test]
+    fn pspline_basis_is_partition_of_unity() {
+        // P-spline basis rows should sum to 1 — the property that makes them
+        // compatible with an intercept column (and triggers sum-to-zero
+        // reparameterization in `assemble_smooth`).
+        let mut data = DataSet::new();
+        let n_obs = 100;
+        data.insert_column("x", Array1::linspace(0.0, 1.0, n_obs));
+
+        let term = Term::Smooth(Smooth::PSpline1D {
+            col_name: "x".into(),
+            n_splines: 10,
+            degree: 3,
+            penalty_order: 2,
+        });
+
+        let (mm, _, _) = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
+        for row in mm.0.rows() {
+            let row_sum: f64 = row.sum();
+            assert!(
+                (row_sum - 1.0).abs() < 1e-10,
+                "spline basis row sums to {} (expected 1.0)",
+                row_sum
+            );
+        }
+    }
 }

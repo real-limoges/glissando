@@ -23,7 +23,7 @@ pub struct Coefficients(pub Array1<f64>);
 
 /// Log-space smoothing parameters for L-BFGS optimization. Derefs to `Array1<f64>`.
 #[derive(Clone, Debug)]
-pub struct LogLambdas(pub Array1<f64>);
+pub(crate) struct LogLambdas(pub Array1<f64>);
 
 macro_rules! impl_argmin_math_for_vector_wrapper {
     ($t:ty) => {
@@ -143,11 +143,11 @@ impl_argmin_math_for_vector_wrapper!(LogLambdas);
 
 /// Design matrix (n_obs x n_coeffs). Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
-pub struct ModelMatrix(pub Array2<f64>);
+pub(crate) struct ModelMatrix(pub Array2<f64>);
 
 /// Penalty matrix for a smooth term. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
-pub struct PenaltyMatrix(pub Array2<f64>);
+pub(crate) struct PenaltyMatrix(pub Array2<f64>);
 
 /// Covariance matrix of coefficient estimates, V = (X'WX + Σλ·S)⁻¹. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
