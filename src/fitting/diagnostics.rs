@@ -5,8 +5,8 @@
 //! [`Distribution`] trait. This module composes those primitives — it never
 //! hand-dispatches on the family name.
 
+use super::FittedParameter;
 use crate::distributions::Distribution;
-use crate::fitting::FittedParameter;
 use crate::GamlssError;
 use ndarray::Array1;
 use std::collections::HashMap;

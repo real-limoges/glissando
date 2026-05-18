@@ -1,0 +1,154 @@
+//! Gamma distribution for positive continuous data.
+
+use super::{
+    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+};
+use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use ndarray::Array1;
+use statrs::function::gamma::ln_gamma;
+use std::collections::HashMap;
+
+/// Gamma distribution for positive continuous data.
+///
+/// Parameters: `μ` (mean, log link) and `σ` (coefficient of variation, log link).
+/// Parameterization: shape `α = 1/σ²`, scale `θ = μσ²`. `Var(Y) = μ²σ²`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Gamma;
+
+impl Gamma {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Distribution for Gamma {
+    fn parameters(&self) -> &[&'static str] {
+        &["mu", "sigma"]
+    }
+
+    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+        match param {
+            "mu" | "sigma" => Ok(Box::new(LogLink)),
+            other => Err(self.unknown_param(other)),
+        }
+    }
+
+    fn derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> DerivativesResult {
+        // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
+        // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
+        // μ (log link, η = log μ):  u = (y−μ)/(μσ²),  w = 1/σ².
+        // σ (log link, η = log σ):  u = (2/σ²)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1].
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+
+        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
+        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
+        let sigma_sq = sigma_safe.mapv(|s| s * s);
+        let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
+
+        let u_mu = (y - &mu_safe) / (&mu_safe * &sigma_sq);
+        let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
+
+        let psi_alpha = digamma_batch(&alpha);
+        let log_sigma = sigma_safe.mapv(|s| s.ln());
+        let y_over_mu = y / &mu_safe;
+        let log_y_over_mu = y_over_mu.mapv(|v| v.ln());
+        let u_sigma =
+            (2.0 / &sigma_sq) * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
+
+        // Fisher info for σ: I_σ = (4/σ⁴)·ψ'(α) − 2/σ². Floored at MIN_WEIGHT.
+        let psi_prime_alpha = trigamma_batch(&alpha);
+        let sigma_sq_sq = sigma_sq.mapv(|s2| s2 * s2);
+        let w_sigma = ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 2.0 / &sigma_sq)
+            .mapv(|v| v.abs().max(MIN_WEIGHT));
+
+        Ok(HashMap::from([
+            ("mu".to_string(), (u_mu, w_mu)),
+            ("sigma".to_string(), (u_sigma, w_sigma)),
+        ]))
+    }
+
+    fn loglik_pointwise(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let s = si.max(MIN_POSITIVE);
+            let alpha = 1.0 / (s * s);
+            let theta = mui * s * s;
+            (alpha - 1.0) * yi.max(MIN_POSITIVE).ln()
+                - yi / theta
+                - alpha * theta.ln()
+                - ln_gamma(alpha)
+        }))
+    }
+
+    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip_map(mu, sigma, |m, s| m * m * s * s))
+    }
+
+    fn name(&self) -> &'static str {
+        "Gamma"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distributions::test_helpers::{
+        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+    };
+    use ndarray::array;
+
+    #[test]
+    fn gamma_derivatives() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let mu = array![1.0, 2.0, 4.0, 6.0];
+        let sigma = array![0.5, 0.4, 0.3, 0.6];
+        let mut p = HashMap::new();
+        p.insert("mu", &mu);
+        p.insert("sigma", &sigma);
+        derivative_keys_match_parameters(&Gamma, p, &y);
+    }
+
+    #[test]
+    fn loglik_gamma_finite_on_typical_inputs() {
+        let owned = [
+            ("mu", array![2.0, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        let p = params_view(&owned);
+        let ll = Gamma.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn variance_gamma_is_mu_squared_sigma_squared() {
+        let owned = [("mu", array![2.0, 3.0]), ("sigma", array![0.5, 0.5])];
+        let p = params_view(&owned);
+        let v = Gamma.variance(&p).unwrap();
+        // μ²σ² = 4·0.25 = 1; 9·0.25 = 2.25.
+        assert!((v[0] - 1.0).abs() < 1e-12);
+        assert!((v[1] - 2.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_gamma() {
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+    }
+}
