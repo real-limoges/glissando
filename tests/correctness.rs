@@ -90,8 +90,16 @@ fn display_summary_includes_convergence_and_per_param_block() {
     let s = format!("{}", model);
     assert!(s.contains("GamlssModel"), "header missing: {}", s);
     assert!(s.contains("converged="), "convergence flag missing: {}", s);
-    assert!(s.contains("mu") && s.contains("sigma"), "param blocks missing: {}", s);
-    assert!(s.contains("coefficients:"), "coefficients line missing: {}", s);
+    assert!(
+        s.contains("mu") && s.contains("sigma"),
+        "param blocks missing: {}",
+        s
+    );
+    assert!(
+        s.contains("coefficients:"),
+        "coefficients line missing: {}",
+        s
+    );
 }
 
 #[test]
@@ -124,4 +132,3 @@ fn param_diagnostic_exposes_clamp_counters() {
         );
     }
 }
-

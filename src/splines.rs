@@ -18,7 +18,7 @@ use ndarray::{s, Array1, Array2, ArrayView1, ArrayViewMut1};
 /// same constraint deterministically.
 ///
 /// [`Intercept`]: crate::Term::Intercept
-pub fn sum_to_zero_basis(k: usize) -> Array2<f64> {
+pub(crate) fn sum_to_zero_basis(k: usize) -> Array2<f64> {
     assert!(k >= 2, "sum-to-zero basis requires k >= 2 (got {})", k);
 
     // Householder reflector that maps 1_k onto −√k · e_1:
@@ -46,7 +46,7 @@ pub fn sum_to_zero_basis(k: usize) -> Array2<f64> {
 ///
 /// If A is (m × n) and B is (p × q), the result is (mp × nq).
 /// Used for constructing tensor product basis matrices.
-pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
+pub(crate) fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     let (m, n) = a.dim();
     let (p, q) = b.dim();
 
@@ -67,7 +67,11 @@ pub fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
 /// Given vectors a (length m) and b (length n), computes their Kronecker product
 /// (length m*n) in-place. Used for efficient tensor product basis evaluation.
 #[inline]
-pub fn row_kronecker_into(a: ArrayView1<f64>, b: ArrayView1<f64>, mut out: ArrayViewMut1<f64>) {
+pub(crate) fn row_kronecker_into(
+    a: ArrayView1<f64>,
+    b: ArrayView1<f64>,
+    mut out: ArrayViewMut1<f64>,
+) {
     let len_b = b.len();
     for (i, &ai) in a.iter().enumerate() {
         for (j, &bj) in b.iter().enumerate() {
@@ -86,7 +90,7 @@ pub fn row_kronecker_into(a: ArrayView1<f64>, b: ArrayView1<f64>, mut out: Array
 /// * `x` - Covariate values (n_obs length)
 /// * `n_splines` - Number of basis functions (typically 10-20)
 /// * `degree` - Polynomial degree (typically 3 for cubic splines)
-pub fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
+pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     let n_obs = x.len();
 
     if n_splines <= degree {
@@ -229,7 +233,7 @@ fn evaluate_basis_functions_into(
 }
 
 /// P-spline penalty S = D'D. Order 2 approximates integral of squared second derivative.
-pub fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f64> {
+pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f64> {
     let n_rows_d = n_splines.saturating_sub(order);
     if n_rows_d == 0 {
         return Array2::<f64>::zeros((n_splines, n_splines));

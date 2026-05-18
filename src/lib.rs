@@ -74,8 +74,15 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
-    /// or a linear algebra operation fails.
+    /// - [`GamlssError::EmptyData`] / [`GamlssError::NonFiniteValues`] /
+    ///   [`GamlssError::MissingVariable`] / [`GamlssError::MissingFormula`] /
+    ///   [`GamlssError::Input`] — input validation failures
+    /// - [`GamlssError::Convergence`] — RS outer loop did not converge in
+    ///   `FitConfig::max_iterations`
+    /// - [`GamlssError::Linalg`] — singular `X'WX + Σλ·S`, Cholesky failure, etc.
+    /// - [`GamlssError::Optimization`] — L-BFGS smoothing-parameter search failed
+    /// - [`GamlssError::UnknownParameter`] — formula names a parameter the family
+    ///   does not expose
     pub fn fit<D: Distribution + ?Sized>(
         data: &DataSet,
         y: &Array1<f64>,
@@ -89,8 +96,7 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// Returns `GamlssError` if inputs are invalid, the algorithm fails to converge,
-    /// or a linear algebra operation fails.
+    /// Same error set as [`GamlssModel::fit`].
     pub fn fit_with_config<D: Distribution + ?Sized>(
         data: &DataSet,
         y: &Array1<f64>,
@@ -163,6 +169,17 @@ impl GamlssModel {
     /// let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
     /// assert_eq!(preds["mu"].len(), 2);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`GamlssError::Input`] — `new_data` has no columns
+    /// - [`GamlssError::MissingVariable`] — formula references a column absent
+    ///   from `new_data`
+    /// - [`GamlssError::UnknownParameter`] — fitted model contains a parameter
+    ///   the family does not expose (should be unreachable on a model produced
+    ///   by `fit`)
+    /// - [`GamlssError::Shape`] — design-matrix assembly produced an incompatible
+    ///   shape (also unreachable on a well-formed model)
     pub fn predict<D: Distribution + ?Sized>(
         &self,
         new_data: &DataSet,
@@ -190,6 +207,10 @@ impl GamlssModel {
     /// Returns predictions on the linear predictor (eta) scale along with standard errors.
     /// Standard errors are computed via: se = sqrt(diag(X * V * X'))
     /// where V is the covariance matrix of the coefficients.
+    ///
+    /// # Errors
+    ///
+    /// Same error set as [`GamlssModel::predict`].
     pub fn predict_with_se<D: Distribution + ?Sized>(
         &self,
         new_data: &DataSet,
@@ -236,8 +257,10 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// Returns `GamlssError` if a fitted parameter required by the family is missing
-    /// or the family's log-density / variance evaluation fails.
+    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    ///   present in `self.models`
+    /// - [`GamlssError::Input`] — family's variance or log-density evaluation
+    ///   rejects the parameter values (e.g. invalid support)
     pub fn diagnostics<D: Distribution + ?Sized>(
         &self,
         family: &D,
@@ -282,6 +305,12 @@ impl GamlssModel {
     ///
     /// For each posterior sample of coefficients, computes predictions on new data.
     /// Returns samples of fitted values on the response scale.
+    ///
+    /// # Errors
+    ///
+    /// In addition to the error set of [`GamlssModel::predict`], this can return
+    /// [`GamlssError::PosteriorNotPositiveDefinite`] if any parameter's
+    /// covariance matrix fails Cholesky factorization.
     pub fn predict_samples<D: Distribution + ?Sized>(
         &self,
         new_data: &DataSet,
@@ -353,17 +382,9 @@ impl fmt::Display for GamlssModel {
                     .join(", ");
                 format!("[{}]", inner)
             };
-            writeln!(
-                f,
-                "  {} (edf={:.3}, lambdas={})",
-                name, fitted.edf, lambdas
-            )?;
+            writeln!(f, "  {} (edf={:.3}, lambdas={})", name, fitted.edf, lambdas)?;
             let coeffs = &fitted.coefficients.0;
-            let preview: Vec<String> = coeffs
-                .iter()
-                .take(6)
-                .map(|c| format!("{:.4}", c))
-                .collect();
+            let preview: Vec<String> = coeffs.iter().take(6).map(|c| format!("{:.4}", c)).collect();
             let tail = if coeffs.len() > 6 {
                 format!(", … ({} more)", coeffs.len() - 6)
             } else {
