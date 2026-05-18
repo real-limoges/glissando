@@ -5,9 +5,9 @@
 #   ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push
 #
 # Skip individual stages with env vars:
-#   SKIP_FMT=1 SKIP_CLIPPY=1 SKIP_TEST_OPENBLAS=1 SKIP_TEST_PURE_RUST=1 \
-#   SKIP_CHECK_WASM=1 SKIP_TEST_WASM=1 SKIP_TEST_PYTHON=1 SKIP_DOCTEST=1 \
-#   SKIP_COVERAGE=1 git push
+#   SKIP_FMT=1 SKIP_CLIPPY=1 SKIP_AUDIT_DUPLICATES=1 SKIP_TEST_OPENBLAS=1 \
+#   SKIP_TEST_PURE_RUST=1 SKIP_CHECK_WASM=1 SKIP_TEST_WASM=1 \
+#   SKIP_TEST_PYTHON=1 SKIP_DOCTEST=1 SKIP_COVERAGE=1 git push
 #
 # Bypass entirely:
 #   git push --no-verify
@@ -59,6 +59,9 @@ stage fmt cargo fmt --check
 
 # --- clippy (workspace, deny warnings) ---------------------------------------
 stage clippy cargo clippy --workspace -- -D warnings
+
+# --- audit-duplicates (fail on new transitive duplicates) --------------------
+stage audit-duplicates ./scripts/audit-duplicates.sh
 
 # --- test-openblas (default features) ----------------------------------------
 stage test-openblas cargo test --verbose

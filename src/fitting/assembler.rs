@@ -163,13 +163,13 @@ pub(crate) fn assemble_model_matrices(
     for term in terms {
         match term {
             Term::Intercept => {
-                let part = Array1::ones(n_obs).into_shape_with_order((n_obs, 1))?;
+                let part = Array1::ones(n_obs).insert_axis(Axis(1));
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }
             Term::Linear { col_name } => {
                 let x_col_vec = get_col(data, col_name)?;
-                let part: Array2<f64> = x_col_vec.to_owned().into_shape_with_order((n_obs, 1))?;
+                let part: Array2<f64> = x_col_vec.to_owned().insert_axis(Axis(1));
                 model_matrix_parts.push(part);
                 total_coeffs += 1;
             }

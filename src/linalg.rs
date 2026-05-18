@@ -15,19 +15,24 @@ pub type Result<T> = std::result::Result<T, GamlssError>;
 #[cfg(feature = "openblas")]
 mod backend {
     use super::Result;
+    use crate::GamlssError;
     use ndarray::{Array1, Array2};
     use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
 
+    fn lin<E: std::fmt::Display>(e: E) -> GamlssError {
+        GamlssError::Linalg(e.to_string())
+    }
+
     pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {
-        Ok(a.solve(b)?)
+        a.solve(b).map_err(lin)
     }
 
     pub fn inv(a: &Array2<f64>) -> Result<Array2<f64>> {
-        Ok(a.inv()?)
+        a.inv().map_err(lin)
     }
 
     pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
-        Ok(a.cholesky(UPLO::Lower)?)
+        a.cholesky(UPLO::Lower).map_err(lin)
     }
 }
 
@@ -54,14 +59,12 @@ mod backend {
     /// Convert a column-major nalgebra `DMatrix` back to a row-major `Array2<f64>`.
     fn from_dmatrix(mat: &DMatrix<f64>) -> Array2<f64> {
         let (nrows, ncols) = (mat.nrows(), mat.ncols());
-        // `mat.as_slice()` is column-major; build row-major Array2 by reading columns.
-        let mut out = Array2::<f64>::zeros((nrows, ncols));
-        for j in 0..ncols {
-            for i in 0..nrows {
-                out[[i, j]] = mat[(i, j)];
-            }
-        }
-        out
+        // `mat.transpose().as_slice()` materializes the matrix in row-major order
+        // (transposing column-major → column-major-of-transpose = row-major-of-original).
+        // `from_shape_vec` then takes that contiguous slice without a per-element copy.
+        let transposed = mat.transpose();
+        Array2::from_shape_vec((nrows, ncols), transposed.as_slice().to_vec())
+            .expect("dim of transposed nalgebra slice matches (nrows, ncols)")
     }
 
     pub fn solve(a: &Array2<f64>, b: &Array1<f64>) -> Result<Array1<f64>> {

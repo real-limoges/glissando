@@ -14,14 +14,19 @@ pub enum GamlssError {
     Optimization(String),
 
     /// Linear algebra operation failed (e.g., singular matrix).
-    #[cfg(feature = "openblas")]
-    #[error("Linear algebra error: {0}")]
-    Linalg(#[from] ndarray_linalg::error::LinalgError),
-
-    /// Linear algebra operation failed (e.g., singular matrix).
-    #[cfg(feature = "pure-rust")]
+    ///
+    /// Payload is stringified at the backend boundary so downstream pattern
+    /// matching is identical under both `openblas` and `pure-rust`.
     #[error("Linear algebra error: {0}")]
     Linalg(String),
+
+    /// Posterior covariance matrix is not positive definite, so a Cholesky factor
+    /// (and therefore a Gaussian-posterior sample) cannot be produced. Indicates
+    /// a degenerate fit — typically a rank-deficient design or a parameter at the
+    /// boundary of its support. Callers asking for posterior samples must handle
+    /// this rather than silently receiving an empty vector.
+    #[error("Posterior covariance is not positive definite (Cholesky failed)")]
+    PosteriorNotPositiveDefinite,
 
     /// Array shape mismatch.
     #[error("Array shape error: {0}")]
