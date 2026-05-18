@@ -24,7 +24,6 @@
 //! assert!(model.converged());
 //! ```
 
-pub mod diagnostics;
 pub mod distributions;
 mod error;
 pub mod fitting;
@@ -39,8 +38,8 @@ mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-pub use diagnostics::ModelDiagnostics;
 pub use error::GamlssError;
+pub use fitting::diagnostics::{self, ModelDiagnostics};
 pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic};
 pub use terms::{Smooth, Term};
 pub use types::*;
@@ -235,7 +234,7 @@ impl GamlssModel {
         family: &D,
         y: &Array1<f64>,
     ) -> Result<ModelDiagnostics, GamlssError> {
-        diagnostics::compute(&self.models, family, y)
+        fitting::diagnostics::compute(&self.models, family, y)
     }
 
     /// Sample from the posterior distribution of coefficients for a given parameter.
