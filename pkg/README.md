@@ -428,10 +428,10 @@ match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
 | `Convergence` | Algorithm failed to converge after N iterations |
 | `Optimization` | Smoothing parameter optimization (L-BFGS) failed |
 | `Linalg` | Linear algebra computation failed (Cholesky, matrix solve, etc.) |
+| `PosteriorNotPositiveDefinite` | Posterior covariance is not positive definite — `predict_samples` / `posterior_samples` failed Cholesky |
 | `UnknownParameter` | Unknown parameter for the given distribution |
 | `Shape` | Array shape mismatch |
-| `ComputationError` | Internal computation error (ShapeError from ndarray) |
-| `Internal` | Internal computation error (other) |
+| `Internal` | Internal logic error (indicates a bug) |
 
 ## Serialization & WASM
 
@@ -502,6 +502,50 @@ const mu_coeffs = model.coefficients("mu");
 const diagnostics = JSON.parse(model.diagnosticsJson());
 ```
 
+## Python bindings
+
+Build the wheel with [maturin](https://github.com/PyO3/maturin):
+
+```bash
+maturin develop --release      # install into current venv
+maturin build --release        # produce wheel under target/wheels/
+```
+
+```python
+import numpy as np
+from glissando import GamlssModel, Gaussian, Poisson
+
+y = np.array([2.1, 4.0, 5.9, 8.1, 10.0])
+data = {"x": np.array([1.0, 2.0, 3.0, 4.0, 5.0])}
+formula = {
+    "mu":    [("intercept",), ("linear", "x")],
+    "sigma": [("intercept",)],
+}
+
+# Fit (with optional config dict)
+model = GamlssModel.fit(data, y, formula, Gaussian())
+model_cfg = GamlssModel.fit_with_config(
+    data, y, formula, Gaussian(), {"max_iterations": 300, "tolerance": 1e-4}
+)
+
+# Point predictions (response scale) for new data
+preds = model.predict({"x": np.array([6.0, 7.0])})  # {"mu": np.ndarray, "sigma": …}
+
+# Predictions with standard errors on the linear-predictor scale
+se = model.predict_with_se({"x": np.array([6.0, 7.0])})
+mu_block = se["mu"]   # {"fitted": …, "eta": …, "se_eta": …}
+
+# Posterior samples (one fitted-value array per posterior draw)
+samples = model.predict_samples({"x": np.array([6.0, 7.0])}, n_samples=500)
+mu_samples = samples["mu"]   # list of np.ndarray of length n_obs
+
+# Per-parameter accessors
+mu_coefs = model.coefficients("mu")        # np.ndarray
+mu_fits  = model.fitted_values("mu")       # np.ndarray
+```
+
+Supported distribution classes mirror the WASM surface — `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, and `Binomial(n_trials)` (Binomial is Python-only because it carries `n_trials` state that can't be reconstructed from a name alone).
+
 ## Dependencies
 
 **Core dependencies**:
@@ -512,13 +556,14 @@ const diagnostics = JSON.parse(model.diagnosticsJson());
 
 **Linear algebra backends** (select one):
 - [ndarray-linalg](https://crates.io/crates/ndarray-linalg) - OpenBLAS backend (v0.18, `openblas` feature)
-- [faer](https://crates.io/crates/faer) - Pure Rust backend (v0.24, `pure-rust` feature)
+- [nalgebra](https://crates.io/crates/nalgebra) - Pure Rust backend (v0.33, `pure-rust` feature)
 
 **Optional dependencies**:
+- [indexmap](https://crates.io/crates/indexmap) - Insertion-ordered map for deterministic parameter iteration (v2)
 - [rayon](https://crates.io/crates/rayon) - Parallel computation (v1.11, `parallel` feature)
 - [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) - Serialization (`serialization` feature)
 - [wasm-bindgen](https://crates.io/crates/wasm-bindgen) - JavaScript interop (v0.2, `wasm` feature)
-- [pyo3](https://crates.io/crates/pyo3) - Python bindings (v0.28, `python` feature)
+- [pyo3](https://crates.io/crates/pyo3) / [numpy](https://crates.io/crates/numpy) - Python bindings (v0.28, `python` feature)
 
 ## Project Structure
 

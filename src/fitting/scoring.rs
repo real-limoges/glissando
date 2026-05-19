@@ -13,8 +13,10 @@
 //! diagnostic deltas. The caller applies the update; `step` itself is pure with
 //! respect to the input `models` map, which keeps it unit-testable in isolation.
 
-use super::solver::{fit_pwls, run_optimization};
-use super::FittingParameter;
+use super::solver::{
+    fit_pwls, run_optimization, run_optimization_fellner_schall, run_optimization_reml,
+};
+use super::{FittingParameter, SmoothingCriterion};
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
@@ -61,6 +63,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     y: &Array1<f64>,
     models: &IndexMap<String, FittingParameter>,
     target_param: &str,
+    criterion: SmoothingCriterion,
 ) -> Result<Update, GamlssError> {
     // 1. Reference every parameter's cached μ; derivatives() expects all of them.
     //    The cache is maintained by the outer loop so we don't re-run inv_link here.
@@ -118,18 +121,34 @@ pub(super) fn step<D: Distribution + ?Sized>(
             *w_out = safe_w;
         });
 
-    // 4. Optimize λ via GCV.  Warm-start from previous values; fast-path purely
-    //    parametric models with no penalties.
+    // 4. Optimize λ via the configured criterion (GCV or REML).  Warm-start from
+    //    previous values; fast-path purely parametric models with no penalties.
     let best_lambdas = if target.penalty_matrices.is_empty() {
         Array1::zeros(0)
     } else {
-        run_optimization(
-            &target.x_matrix,
-            &z,
-            &w,
-            &target.penalty_matrices,
-            Some(&target.lambdas),
-        )?
+        match criterion {
+            SmoothingCriterion::Gcv => run_optimization(
+                &target.x_matrix,
+                &z,
+                &w,
+                &target.penalty_matrices,
+                Some(&target.lambdas),
+            )?,
+            SmoothingCriterion::Reml => run_optimization_reml(
+                &target.x_matrix,
+                &z,
+                &w,
+                &target.penalty_matrices,
+                Some(&target.lambdas),
+            )?,
+            SmoothingCriterion::FellnerSchall => run_optimization_fellner_schall(
+                &target.x_matrix,
+                &z,
+                &w,
+                &target.penalty_matrices,
+                Some(&target.lambdas),
+            )?,
+        }
     };
 
     // 5. Penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z.
@@ -222,7 +241,7 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n)); // σ = 1
 
-        let update = step(&Gaussian, &y, &models, "mu").unwrap();
+        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert!(
             (update.beta.0[0] - 3.0).abs() < 1e-6,
             "expected β ≈ 3.0 (ȳ), got {}",
@@ -239,7 +258,7 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
-        let update = step(&Gaussian, &y, &models, "mu").unwrap();
+        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert!(update.max_diff.is_finite() && update.max_diff > 0.0);
         assert!(update.eta_change.is_finite() && update.eta_change > 0.0);
         assert!(update.lambda_change.is_finite());
@@ -256,7 +275,7 @@ mod tests {
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
         let beta_before = models["mu"].beta.0.clone();
-        let _ = step(&Gaussian, &y, &models, "mu").unwrap();
+        let _ = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         let beta_after = &models["mu"].beta.0;
         assert_eq!(beta_before, *beta_after);
     }
@@ -295,7 +314,7 @@ mod tests {
         models.insert("mu".to_string(), mu);
         models.insert("sigma".to_string(), sigma);
 
-        let update = step(&Gaussian, &y, &models, "mu").unwrap();
+        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert_eq!(update.lambdas.len(), 1);
         assert!(update.lambdas[0].is_finite() && update.lambdas[0] > 0.0);
         assert!(update.edf > 0.0 && update.edf <= n_splines as f64);
@@ -310,7 +329,7 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
-        let err = step(&Gaussian, &y, &models, "zeta").unwrap_err();
+        let err = step(&Gaussian, &y, &models, "zeta", SmoothingCriterion::Gcv).unwrap_err();
         // family.derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
         assert!(format!("{}", err).contains("zeta"));
     }

@@ -42,7 +42,7 @@ pub mod wasm;
 
 pub use error::GamlssError;
 pub use fitting::diagnostics::{self, ModelDiagnostics};
-pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic};
+pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic, SmoothingCriterion};
 pub use terms::{Smooth, Term};
 pub use types::{Coefficients, CovarianceMatrix, DataSet, Formula};
 

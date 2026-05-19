@@ -31,6 +31,28 @@ use rand_distr::{Distribution as _, StandardNormal};
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
 
+/// Smoothing-parameter selection criterion.
+///
+/// `Reml` (the default) minimizes the Laplace-approximate marginal likelihood
+/// (Wood 2011) via L-BFGS, applied per distributional parameter to its converged
+/// PWLS subproblem. `Gcv` uses Generalized Cross-Validation (Craven & Wahba 1979).
+/// `FellnerSchall` optimizes the same target as `Reml` via the multiplicative
+/// fixed-point update of Wood & Fasiolo (2017) — deterministic, no line search.
+/// REML tends to be less prone to local minima and undersmoothing than GCV at
+/// moderate sample sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum SmoothingCriterion {
+    Gcv,
+    #[default]
+    Reml,
+    /// Fellner-Schall fixed-point optimizer for the LAML target
+    /// (Wood & Fasiolo 2017). Same objective as `Reml`, deterministic update;
+    /// no outer L-BFGS, no line search.
+    FellnerSchall,
+}
+
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -39,6 +61,9 @@ pub struct FitConfig {
     pub max_iterations: usize,
     /// Convergence tolerance for coefficient changes (default: 1e-3).
     pub tolerance: f64,
+    /// Smoothing-parameter selection criterion (default: REML).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub criterion: SmoothingCriterion,
 }
 
 impl Default for FitConfig {
@@ -46,6 +71,7 @@ impl Default for FitConfig {
         Self {
             max_iterations: DEFAULT_MAX_ITER,
             tolerance: DEFAULT_TOLERANCE,
+            criterion: SmoothingCriterion::default(),
         }
     }
 }
@@ -199,7 +225,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let mut max_diff = 0.0;
 
         for param_name in family.parameters() {
-            let update = scoring::step(family, y, &models, param_name)?;
+            let update = scoring::step(family, y, &models, param_name, config.criterion)?;
             if update.max_diff > max_diff {
                 max_diff = update.max_diff;
             }

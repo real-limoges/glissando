@@ -4,8 +4,9 @@
 //! - `openblas` (default): `ndarray-linalg` with system OpenBLAS — fastest on native targets.
 //! - `pure-rust`: `nalgebra` — no system dependencies, WASM-compatible.
 //!
-//! Each backend module exposes the same `solve`, `inv`, and `cholesky_lower` functions,
-//! and the file-level `pub use` re-exports the active backend's set.
+//! Each backend module exposes the same `solve`, `inv`, `cholesky_lower`,
+//! `log_det_via_cholesky`, and `symmetric_eigh` functions, and the file-level
+//! `pub use` re-exports the active backend's set.
 
 // `openblas` and `pure-rust` define `mod backend { … }` with `#[cfg]` gates that
 // assume exactly one is active. Cargo's feature-unification across workspace
@@ -30,7 +31,7 @@ mod backend {
     use super::Result;
     use crate::GamlssError;
     use ndarray::{Array1, Array2};
-    use ndarray_linalg::{Cholesky, Inverse, Solve, UPLO};
+    use ndarray_linalg::{Cholesky, Eigh, Inverse, Solve, UPLO};
 
     fn lin<E: std::fmt::Display>(e: E) -> GamlssError {
         GamlssError::Linalg(e.to_string())
@@ -47,6 +48,24 @@ mod backend {
     pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
         a.cholesky(UPLO::Lower).map_err(lin)
     }
+
+    /// log|A| via Cholesky: 2·Σ log diag(L) where L = chol(A, lower).
+    /// Returns an error if A is not positive definite.
+    pub fn log_det_via_cholesky(a: &Array2<f64>) -> Result<f64> {
+        let l = cholesky_lower(a)?;
+        let mut acc = 0.0;
+        for i in 0..l.nrows() {
+            acc += l[[i, i]].ln();
+        }
+        Ok(2.0 * acc)
+    }
+
+    /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
+    /// such that `A = Q · diag(d) · Qᵀ`.
+    pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
+        // ndarray-linalg's `eigh` already returns eigenvalues in ascending order.
+        a.eigh(UPLO::Lower).map_err(lin)
+    }
 }
 
 // `not(feature = "openblas")` keeps this mod gone when both features unify, so
@@ -55,7 +74,7 @@ mod backend {
 mod backend {
     use super::Result;
     use crate::GamlssError;
-    use nalgebra::{DMatrix, DVector};
+    use nalgebra::{DMatrix, DVector, SymmetricEigen};
     use ndarray::{Array1, Array2};
 
     /// Convert an `Array2<f64>` (row-major in standard layout) to a column-major nalgebra `DMatrix`.
@@ -108,9 +127,43 @@ mod backend {
         })?;
         Ok(from_dmatrix(&chol.l()))
     }
+
+    /// log|A| via Cholesky: 2·Σ log diag(L) where L = chol(A, lower).
+    /// Returns an error if A is not positive definite.
+    pub fn log_det_via_cholesky(a: &Array2<f64>) -> Result<f64> {
+        let l = cholesky_lower(a)?;
+        let mut acc = 0.0;
+        for i in 0..l.nrows() {
+            acc += l[[i, i]].ln();
+        }
+        Ok(2.0 * acc)
+    }
+
+    /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
+    /// such that `A = Q · diag(d) · Qᵀ`.
+    pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
+        let a_na = to_dmatrix(a);
+        let eig = SymmetricEigen::new(a_na);
+        // nalgebra returns eigenvalues unsorted; sort ascending and apply permutation to vectors.
+        let n = eig.eigenvalues.len();
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&a, &b| {
+            eig.eigenvalues[a]
+                .partial_cmp(&eig.eigenvalues[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let eigvals = Array1::from_iter(idx.iter().map(|&i| eig.eigenvalues[i]));
+        let mut eigvecs = Array2::<f64>::zeros((n, n));
+        for (new_col, &old_col) in idx.iter().enumerate() {
+            for row in 0..n {
+                eigvecs[[row, new_col]] = eig.eigenvectors[(row, old_col)];
+            }
+        }
+        Ok((eigvals, eigvecs))
+    }
 }
 
-pub use backend::{cholesky_lower, inv, solve};
+pub use backend::{cholesky_lower, inv, log_det_via_cholesky, solve, symmetric_eigh};
 
 #[cfg(test)]
 mod tests {
@@ -155,5 +208,71 @@ mod tests {
         // Indefinite matrix (eigenvalues -1 and 3).
         let a = array![[1.0, 2.0], [2.0, 1.0]];
         assert!(cholesky_lower(&a).is_err());
+    }
+
+    #[test]
+    fn test_log_det_via_cholesky() {
+        // det([[4,2],[2,3]]) = 12 - 4 = 8, so log|A| = ln(8).
+        let a = array![[4.0, 2.0], [2.0, 3.0]];
+        let lhs = log_det_via_cholesky(&a).unwrap();
+        let expected = 8.0_f64.ln();
+        assert!(
+            (lhs - expected).abs() < 1e-10,
+            "got {}, want {}",
+            lhs,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_log_det_via_cholesky_not_pd_errors() {
+        let a = array![[1.0, 2.0], [2.0, 1.0]];
+        assert!(log_det_via_cholesky(&a).is_err());
+    }
+
+    #[test]
+    fn test_symmetric_eigh_reconstruction_and_ordering() {
+        // Symmetric matrix with known eigenvalues {1, 4} (eigenvectors of [[2.5,1.5],[1.5,2.5]]).
+        let a = array![[2.5, 1.5], [1.5, 2.5]];
+        let (d, q) = symmetric_eigh(&a).unwrap();
+
+        // Eigenvalues ascending.
+        assert!(d[0] <= d[1]);
+        assert!((d[0] - 1.0).abs() < 1e-10);
+        assert!((d[1] - 4.0).abs() < 1e-10);
+
+        // Q · diag(d) · Qᵀ ≈ A.
+        let qd = &q * &d.view().insert_axis(ndarray::Axis(0));
+        let reconstructed = qd.dot(&q.t());
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!(
+                    (reconstructed[[i, j]] - a[[i, j]]).abs() < 1e-10,
+                    "reconstruction mismatch at ({},{}): got {}, want {}",
+                    i,
+                    j,
+                    reconstructed[[i, j]],
+                    a[[i, j]]
+                );
+            }
+        }
+
+        // Qᵀ Q ≈ I (orthonormal columns).
+        let qtq = q.t().dot(&q);
+        for i in 0..2 {
+            for j in 0..2 {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((qtq[[i, j]] - want).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_symmetric_eigh_rank_deficient() {
+        // Rank-1 matrix: eigenvalues should be (0, 2).
+        let a = array![[1.0, 1.0], [1.0, 1.0]];
+        let (d, _q) = symmetric_eigh(&a).unwrap();
+        assert!(d[0].abs() < 1e-10, "got d[0]={}", d[0]);
+        assert!((d[1] - 2.0).abs() < 1e-10);
     }
 }
