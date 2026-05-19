@@ -201,10 +201,7 @@ impl<'a> CostFunction for RemlCost<'a> {
 
         // V_r = ℓ − ½·βᵀS_λβ + ½·log|S_λ|_+ − ½·log|H+S_λ| + (M_p/2)·log(2π)
         // ℓ_partial = −½·RSS (constants in the working-likelihood independent of λ cancel).
-        let v_r = -0.5 * info.rss
-            - 0.5 * beta_s_beta
-            + 0.5 * eig.log_pdet
-            - 0.5 * log_det_lhs
+        let v_r = -0.5 * info.rss - 0.5 * beta_s_beta + 0.5 * eig.log_pdet - 0.5 * log_det_lhs
             + 0.5 * m_p * (2.0 * std::f64::consts::PI).ln();
 
         Ok(-v_r)
@@ -344,13 +341,11 @@ pub(crate) fn run_optimization_reml(
     };
 
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => {
-            LogLambdas(prev.mapv(|l| {
-                l.max(MIN_LAMBDA)
-                    .ln()
-                    .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
-            }))
-        }
+        Some(prev) if prev.len() == n_penalties => LogLambdas(prev.mapv(|l| {
+            l.max(MIN_LAMBDA)
+                .ln()
+                .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
+        })),
         _ => {
             // Cold start: build X'WX once to seed the heuristic.
             let sqrt_w = w.mapv(f64::sqrt);
@@ -598,10 +593,7 @@ fn penalty_eigen(s_lambda: &Array2<f64>, eps: f64) -> Result<PenaltyEigen, Gamls
 /// `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]`. This is mgcv's `initial.sp` heuristic
 /// in spirit — pick λ so each smooth lands in the interior of the EDF range,
 /// not pinned at 0 or p.
-fn initial_log_lambda(
-    x_t_w_x: &Array2<f64>,
-    penalty_matrices: &[PenaltyMatrix],
-) -> Array1<f64> {
+fn initial_log_lambda(x_t_w_x: &Array2<f64>, penalty_matrices: &[PenaltyMatrix]) -> Array1<f64> {
     let tr_xwx = x_t_w_x.diag().sum().max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {
         let tr_sj = s_j.0.diag().sum().max(MIN_LAMBDA);
@@ -622,7 +614,10 @@ mod reml_tests {
         // (constants and lines).
         let p = create_penalty_matrix(10, 2);
         let eig = penalty_eigen(&p, REML_RANK_TOL_EPS).unwrap();
-        assert_eq!(eig.null_dim, 2, "second-order P-spline penalty should have null dim 2");
+        assert_eq!(
+            eig.null_dim, 2,
+            "second-order P-spline penalty should have null dim 2"
+        );
         assert!(eig.log_pdet.is_finite());
 
         // Symmetric pseudo-inverse.
@@ -630,7 +625,9 @@ mod reml_tests {
             for j in (i + 1)..10 {
                 assert!(
                     (eig.pinv[[i, j]] - eig.pinv[[j, i]]).abs() < 1e-10,
-                    "pinv should be symmetric at ({},{})", i, j
+                    "pinv should be symmetric at ({},{})",
+                    i,
+                    j
                 );
             }
         }
@@ -642,7 +639,10 @@ mod reml_tests {
                 assert!(
                     (recon[[i, j]] - p[[i, j]]).abs() < 1e-8,
                     "P·P⁺·P mismatch at ({},{}): got {}, want {}",
-                    i, j, recon[[i, j]], p[[i, j]]
+                    i,
+                    j,
+                    recon[[i, j]],
+                    p[[i, j]]
                 );
             }
         }
@@ -694,12 +694,7 @@ mod reml_tests {
         let penalty = create_penalty_matrix(n_splines, 2);
         let z = x_coord.mapv(|t| (2.0 * std::f64::consts::PI * t).sin());
         let w = Array1::from_elem(n, 1.0_f64);
-        (
-            ModelMatrix(basis),
-            z,
-            w,
-            vec![PenaltyMatrix(penalty)],
-        )
+        (ModelMatrix(basis), z, w, vec![PenaltyMatrix(penalty)])
     }
 
     #[test]
@@ -714,7 +709,12 @@ mod reml_tests {
         // Evaluate at several log-λ to catch obvious blow-ups.
         for log_lambda in [-5.0, -1.0, 0.0, 1.0, 5.0] {
             let val = cost.cost(&LogLambdas(arr1(&[log_lambda]))).unwrap();
-            assert!(val.is_finite(), "REML cost not finite at log λ = {}: got {}", log_lambda, val);
+            assert!(
+                val.is_finite(),
+                "REML cost not finite at log λ = {}: got {}",
+                log_lambda,
+                val
+            );
         }
     }
 
@@ -774,7 +774,8 @@ mod reml_tests {
             assert!(
                 next <= prev + 1e-6,
                 "F-S violated LAML monotonicity: score went {} → {}",
-                prev, next
+                prev,
+                next
             );
         }
     }
@@ -806,7 +807,10 @@ mod reml_tests {
             assert!(
                 rel_err < 1e-4,
                 "gradient mismatch at log λ = {}: analytic = {}, fd = {}, rel_err = {}",
-                log_lambda, analytic.0[0], fd, rel_err
+                log_lambda,
+                analytic.0[0],
+                fd,
+                rel_err
             );
         }
     }

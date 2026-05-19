@@ -35,7 +35,10 @@ use glissando::{
 /// penalty's null space) can converge to numerically distinct λ across backends;
 /// that behavior is exercised by `tests/reml.rs` instead.
 fn gcv_config() -> FitConfig {
-    FitConfig { criterion: SmoothingCriterion::Gcv, ..FitConfig::default() }
+    FitConfig {
+        criterion: SmoothingCriterion::Gcv,
+        ..FitConfig::default()
+    }
 }
 use ndarray::Array1;
 use serde::Serialize;
