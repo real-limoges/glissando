@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use crate::distributions::{Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
 use crate::ffi::FamilyType;
-use crate::fitting::FitConfig;
+use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
 use crate::{DataSet, Formula, GamlssModel};
 
@@ -179,7 +179,10 @@ impl PyGamlssModel {
     /// ----------
     /// data, y, formula, family : same as `fit`
     /// config : dict
-    ///     Optional config keys: `max_iterations` (int), `tolerance` (float)
+    ///     Optional config keys:
+    ///         `max_iterations` (int)
+    ///         `tolerance` (float)
+    ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
     #[staticmethod]
     fn fit_with_config(
         data: &Bound<PyDict>,
@@ -199,6 +202,20 @@ impl PyGamlssModel {
         }
         if let Some(v) = config.get_item("tolerance")? {
             fit_config.tolerance = v.extract()?;
+        }
+        if let Some(v) = config.get_item("criterion")? {
+            let s: String = v.extract()?;
+            fit_config.criterion = match s.to_ascii_lowercase().as_str() {
+                "gcv" => SmoothingCriterion::Gcv,
+                "reml" => SmoothingCriterion::Reml,
+                "fellner_schall" => SmoothingCriterion::FellnerSchall,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
+                        other
+                    )))
+                }
+            };
         }
 
         let model = GamlssModel::fit_with_config(

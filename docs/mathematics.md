@@ -2,32 +2,7 @@
 
 This document provides detailed mathematical derivations for the GAMLSS implementation in `glissando`. It covers distribution-specific derivatives, special functions, numerical algorithms, and convergence theory.
 
-## Table of Contents
-
-1. [Distribution Derivatives](#1-distribution-derivatives)
-   - 1.1 [Gaussian](#11-gaussian-distribution)
-   - 1.2 [Student-t](#12-student-t-distribution)
-   - 1.3 [Poisson](#13-poisson-distribution)
-   - 1.4 [Gamma](#14-gamma-distribution)
-   - 1.5 [Negative Binomial](#15-negative-binomial-distribution)
-   - 1.6 [Beta](#16-beta-distribution)
-   - 1.7 [Binomial](#17-binomial-distribution)
-   - 1.8 [Example: Gaussian Derivatives](#18-example-computing-derivatives-for-gaussian-data)
-2. [Special Functions](#2-special-functions)
-   - 2.1 [Digamma Function](#21-digamma-function)
-   - 2.2 [Trigamma Function](#22-trigamma-function)
-3. [Numerical Stability](#3-numerical-stability-and-implementation)
-4. [GAMLSS Iteration (P-IRLS)](#4-gamlss-iteration-p-irls)
-5. [Smoothing and Penalty Matrices](#5-smoothing-and-penalty-matrices)
-   - 5.1 [Block-Sparse Penalties](#51-block-sparse-penalty-matrices)
-6. [Effective Degrees of Freedom](#6-effective-degrees-of-freedom)
-7. [Link Functions](#7-link-functions)
-8. [GCV Optimization](#8-gcv-gradient-for-smoothing-parameter-optimization)
-   - 8.1 [Cholesky Decomposition](#81-efficient-pwls-solution-via-cholesky-decomposition)
-9. [Mean-Variance Relationships](#9-mean-variance-relationships)
-10. [Convergence and Initialization](#10-convergence-and-initialization)
-11. [Model Selection and Diagnostics](#11-model-selection-and-diagnostics)
-12. [References](#references)
+> Generated PDF: run `bash docs/build-math-pdf.sh` to produce `docs/mathematics.pdf` (a numbered, hyperlinked, table-of-contents'd PDF). The PDF build uses pandoc + xelatex; see the script header for details.
 
 ---
 
@@ -333,6 +308,8 @@ $$
 
 This follows from the score being proportional to observed weight, as noted in the full derivation in Rigby & Stasinopoulos (2005).
 
+**Why observed information here:** for $\mu$ in NB the expected information $I_{\eta_\mu} = \mathbb{E}[\mu (Y - \mu)/(1 + \sigma\mu)^2]$ collapses to $\mu/(1 + \sigma\mu)$ after expectation, which coincides numerically with the observed-information form because of the variance identity $\mathrm{Var}(Y) = \mu(1 + \sigma\mu)$. Rigby & Stasinopoulos (2005, eq. (15)) use this simplification; `src/distributions/negative_binomial.rs` follows it. As $\sigma \to 0$ the weight reduces to $\mu$ — exactly the Poisson Fisher weight — confirming the limiting Poisson behavior.
+
 **Implementation** (for IRLS):
 $$
 u_\mu = \frac{y - \mu}{1 + \sigma\mu}, \quad w_\mu = \frac{\mu}{1 + \sigma\mu}
@@ -614,7 +591,24 @@ The switchpoint is empirically tuned to balance overhead vs. speedup.
 
 ## 4. GAMLSS Iteration (P-IRLS)
 
-### Algorithm Overview
+### 4.1 Backfitting Outer Loop
+
+GAMLSS fits the joint model by cycling through distribution parameters one at a time, holding the others fixed (Rigby & Stasinopoulos 2005, §3). For a $P$-parameter family (e.g.\ Gaussian: $P=2$; Student-t: $P=3$):
+
+```text
+for cycle in 0..max_iterations:
+    max_diff = 0
+    for each parameter theta_k in family.parameters():
+        snapshot beta_k_old
+        beta_k = p_irls_step(theta_k | other params held fixed)
+        max_diff = max(max_diff, max_abs(beta_k - beta_k_old))
+    if max_diff < tolerance:
+        break
+```
+
+Source: `src/fitting/mod.rs:223-263`. The convergence criterion is the **infinity norm** of coefficient changes (max absolute element), pooled across all parameters in a cycle — not the L¹ norm of each parameter separately. The active default is $\epsilon = 10^{-3}$, max iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_MAX_ITER` at `src/fitting/mod.rs:31-32`).
+
+### 4.2 Inner P-IRLS Step (Fisher Scoring)
 
 For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
 
@@ -622,36 +616,114 @@ For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
    $$
    z_k = \eta_k + \frac{u_k}{w_k}
    $$
-   where $u_k = \frac{\partial \ell}{\partial \eta_k}$ and $w_k$ is the expected Fisher information
+   where $u_k = \frac{\partial \ell}{\partial \eta_k}$ and $w_k$ is the (expected, or in some cases observed) Fisher information.
 
-2. **Penalized weighted least squares**:
+2. **Penalized weighted least squares** (see §8.1 for the Cholesky solve):
    $$
    \hat{\beta}_k = \arg\min_\beta \|W_k^{1/2}(z_k - X_k\beta)\|^2 + \sum_j \lambda_j \beta^T S_j \beta
    $$
 
 3. **Update linear predictor**:
    $$
-   \eta_k^{(new)} = X_k \hat{\beta}_k
+   \eta_k^{(\mathrm{new})} = X_k \hat{\beta}_k
    $$
 
-4. **Smoothing parameter selection** via GCV:
-   $$
-   \text{GCV}(\lambda) = \frac{n \cdot \text{RSS}}{(n - \text{EDF})^2}
-   $$
-   where $\text{EDF} = \text{tr}(V \cdot X^TWX)$ and $V = (X^TWX + \sum_j \lambda_j S_j)^{-1}$
+4. **Smoothing parameter selection** — GCV, REML, or Fellner–Schall (§§ 8, 8.2).
 
-### Convergence Criterion
+Source: `src/fitting/scoring.rs:40-180`.
 
-Stop when:
+### 4.3 Working-Response Derivation
+
+Why is $z = \eta + u/w$ the right pseudo-response? Expand the log-likelihood for one observation in $\eta$ around the current iterate $\eta_0$:
+
 $$
-\max_k \|\beta_k^{(t+1)} - \beta_k^{(t)}\|_1 < \epsilon
+\ell(\eta) \approx \ell(\eta_0) + u(\eta_0)\,(\eta - \eta_0) - \tfrac{1}{2}\,w(\eta_0)\,(\eta - \eta_0)^2
 $$
 
-Typical: $\epsilon = 10^{-3}$, max iterations = 200.
+where $u = \partial \ell/\partial \eta$ and $w = -\mathbb{E}[\partial^2 \ell/\partial \eta^2]$ (Fisher information, positive). Maximizing the quadratic Taylor surrogate over $\eta$ gives the one-Newton-step update $\eta - \eta_0 = u/w$. Setting $\eta = X\beta$ and stacking observations yields the Gauss–Newton normal equations:
+
+$$
+X^T W X \,\Delta\beta = X^T W \,(u/w)
+$$
+
+with $\Delta\beta = \beta - \beta_0$ and the diagonal weight $W = \mathrm{diag}(w_i)$. Equivalently, regress the **working response** $z = \eta_0 + u/w$ on $X$ with weights $W$:
+
+$$
+X^T W X \,\beta = X^T W z.
+$$
+
+Adding the penalty $\sum_j \lambda_j \beta^T S_j \beta$ to the surrogate produces the PWLS system of §8.1. This is exactly the IRLS construction of McCullagh & Nelder (1989) generalized to one distributional parameter at a time.
+
+### 4.4 Numerical Safeguards in the Inner Loop
+
+Cataloged here so the magic constants are auditable. All apply per observation, per inner iteration. Source: `src/fitting/scoring.rs`, `src/distributions/links.rs`.
+
+| Symbol | Value | Where | Purpose |
+| --- | --- | --- | --- |
+| `MIN_WEIGHT` | $10^{-6}$ | `scoring.rs:28` | Floor on $w_i$ so the weight matrix stays positive definite; near-zero Fisher info would blow up $u/w$. Hits counted in `weight_floor_hits`. |
+| `MAX_STEP` | $20.0$ | `scoring.rs:32` | Clamps $u_i/w_i$ to $\pm 20$ in $\eta$-units. Prevents wild Newton steps from outliers. Hits counted in `step_cap_hits`. |
+| `MAX_ETA`, `MIN_ETA` | $\pm 30$ | `links.rs:10-12` | Clamps $\eta$ before applying the inverse log/logit link so $\exp(\eta)$ stays finite ($e^{30} \approx 10^{13}$). |
+| `MIN_POSITIVE` | $10^{-10}$ | `links.rs:8`, `diagnostics.rs:15` | Floor on parameters that must be strictly positive ($\sigma$, $\phi$, probabilities), and on variances before the square-root in residual computation. |
+
+Persistent non-zero `weight_floor_hits` or `step_cap_hits` at convergence signals model misspecification or ill-conditioned data; transient hits in early iterations are normal.
 
 ---
 
 ## 5. Smoothing and Penalty Matrices
+
+### 5.0 B-Spline Basis (Cox–de Boor)
+
+A degree-$p$ B-spline basis with $k$ functions is defined on a clamped knot vector
+$$
+\tau_0 = \tau_1 = \cdots = \tau_p < \tau_{p+1} < \cdots < \tau_{k-1} < \tau_k = \cdots = \tau_{k+p}.
+$$
+
+The implementation places the $k - p - 1$ interior knots at empirical **quantiles** of the predictor:
+$$
+\tau_{p+1+i} = x_{(\,\mathrm{round}(\,q_i\,(n-1)\,))}, \qquad q_i = \frac{i}{k - p}, \quad i = 1, \ldots, k - p - 1
+$$
+where $x_{(j)}$ is the $j$-th order statistic. Boundary knots are replicated $p+1$ times at $\min x$ and $\max x$ (`src/splines.rs:99-128`).
+
+The **Cox–de Boor recursion** evaluates the basis stably:
+$$
+B_{i,0}(x) = \begin{cases} 1 & \tau_i \le x < \tau_{i+1}\\ 0 & \text{otherwise} \end{cases}
+$$
+$$
+B_{i,p}(x) = \frac{x - \tau_i}{\tau_{i+p} - \tau_i}\, B_{i, p-1}(x) \;+\; \frac{\tau_{i+p+1} - x}{\tau_{i+p+1} - \tau_{i+1}}\, B_{i+1, p-1}(x).
+$$
+
+Properties:
+
+- **Partition of unity**: $\sum_{j=1}^{k} B_j(x_i) = 1$ for every $x_i$ in the interior of the knot range.
+- **Non-negativity**: $B_j(x) \ge 0$.
+- **Local support**: $B_{i,p}$ is non-zero only on $[\tau_i, \tau_{i+p+1}]$, so each row of the design matrix has at most $p+1$ non-zero entries.
+
+Source: `src/splines.rs:42-160` (`create_basis_matrix`, `evaluate_basis_functions_into`, `find_knot_span` using `partition_point` for binary search).
+
+### 5.1 Sum-to-Zero Reparameterization (Identifiability)
+
+Partition-of-unity creates a rank deficiency when the model has both an intercept and a smooth term: the column vector $\mathbf{1}_n$ lies in the column space of $B$, so the design matrix $[\mathbf{1}_n \mid B]$ is column-rank-deficient. To restore identifiability, the smooth is reparameterized through an orthonormal basis of the subspace orthogonal to $\mathbf{1}_k$.
+
+The implementation uses a **Householder reflector** (`src/splines.rs:1-39`). Choose
+$$
+v = \mathbf{1}_k + \sqrt{k}\, e_1
+$$
+which reflects $\mathbf{1}_k$ onto $-\sqrt{k}\,e_1$. Form
+$$
+H = I_k - \frac{2}{\|v\|^2}\, v v^T, \qquad Z = H_{:,2:k}
+$$
+i.e.\ drop the first column of $H$. Then $Z \in \mathbb{R}^{k \times (k-1)}$ satisfies
+
+$$
+Z^T Z = I_{k-1}, \qquad Z^T \mathbf{1}_k = 0.
+$$
+
+Reparameterize $\beta = Z\gamma$ to get the constrained basis and penalty:
+$$
+B_{\mathrm{new}} = B Z, \qquad S_{\mathrm{new}} = Z^T S\, Z.
+$$
+
+The new design matrix $[\mathbf{1}_n \mid B Z]$ has full column rank, and the constraint $\mathbf{1}_k^T \beta = 0$ — i.e.\ the smooth has mean zero across knots — is enforced automatically.
 
 ### P-Spline Penalty (Eilers & Marx 1996)
 
@@ -672,29 +744,46 @@ $$
 
 This penalizes curvature: $\lambda \beta^T S \beta \approx \lambda \int (\beta''(x))^2 dx$
 
-### Tensor Product Penalty
+### Tensor Product Smooth and Anisotropic Penalty
 
-For bivariate smooth $f(x_1, x_2)$ using bases $B_1$ and $B_2$:
+For a bivariate smooth $f(x_1, x_2)$ built from marginal bases $B_1 \in \mathbb{R}^{n \times k_1}$ and $B_2 \in \mathbb{R}^{n \times k_2}$, the joint basis is the **row-wise Kronecker product** of the marginals:
+$$
+B[i, :] = B_1[i, :] \otimes B_2[i, :] \in \mathbb{R}^{k_1 k_2}, \qquad B \in \mathbb{R}^{n \times (k_1 k_2)}.
+$$
+The coefficient vector $\beta \in \mathbb{R}^{k_1 k_2}$ is indexed lexicographically so $\beta_{(i-1) k_2 + j}$ multiplies $B_1[\cdot, i] \cdot B_2[\cdot, j]$.
 
+Anisotropic penalties are obtained by Kronecker'ing each marginal difference penalty with an identity matrix:
 $$
-S_1 = S_1^{(row)} \otimes I_{k_2}, \quad S_2 = I_{k_1} \otimes S_2^{(col)}
+S^{(1)} = S_1 \otimes I_{k_2}, \qquad S^{(2)} = I_{k_1} \otimes S_2
 $$
+with two independent smoothing parameters:
+$$
+\lambda_1 \beta^T S^{(1)} \beta + \lambda_2 \beta^T S^{(2)} \beta.
+$$
+$S^{(1)}$ penalizes roughness in the $x_1$ direction at every $x_2$ slice; $S^{(2)}$ vice versa. Choosing two $\lambda$'s lets the GCV/REML routine pick different smoothness for each margin (Wood 2017, §5.6).
 
-Total penalty:
+The sum-to-zero constraint of §5.1 is applied **per margin** before the Kronecker product when an intercept is present:
 $$
-\lambda_1 \beta^T S_1 \beta + \lambda_2 \beta^T S_2 \beta
+B_{1,\mathrm{new}} = B_1 Z_1,\;\; B_{2,\mathrm{new}} = B_2 Z_2,\;\; S^{(1)} = (Z_1^T S_1 Z_1) \otimes I_{k_2 - 1},\;\; S^{(2)} = I_{k_1 - 1} \otimes (Z_2^T S_2 Z_2).
 $$
-
-This allows different smoothness in each dimension.
+Source: `src/fitting/assembler.rs:44-102`, `src/splines.rs:8-41`.
 
 ### Random Effect Penalty
 
-For group effects $\alpha_1, \ldots, \alpha_G$:
+For an observation-to-group map $g : \{1, \ldots, n\} \to \{1, \ldots, G\}$, the design matrix is the binary indicator
 $$
-S = I_G
+Z \in \{0, 1\}^{n \times G}, \qquad Z[i, g] = \mathbf{1}\{g(i) = g\}.
 $$
 
-Penalty $\lambda \sum_{g=1}^G \alpha_g^2$ shrinks effects toward zero (ridge penalty).
+Coupled with the **identity penalty** $S = I_G$, the model
+$$
+\eta = \mathbf{1} \beta_0 + Z \alpha, \qquad \lambda \alpha^T \alpha = \lambda \sum_{g=1}^G \alpha_g^2
+$$
+is equivalent to the Bayesian random-intercept prior $\alpha_g \sim N(0, 1/\lambda)$ — the ridge-penalized empirical Bayes interpretation. Since each row of $Z$ sums to 1, the sum-to-zero reparameterization of §5.1 is again applied when an intercept is present:
+$$
+Z_{\mathrm{new}} = Z\,Z_{\mathrm{c}} \in \mathbb{R}^{n \times (G-1)}, \qquad Z_{\mathrm{c}}^T I_G Z_{\mathrm{c}} = I_{G-1}.
+$$
+Source: `src/fitting/assembler.rs:103-126`.
 
 ---
 
@@ -749,8 +838,8 @@ $$
 where $H = X(X^TWX + \lambda S)^{-1}X^TWX$ is the hat matrix.
 
 **Interpretation**:
-- EDF ≈ 2 for linear fit (intercept + slope)
-- EDF ≈ number of basis functions for unpenalized spline
+- $\mathrm{EDF} \approx 2$ for a linear fit (intercept + slope)
+- $\mathrm{EDF} \approx$ number of basis functions for an unpenalized spline
 - EDF between these extremes reflects smoothing
 
 ---
@@ -946,6 +1035,84 @@ This avoids forming the full $p \times p$ products when $S_{\text{block}} \ll p$
 
 ---
 
+### 8.2 REML / Laplace-Approximate Marginal Likelihood
+
+GCV is one option for picking the smoothing parameters; the default `criterion` in `FitConfig` is `Reml` (see `src/fitting/mod.rs:43-54`). REML in this setting is the Laplace-approximate marginal likelihood (LAML) of Wood (2011), evaluated at the working PWLS step. The selector is exposed as a three-variant enum:
+
+```rust
+pub enum SmoothingCriterion { Gcv, Reml /* default */, FellnerSchall }
+```
+
+`Gcv` minimizes the score of §8 via L-BFGS on $\log \lambda$. `Reml` minimizes $-V_r$ (below) via L-BFGS on $\log \lambda$. `FellnerSchall` targets the same $-V_r$ via a deterministic multiplicative fixed-point (§8.3).
+
+#### The LAML objective
+
+Let $S_\lambda = \sum_j \lambda_j S_j$. The working-model LAML negative log-marginal likelihood is
+$$
+-V_r(\lambda) = \tfrac{1}{2}\,\log\bigl|X^T W X + S_\lambda\bigr|
+\;-\;\tfrac{1}{2}\,\log\bigl|S_\lambda\bigr|_+
+\;+\; \text{Gaussian PWLS terms (data, } \sigma\text{)}
+$$
+where $|\,\cdot\,|_+$ denotes the **pseudo-determinant** — the product of strictly positive eigenvalues — required because $S_\lambda$ is rank-deficient (its null space contains the unpenalized polynomial directions: constants for order-1 penalties, lines for order-2, etc., plus the unpenalized intercept and linear columns).
+
+Source: `src/fitting/solver.rs:170-250` (`RemlCost`).
+
+#### Pseudo-determinant via eigendecomposition
+
+$S_\lambda$ is real symmetric PSD. Decompose
+$$
+S_\lambda = U\, \mathrm{diag}(d_1, \ldots, d_p)\, U^T, \qquad d_1 \ge \cdots \ge d_p \ge 0.
+$$
+Declare eigenvalue $d_i$ numerically zero when
+$$
+d_i \;<\; \tau \cdot d_1, \qquad \tau = \mathtt{REML\_RANK\_TOL\_EPS} = 10^{-8}
+$$
+(`src/fitting/solver.rs:23`). Then
+$$
+\log |S_\lambda|_+ = \sum_{d_i > \tau d_1} \log d_i, \qquad S_\lambda^+ = U\, \mathrm{diag}\bigl(d_i^{-1}\mathbf{1}\{d_i > \tau d_1\}\bigr)\, U^T.
+$$
+
+Source: `src/fitting/solver.rs:547-595` (`penalty_eigen`).
+
+#### REML gradient
+
+From Wood (2011, §3) the gradient with respect to $\log \lambda_j$ is
+$$
+\frac{\partial (-V_r)}{\partial \log \lambda_j}
+= \tfrac{1}{2}\,\lambda_j\,\mathrm{tr}\!\bigl(V\, S_j\bigr)
+\;-\;\tfrac{1}{2}\,\lambda_j\,\mathrm{tr}\!\bigl(S_\lambda^+\, S_j\bigr)
+\;-\;\tfrac{1}{2}\,\lambda_j\,\hat\beta^T S_j\, \hat\beta / \hat\sigma^2
+$$
+with $V = (X^T W X + S_\lambda)^{-1}$. The implementation evaluates this analytically and feeds it to L-BFGS; final $\log\lambda$ values are clamped to $[-\mathtt{LOG\_LAMBDA\_CLAMP}, \mathtt{LOG\_LAMBDA\_CLAMP}] = [-30, 30]$ to keep $\lambda \in [e^{-30}, e^{30}]$.
+
+Source: `src/fitting/solver.rs:214-303`.
+
+### 8.3 Fellner–Schall Multiplicative Fixed Point
+
+Wood & Fasiolo (2017) show that for the LAML target, the update
+$$
+\lambda_j^{(t+1)} \;=\; \lambda_j^{(t)} \cdot
+\frac{\mathrm{tr}\!\bigl(S_\lambda^+\, S_j\bigr) - \mathrm{tr}\!\bigl(V\, S_j\bigr)}
+{\hat\beta^T S_j\, \hat\beta}
+$$
+is **monotone non-increasing** in $-V_r$ under mild conditions, has no line search, and converges geometrically near a minimum. The implementation lives at `src/fitting/solver.rs:377-470` and applies three safeguards:
+
+| Safeguard | Constant | Value | Role |
+| --- | --- | --- | --- |
+| Relative floor on the numerator $\mathrm{tr}(S_\lambda^+ S_j) - \mathrm{tr}(V S_j)$ | `FS_NUMERATOR_FLOOR_REL` | $10^{-12}$ | Prevents tiny / occasionally negative numerators from collapsing the update. |
+| Floor on the denominator $\hat\beta^T S_j \hat\beta$ | `FS_DENOMINATOR_FLOOR` | $10^{-12}$ | Avoids division by zero when $\hat\beta$ lies in the null space of $S_j$. |
+| Per-iteration clamp on $\log \lambda_j$ | `LOG_LAMBDA_CLAMP` | $\pm 30$ | Keeps $\lambda$ in $[e^{-30}, e^{30}]$, matching the REML L-BFGS clamp. |
+
+Loop control: at most `FS_MAX_ITERS = 50` iterations; converged when $\max_j |\log \lambda_j^{(t+1)} - \log \lambda_j^{(t)}| < \mathtt{FS\_TOL} = 10^{-3}$. Source: `src/fitting/solver.rs:30-43`.
+
+#### When to pick which criterion
+
+- **GCV**: classical choice, computationally cheap; tends to undersmooth at moderate $n$ and is more prone to multiple local minima on the GCV surface (Reiss & Ogden 2009).
+- **REML** (default): preferred for stability; the Laplace-approximate marginal likelihood is asymptotically equivalent to true REML for the working PWLS model, and tends to undersmooth less than GCV at moderate sample sizes.
+- **FellnerSchall**: same target as REML but with a deterministic multiplicative update — no L-BFGS, no line search. Fast and well-behaved for well-conditioned problems; can stall if the numerator drifts to its floor.
+
+---
+
 ## 9. Mean-Variance Relationships
 
 A key feature distinguishing different distributions is how variance relates to the mean. This determines which distribution is appropriate for different data structures.
@@ -1130,12 +1297,100 @@ Test $H_0: \gamma = 0$ using likelihood ratio test.
 
 ---
 
+## 12. Code Map
+
+A reverse index from mathematical concept to the canonical implementation, for contributors jumping between formula and source.
+
+| Concept (this doc) | Source location |
+| --- | --- |
+| Backfitting outer loop (§4.1) | `src/fitting/mod.rs:223-263` |
+| P-IRLS inner step (§4.2) | `src/fitting/scoring.rs:40-180` |
+| `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs:28,32` |
+| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs:8-12` |
+| `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
+| Gaussian derivatives (§1.1) | `src/distributions/gaussian.rs` |
+| Student-t derivatives (§1.2) | `src/distributions/student_t.rs` |
+| Poisson derivatives (§1.3) | `src/distributions/poisson.rs` |
+| Gamma derivatives (§1.4) | `src/distributions/gamma.rs` |
+| Negative Binomial derivatives (§1.5) | `src/distributions/negative_binomial.rs` |
+| Beta derivatives (§1.6) | `src/distributions/beta.rs` |
+| Binomial derivatives (§1.7) | `src/distributions/binomial.rs` |
+| Digamma / trigamma batched (§2) | `src/math.rs` |
+| Distribution trait (§1) | `src/distributions/mod.rs` |
+| B-spline basis & knots (§5.0) | `src/splines.rs:42-160` |
+| Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs:1-39` |
+| Difference penalty matrix (§5) | `src/splines.rs:162-196` |
+| Tensor product assembly (§5) | `src/fitting/assembler.rs:44-102` |
+| Random effect assembly (§5) | `src/fitting/assembler.rs:103-126` |
+| Block-sparse penalty (§5.1) | `src/fitting/assembler.rs:128-187`, `src/types/newtypes.rs` |
+| PWLS / Cholesky solve (§8.1) | `src/fitting/solver.rs:466-545` |
+| EDF (§6) | `src/fitting/solver.rs:514-530` |
+| GCV cost and gradient (§8) | `src/fitting/solver.rs:67-160` |
+| GCV L-BFGS driver | `src/fitting/solver.rs:290-373` |
+| REML / LAML cost and gradient (§8.2) | `src/fitting/solver.rs:170-303` |
+| Penalty pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs:547-595` (`penalty_eigen`) |
+| Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs:377-470` |
+| `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs:46-54` |
+| Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs:31-32` |
+| Diagnostics (AIC/BIC/EDF/residuals, §11) | `src/fitting/diagnostics.rs` |
+
+---
+
+## 13. Notation Glossary
+
+Symbols used throughout this document.
+
+| Symbol | Meaning |
+| --- | --- |
+| $y, Y$ | Response value / random variable |
+| $n$ | Number of observations |
+| $p$ | Total number of coefficients across all terms; also (in §5.0) B-spline degree |
+| $P$ | Number of distribution parameters (e.g.\ $P = 2$ for Gaussian) |
+| $\theta_k$ | $k$-th distribution parameter ($\mu, \sigma, \nu, \phi$) |
+| $\mu, \sigma, \nu, \phi$ | Location, scale, degrees of freedom (Student-t), precision (Beta) |
+| $g, g^{-1}$ | Link function and its inverse |
+| $\eta = g(\theta)$ | Linear predictor for a distribution parameter |
+| $X$ | Design matrix ($n \times p$); collects intercept, linear, and smooth basis columns |
+| $\beta$ | Coefficient vector ($p \times 1$) |
+| $W$ | Diagonal weight matrix; $W_{ii} = w_i$ = Fisher info for observation $i$ |
+| $u_i = \partial \ell / \partial \eta_i$ | Score (first derivative of log-likelihood on $\eta$-scale) |
+| $w_i = -\mathbb{E}\bigl[\partial^2 \ell / \partial \eta_i^2\bigr]$ | Fisher information on $\eta$-scale |
+| $z = \eta + u/w$ | Working response |
+| $S_j$ | $j$-th penalty matrix (one per smooth term direction) |
+| $\lambda_j$ | Smoothing parameter for $S_j$ |
+| $S_\lambda = \sum_j \lambda_j S_j$ | Aggregate penalty matrix |
+| $V = (X^T W X + S_\lambda)^{-1}$ | PWLS coefficient covariance |
+| $H = X V X^T W$ | Hat matrix (projection onto fitted values) |
+| $\mathrm{EDF} = \mathrm{tr}(H) = \mathrm{tr}(V X^T W X)$ | Effective degrees of freedom |
+| $\mathrm{RSS} = (z - X\hat\beta)^T W (z - X\hat\beta)$ | Weighted residual sum of squares |
+| $\psi(x), \psi'(x)$ | Digamma, trigamma |
+| $|A|_+$ | Pseudo-determinant of PSD matrix $A$ (product of strictly positive eigenvalues) |
+| $A^+$ | Moore–Penrose pseudo-inverse of $A$ |
+| $\otimes$ | Kronecker product |
+| $\odot$ (in §5) | Row-wise Kronecker product (one row of $B_1 \otimes B_2$ per row index) |
+| $\mathbf{1}_k$ | Column vector of $k$ ones |
+| $I_k$ | $k \times k$ identity matrix |
+
+---
+
 ## References
 
-1. Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized additive models for location, scale and shape. *Journal of the Royal Statistical Society: Series C*, 54(3), 507-554.
+1. Rigby, R. A., & Stasinopoulos, D. M. (2005). Generalized additive models for location, scale and shape. *Journal of the Royal Statistical Society: Series C*, 54(3), 507-554. — Core RS backfitting algorithm and observed-info choice in NB.
 
-2. Eilers, P. H., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. *Statistical Science*, 11(2), 89-121.
+2. Eilers, P. H., & Marx, B. D. (1996). Flexible smoothing with B-splines and penalties. *Statistical Science*, 11(2), 89-121. — P-spline difference penalty.
 
-3. Wood, S. N. (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). Chapman and Hall/CRC.
+3. de Boor, C. (1978). *A Practical Guide to Splines*. Springer. — Cox–de Boor B-spline recursion.
 
-4. Abramowitz, M., & Stegun, I. A. (1972). *Handbook of Mathematical Functions*. Dover Publications.
+4. Wood, S. N. (2017). *Generalized Additive Models: An Introduction with R* (2nd ed.). Chapman and Hall/CRC. — Tensor-product smooths, identifiability constraints, GAM reference.
+
+5. Wood, S. N. (2011). Fast stable restricted maximum likelihood and marginal likelihood estimation of semiparametric generalized linear models. *Journal of the Royal Statistical Society: Series B*, 73(1), 3-36. — Laplace-approximate REML for smoothing selection.
+
+6. Wood, S. N., & Fasiolo, M. (2017). A generalized Fellner–Schall method for smoothing parameter optimization with application to Tweedie location, scale and shape models. *Biometrics*, 73(4), 1071-1081. — Multiplicative fixed-point update.
+
+7. Reiss, P. T., & Ogden, R. T. (2009). Smoothing parameter selection for a class of semiparametric linear models. *JRSS B*, 71(2), 505-523. — Comparison of GCV vs REML behavior.
+
+8. Craven, P., & Wahba, G. (1979). Smoothing noisy data with spline functions. *Numerische Mathematik*, 31, 377-403. — Original GCV.
+
+9. McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman and Hall. — IRLS / Fisher scoring derivation underlying §4.3.
+
+10. Abramowitz, M., & Stegun, I. A. (1972). *Handbook of Mathematical Functions*. Dover Publications. — Digamma / trigamma asymptotic expansions (6.3.18, 6.4.11).
