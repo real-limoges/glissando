@@ -28,7 +28,8 @@ export class WasmGamlssModel {
      * Fit a GAMLSS model with custom configuration.
      *
      * `config_json` is a JSON object with optional fields:
-     * `{"max_iterations": 200, "tolerance": 0.001}`
+     * `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`.
+     * `criterion` accepts `"reml"` (default), `"gcv"`, or `"fellner_schall"`.
      */
     static fitWithConfig(y_json: string, data_json: string, formula_json: string, distribution: string, config_json: string): WasmGamlssModel;
     fittedValues(param: string): Float64Array;
