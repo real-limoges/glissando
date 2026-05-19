@@ -72,7 +72,8 @@ impl WasmGamlssModel {
     /// Fit a GAMLSS model with custom configuration.
     ///
     /// `config_json` is a JSON object with optional fields:
-    /// `{"max_iterations": 200, "tolerance": 0.001}`
+    /// `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`.
+    /// `criterion` accepts `"reml"` (default), `"gcv"`, or `"fellner_schall"`.
     #[wasm_bindgen(js_name = "fitWithConfig")]
     pub fn fit_with_config(
         y_json: &str,
