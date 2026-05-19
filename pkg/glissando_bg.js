@@ -98,7 +98,8 @@ export class WasmGamlssModel {
      * Fit a GAMLSS model with custom configuration.
      *
      * `config_json` is a JSON object with optional fields:
-     * `{"max_iterations": 200, "tolerance": 0.001}`
+     * `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`.
+     * `criterion` accepts `"reml"` (default), `"gcv"`, or `"fellner_schall"`.
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json

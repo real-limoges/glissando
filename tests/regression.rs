@@ -26,8 +26,17 @@ mod common;
 use common::{linear_intercepts, pspline, Generator};
 use glissando::{
     distributions::{Distribution, Gaussian},
-    Formula, GamlssModel, Term,
+    FitConfig, Formula, GamlssModel, SmoothingCriterion, Term,
 };
+
+/// Snapshot tests are pinned to GCV so that both linalg backends (openblas and
+/// pure-rust) land on the same minimum at 4-sig-fig precision. REML on a
+/// near-flat objective surface (e.g. linear-trend data living in the order-2
+/// penalty's null space) can converge to numerically distinct λ across backends;
+/// that behavior is exercised by `tests/reml.rs` instead.
+fn gcv_config() -> FitConfig {
+    FitConfig { criterion: SmoothingCriterion::Gcv, ..FitConfig::default() }
+}
 use ndarray::Array1;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -135,7 +144,8 @@ fn snapshot_gaussian_pspline() {
     let formula = Formula::new()
         .with_terms("mu", vec![Term::Intercept, pspline("x", 6)])
         .with_terms("sigma", vec![Term::Intercept]);
-    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+    let model =
+        GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), gcv_config()).unwrap();
     let snap = ModelSnapshot::from_fit(&model, &Gaussian::new(), &y);
     insta::assert_yaml_snapshot!(snap);
 }
