@@ -8,8 +8,8 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 
 - **Multiple distribution parameters**: Model mean, variance, and shape parameters simultaneously
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
-- **Automatic smoothing**: Smoothing parameters selected via GCV optimization
-- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via faer (no system deps)
+- **Automatic smoothing**: Smoothing parameters selected via REML (default), GCV, or Fellner-Schall
+- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via nalgebra (no system deps)
 - **WASM support**: Fit models and predict directly in the browser via wasm-bindgen
 - **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse
 
@@ -27,7 +27,7 @@ glissando = { git = "https://github.com/real-limoges/glissando" }
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `openblas` | OpenBLAS backend (ndarray-linalg) — max performance | yes |
-| `pure-rust` | Faer backend — no system dependencies, WASM-compatible | no |
+| `pure-rust` | nalgebra backend — no system dependencies, WASM-compatible | no |
 | `serialization` | Serde support for model serialization | no |
 | `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`, no parallelism) | no |
 | `python` | PyO3 bindings for Python integration (implies `openblas` + `parallel` + `serialization`) | no |
@@ -164,17 +164,24 @@ Term::Smooth(Smooth::RandomEffect {
 ## Configuration
 
 ```rust
-use glissando::FitConfig;
+use glissando::{FitConfig, SmoothingCriterion};
 
 let config = FitConfig {
-    max_iterations: 100,
-    tolerance: 1e-4,
+    max_iterations: 200,
+    tolerance: 1e-3,
+    criterion: SmoothingCriterion::Reml,  // also: Gcv, FellnerSchall
 };
 
 let model = GamlssModel::fit_with_config(
     &data, &y, &formula, &Gaussian::new(), config
 )?;
 ```
+
+`SmoothingCriterion` selects the smoothing-parameter optimizer:
+
+- `Reml` (default) — Laplace-approximate marginal likelihood (Wood 2011), optimized via L-BFGS
+- `Gcv` — Generalized Cross-Validation (Craven & Wahba 1979), optimized via L-BFGS
+- `FellnerSchall` — multiplicative fixed-point update for the LAML target (Wood & Fasiolo 2017); deterministic, no line search
 
 ## Accessing Results
 
@@ -474,7 +481,8 @@ const model = WasmGamlssModel.fit(y, data, formula, "Gaussian");
 console.log("Converged:", model.converged());
 
 // With custom configuration
-const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001 });
+// criterion: "reml" (default), "gcv", or "fellner_schall"
+const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001, criterion: "reml" });
 const model2 = WasmGamlssModel.fitWithConfig(y, data, formula, "Gaussian", config);
 ```
 
@@ -525,7 +533,8 @@ formula = {
 # Fit (with optional config dict)
 model = GamlssModel.fit(data, y, formula, Gaussian())
 model_cfg = GamlssModel.fit_with_config(
-    data, y, formula, Gaussian(), {"max_iterations": 300, "tolerance": 1e-4}
+    data, y, formula, Gaussian(),
+    {"max_iterations": 300, "tolerance": 1e-4, "criterion": "reml"},  # also: "gcv", "fellner_schall"
 )
 
 # Point predictions (response scale) for new data
@@ -579,7 +588,7 @@ GAMLSS fitting uses a penalized quasi-likelihood approach (Rigby-Stasinopoulos a
 1. **Initialization**: Set starting values for all distribution parameters
 2. **Outer loop**: Cycle through distribution parameters
 3. **Inner loop**: For each parameter, compute working response and weights from derivatives, then fit a penalized weighted least squares model
-4. **Smoothing selection**: Optimize smoothing parameters via GCV using L-BFGS
+4. **Smoothing selection**: Optimize smoothing parameters via REML (default), GCV, or Fellner-Schall — selectable through `FitConfig::criterion`
 5. **Convergence**: Check if coefficient changes are below tolerance
 
 ## Performance
