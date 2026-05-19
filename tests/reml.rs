@@ -66,8 +66,7 @@ fn reml_fits_gaussian_pspline_end_to_end() {
         criterion: SmoothingCriterion::Reml,
         ..FitConfig::default()
     };
-    let model =
-        GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
+    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
 
     assert!(model.converged(), "REML fit failed to converge");
 
@@ -75,7 +74,11 @@ fn reml_fits_gaussian_pspline_end_to_end() {
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
     assert!(mu.edf > 1.0, "EDF too small (over-smoothed): {}", mu.edf);
     // mu has 1 intercept + (n_splines - 1) sum-to-zero spline columns ≈ 10 cols total.
-    assert!(mu.edf < 10.0, "EDF at basis ceiling (unpenalized): {}", mu.edf);
+    assert!(
+        mu.edf < 10.0,
+        "EDF at basis ceiling (unpenalized): {}",
+        mu.edf
+    );
     assert!(mu.lambdas[0] > 0.0 && mu.lambdas[0].is_finite());
 }
 
@@ -94,7 +97,11 @@ fn reml_fits_poisson_pspline_end_to_end() {
     assert!(model.converged(), "REML Poisson fit failed to converge");
     let mu = &model.models["mu"];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
-    assert!(mu.edf > 1.0 && mu.edf < 8.0, "Poisson EDF out of range: {}", mu.edf);
+    assert!(
+        mu.edf > 1.0 && mu.edf < 8.0,
+        "Poisson EDF out of range: {}",
+        mu.edf
+    );
     assert!(mu.lambdas[0] > 0.0 && mu.lambdas[0].is_finite());
 }
 
@@ -117,7 +124,10 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Reml, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Reml,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
 
@@ -144,7 +154,10 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Reml, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Reml,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
     let gcv = GamlssModel::fit_with_config(
@@ -152,7 +165,10 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Gcv, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Gcv,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
 
@@ -194,13 +210,16 @@ fn fellner_schall_fits_gaussian_pspline_end_to_end() {
         criterion: SmoothingCriterion::FellnerSchall,
         ..FitConfig::default()
     };
-    let model =
-        GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
+    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
 
     assert!(model.converged(), "F-S fit failed to converge");
     let mu = &model.models["mu"];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
-    assert!(mu.edf > 2.0 && mu.edf < 15.0, "F-S EDF out of range: {}", mu.edf);
+    assert!(
+        mu.edf > 2.0 && mu.edf < 15.0,
+        "F-S EDF out of range: {}",
+        mu.edf
+    );
     assert!(mu.lambdas[0] > 0.0 && mu.lambdas[0].is_finite());
 }
 
@@ -219,7 +238,11 @@ fn fellner_schall_fits_poisson_pspline_end_to_end() {
     assert!(model.converged(), "F-S Poisson fit failed to converge");
     let mu = &model.models["mu"];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
-    assert!(mu.edf > 1.0 && mu.edf < 8.0, "F-S Poisson EDF out of range: {}", mu.edf);
+    assert!(
+        mu.edf > 1.0 && mu.edf < 8.0,
+        "F-S Poisson EDF out of range: {}",
+        mu.edf
+    );
     assert!(mu.lambdas[0] > 0.0 && mu.lambdas[0].is_finite());
 }
 
@@ -240,7 +263,10 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Reml, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Reml,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
     let fs = GamlssModel::fit_with_config(
@@ -248,7 +274,10 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::FellnerSchall, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::FellnerSchall,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
 
@@ -284,7 +313,10 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::FellnerSchall, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::FellnerSchall,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
     let gcv = GamlssModel::fit_with_config(
@@ -292,7 +324,10 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Gcv, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Gcv,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
 
@@ -318,7 +353,10 @@ fn criterion_dispatch_is_observable() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Reml, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Reml,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
     let gcv = GamlssModel::fit_with_config(
@@ -326,12 +364,14 @@ fn criterion_dispatch_is_observable() {
         &y,
         &formula,
         &Gaussian::new(),
-        FitConfig { criterion: SmoothingCriterion::Gcv, ..FitConfig::default() },
+        FitConfig {
+            criterion: SmoothingCriterion::Gcv,
+            ..FitConfig::default()
+        },
     )
     .unwrap();
 
-    let lambdas_differ =
-        (reml.models["mu"].lambdas[0] - gcv.models["mu"].lambdas[0]).abs() > 1e-12;
+    let lambdas_differ = (reml.models["mu"].lambdas[0] - gcv.models["mu"].lambdas[0]).abs() > 1e-12;
     let iters_differ = reml.diagnostics.iterations != gcv.diagnostics.iterations;
     assert!(
         lambdas_differ || iters_differ,

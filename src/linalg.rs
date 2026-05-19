@@ -216,7 +216,12 @@ mod tests {
         let a = array![[4.0, 2.0], [2.0, 3.0]];
         let lhs = log_det_via_cholesky(&a).unwrap();
         let expected = 8.0_f64.ln();
-        assert!((lhs - expected).abs() < 1e-10, "got {}, want {}", lhs, expected);
+        assert!(
+            (lhs - expected).abs() < 1e-10,
+            "got {}, want {}",
+            lhs,
+            expected
+        );
     }
 
     #[test]
@@ -244,7 +249,10 @@ mod tests {
                 assert!(
                     (reconstructed[[i, j]] - a[[i, j]]).abs() < 1e-10,
                     "reconstruction mismatch at ({},{}): got {}, want {}",
-                    i, j, reconstructed[[i, j]], a[[i, j]]
+                    i,
+                    j,
+                    reconstructed[[i, j]],
+                    a[[i, j]]
                 );
             }
         }
