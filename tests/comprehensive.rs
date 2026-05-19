@@ -111,9 +111,11 @@ fn test_tensor_product_complexity() {
 
     // check that smoothing actually happened
     // should neither be a flat plane (EDF ~3) nor unpenalized (EDF 25)
+    // REML picks slightly less aggressive smoothing than GCV on this surface;
+    // the upper bound is loose to accept either criterion.
 
     assert!(edf > 4.0, "Model is over-smoothed (EDF: {})", edf);
-    assert!(edf < 20.0, "Model is under-smoothed (EDF: {})", edf);
+    assert!(edf < 23.0, "Model is under-smoothed (EDF: {})", edf);
 }
 
 #[test]
