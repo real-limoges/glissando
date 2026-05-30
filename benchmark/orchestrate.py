@@ -57,6 +57,15 @@ def gen_gaussian_smooth(rng, n):
     return {"y": y, "x": x}
 
 
+def gen_gaussian_sigma_smooth(rng, n):
+    # Constant mean; a full sine period of structure in log σ. The scale-smooth
+    # analogue of gen_gaussian_smooth, for the gaulss comparison.
+    x = np.linspace(0, 1, n)
+    log_sigma = -0.7 + 0.8 * np.sin(2 * np.pi * x)
+    y = 2.0 + rng.normal(0.0, np.exp(log_sigma), n)
+    return {"y": y, "x": x}
+
+
 def gen_gaussian_multiple(rng, n):
     x1 = rng.uniform(0, 5, n)
     x2 = rng.uniform(0, 5, n)
@@ -169,6 +178,9 @@ SCENARIOS: list[Scenario] = [
     Scenario("negative_binomial_linear", False, True, None, gen_negative_binomial_linear),
     Scenario("negative_binomial_smooth", True, True, None, gen_negative_binomial_smooth),
     Scenario("beta_linear", False, True, None, gen_beta_linear),
+    # Appended at the end: per-scenario seeds are spawned in iteration order, so
+    # adding here leaves every existing scenario's generated data unchanged.
+    Scenario("gaussian_sigma_smooth", True, True, None, gen_gaussian_sigma_smooth),
 ]
 
 
