@@ -21,8 +21,8 @@ fn fit_then_predict_round_trip() {
     let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
     assert!(model.converged());
 
-    let preds_json = json::predict(&model, family.as_ref(), r#"{"x": [11.0, 12.0, 13.0]}"#)
-        .expect("predict");
+    let preds_json =
+        json::predict(&model, family.as_ref(), r#"{"x": [11.0, 12.0, 13.0]}"#).expect("predict");
     let preds: HashMap<String, Vec<f64>> = serde_json::from_str(&preds_json).unwrap();
     assert_eq!(preds["mu"].len(), 3);
     assert_eq!(preds["sigma"].len(), 3);

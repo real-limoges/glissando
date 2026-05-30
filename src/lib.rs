@@ -204,7 +204,8 @@ impl GamlssModel {
         let mut predictions = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) =
+                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
             let link = family.default_link(param_name)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
@@ -240,7 +241,8 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) =
+                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
 
             let v = &fitted_param.covariance.0;
@@ -341,7 +343,8 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) =
+                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
 
             let beta_samples = fitting::sample_posterior(
                 &fitted_param.coefficients,

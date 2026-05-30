@@ -412,7 +412,10 @@ mod tests {
         let knots = select_knots(&x, n_splines, degree);
 
         assert_eq!(knots.len(), n_splines + degree + 1);
-        assert!((knots[degree] - 0.0).abs() < 1e-9, "t[degree] should be min");
+        assert!(
+            (knots[degree] - 0.0).abs() < 1e-9,
+            "t[degree] should be min"
+        );
         assert!(
             (knots[n_splines] - 4.0).abs() < 1e-9,
             "t[n_splines] should be max"

@@ -55,7 +55,12 @@ fn fitted_drift(a: &[f64], b: &[f64]) -> (f64, f64) {
         .zip(b.iter())
         .map(|(x, y)| (x - y).abs() / y.abs().max(1.0))
         .fold(0.0_f64, f64::max);
-    let mean_abs = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum::<f64>() / n;
+    let mean_abs = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .sum::<f64>()
+        / n;
     (max_rel, mean_abs)
 }
 
