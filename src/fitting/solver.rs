@@ -48,6 +48,9 @@ struct PwlsGradientInfo {
     beta: Coefficients,
     v_matrix: Array2<f64>,
     edf: f64,
+    /// Per-coefficient EDF contributions: `diag(V·X'WX)`. Summing a contiguous
+    /// block attributes effective degrees of freedom to an individual term.
+    edf_per_coeff: Array1<f64>,
     x_t_w_x: Array2<f64>,
     x_t_w_r: Array1<f64>,
     rss: f64,
@@ -75,7 +78,7 @@ impl<'a> CostFunction for GamlssCost<'a> {
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         let lambdas = param.mapv(f64::exp);
 
-        let (beta, _, edf) = fit_pwls(
+        let (beta, _, edf, _) = fit_pwls(
             self.x_matrix,
             self.z,
             self.w,
@@ -465,9 +468,14 @@ pub(crate) fn fit_pwls(
     w_diag: &Array1<f64>,
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>,
-) -> Result<(Coefficients, CovarianceMatrix, f64), GamlssError> {
+) -> Result<(Coefficients, CovarianceMatrix, f64, Array1<f64>), GamlssError> {
     let info = fit_pwls_with_grad_info(x_matrix, z, w_diag, penalty_matrices, lambdas)?;
-    Ok((info.beta, CovarianceMatrix(info.v_matrix), info.edf))
+    Ok((
+        info.beta,
+        CovarianceMatrix(info.v_matrix),
+        info.edf,
+        info.edf_per_coeff,
+    ))
 }
 
 fn fit_pwls_with_grad_info(
@@ -509,7 +517,9 @@ fn fit_pwls_with_grad_info(
     // EDF (effective degrees of freedom) measures model complexity.
     // EDF = tr(H) where H = X(X'WX + sum lambda*S)^-1 X'W is the hat matrix.
     // Equivalently, EDF = tr(V * X'WX). Ranges from 0 (lambda->inf) to p (lambda->0).
-    let edf = v.dot(&x_t_w_x).diag().sum();
+    // Keep the per-coefficient diagonal so callers can attribute EDF per term.
+    let edf_per_coeff = v.dot(&x_t_w_x).diag().to_owned();
+    let edf = edf_per_coeff.sum();
 
     let fitted = x.dot(&beta.0);
     let residuals = z - &fitted;
@@ -522,6 +532,7 @@ fn fit_pwls_with_grad_info(
         beta,
         v_matrix: v,
         edf,
+        edf_per_coeff,
         x_t_w_x,
         x_t_w_r,
         rss,

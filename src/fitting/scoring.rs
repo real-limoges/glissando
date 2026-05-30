@@ -44,6 +44,9 @@ pub(super) struct Update {
     pub lambdas: Array1<f64>,
     pub covariance: CovarianceMatrix,
     pub edf: f64,
+    /// Effective degrees of freedom attributed to each term, aligned with the
+    /// parameter's `terms` / `term_layouts`. Sums to `edf`.
+    pub term_edf: Vec<f64>,
     /// Max absolute change in β; drives the outer-loop convergence check.
     pub max_diff: f64,
     /// Sum of absolute changes in η, recorded as a per-parameter diagnostic.
@@ -152,13 +155,24 @@ pub(super) fn step<D: Distribution + ?Sized>(
     };
 
     // 5. Penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z.
-    let (new_beta, cov_matrix, edf) = fit_pwls(
+    let (new_beta, cov_matrix, edf, edf_per_coeff) = fit_pwls(
         &target.x_matrix,
         &z,
         &w,
         &target.penalty_matrices,
         &best_lambdas,
     )?;
+
+    // Attribute EDF to each term by summing its contiguous block of the
+    // per-coefficient EDF diagonal. Term column order matches `term_layouts`.
+    let mut term_edf = Vec::with_capacity(target.term_layouts.len());
+    let mut offset = 0usize;
+    for layout in &target.term_layouts {
+        let end = offset + layout.n_coeffs;
+        let block: f64 = (offset..end).map(|k| edf_per_coeff[k]).sum();
+        term_edf.push(block);
+        offset = end;
+    }
 
     let new_eta = target.x_matrix.dot(&new_beta.0);
     let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
@@ -176,6 +190,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         lambdas: best_lambdas,
         covariance: cov_matrix,
         edf,
+        term_edf,
         max_diff,
         eta_change,
         lambda_change,
@@ -188,10 +203,20 @@ pub(super) fn step<D: Distribution + ?Sized>(
 mod tests {
     use super::*;
     use crate::distributions::{Gaussian, IdentityLink, Link, LogLink};
+    use crate::fitting::assembler::TermLayout;
     use crate::fitting::FittingParameter;
     use crate::terms::Term;
     use crate::types::ModelMatrix;
     use ndarray::{array, Array2};
+
+    /// Layout for a single unpenalized term occupying `n_coeffs` columns.
+    fn parametric_layout(n_coeffs: usize) -> Vec<TermLayout> {
+        vec![TermLayout {
+            n_coeffs,
+            null_dim: 0,
+            is_smooth: false,
+        }]
+    }
 
     fn intercept_only(eta_init: f64, n: usize) -> FittingParameter {
         let x = ModelMatrix(Array2::ones((n, 1)));
@@ -200,6 +225,7 @@ mod tests {
         let mu = eta.mapv(|e| link.inv_link(e));
         FittingParameter {
             terms: vec![Term::Intercept],
+            term_layouts: parametric_layout(1),
             link: Box::new(link),
             x_matrix: x,
             penalty_matrices: vec![],
@@ -209,6 +235,7 @@ mod tests {
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
+            term_edf: vec![0.0],
         }
     }
 
@@ -219,6 +246,7 @@ mod tests {
         let mu = eta.mapv(|e| link.inv_link(e));
         FittingParameter {
             terms: vec![Term::Intercept],
+            term_layouts: parametric_layout(1),
             link: Box::new(link),
             x_matrix: x,
             penalty_matrices: vec![],
@@ -228,6 +256,7 @@ mod tests {
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
+            term_edf: vec![0.0],
         }
     }
 
@@ -297,6 +326,13 @@ mod tests {
 
         let mu = FittingParameter {
             terms: vec![Term::Intercept],
+            // The design matrix here is a bare spline basis (n_splines columns);
+            // describe it as one smooth block so per-term EDF slicing matches.
+            term_layouts: vec![TermLayout {
+                n_coeffs: n_splines,
+                null_dim: 2,
+                is_smooth: true,
+            }],
             link: Box::new(IdentityLink),
             x_matrix: ModelMatrix(basis),
             penalty_matrices: vec![PenaltyMatrix(penalty)],
@@ -307,6 +343,7 @@ mod tests {
             lambdas: Array1::ones(1),
             covariance: None,
             edf: 0.0,
+            term_edf: vec![0.0],
         };
         let sigma = intercept_only_log(0.0, n);
 

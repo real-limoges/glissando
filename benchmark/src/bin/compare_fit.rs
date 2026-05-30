@@ -772,6 +772,62 @@ fn fit_gaussian_quadratic(df: &DataFrame) -> FitResult {
     fit_gaussian_smooth(df)
 }
 
+/// Smooth on the *scale* parameter: μ constant, log σ a P-spline of x. The
+/// scale-smooth analogue of `gaussian_smooth`; compared against mgcv `gaulss`.
+fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
+    let start = Instant::now();
+
+    let y = extract_column(df, "y");
+    let mut data = DataSet::new();
+    data.insert_column("x", extract_column(df, "x"));
+
+    let formula = Formula::new()
+        .with_terms("mu", vec![Term::Intercept])
+        .with_terms(
+            "sigma",
+            vec![
+                Term::Intercept,
+                Term::Smooth(Smooth::PSpline1D {
+                    col_name: "x".to_string(),
+                    n_splines: 20,
+                    degree: 3,
+                    penalty_order: 2,
+                }),
+            ],
+        );
+
+    match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
+        Ok(model) => {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+            let mut coefficients = HashMap::new();
+            coefficients.insert("mu".to_string(), model.models["mu"].coefficients.0.to_vec());
+            coefficients.insert(
+                "log_sigma_smooth".to_string(),
+                model.models["sigma"].coefficients.0.to_vec(),
+            );
+
+            let mut edf = HashMap::new();
+            edf.insert("mu".to_string(), model.models["mu"].edf);
+            edf.insert("sigma".to_string(), model.models["sigma"].edf);
+
+            FitResult {
+                converged: model.converged(),
+                iterations: model.diagnostics.iterations,
+                fit_time_ms: elapsed,
+                coefficients,
+                fitted_mu: model.models["mu"].fitted_values.to_vec(),
+                fitted_sigma: model.models["sigma"].fitted_values.to_vec(),
+                edf,
+                log_likelihood: None,
+                aic: None,
+                error: None,
+            }
+        }
+        Err(e) => error_result(start, e),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -817,6 +873,7 @@ fn main() {
         "gaussian_multiple" => fit_gaussian_multiple(&df),
         "gaussian_large" => fit_gaussian_large(&df),
         "gaussian_quadratic" => fit_gaussian_quadratic(&df),
+        "gaussian_sigma_smooth" => fit_gaussian_sigma_smooth(&df),
         "poisson_linear" => fit_poisson_linear(&df),
         "poisson_smooth" => fit_poisson_smooth(&df),
         "gamma_linear" => fit_gamma_linear(&df),

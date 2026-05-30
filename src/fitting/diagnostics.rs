@@ -170,6 +170,7 @@ mod tests {
             eta: array![0.0],
             fitted_values: array![0.0],
             edf,
+            term_edf: vec![edf],
         }
     }
 
