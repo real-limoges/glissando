@@ -32,6 +32,19 @@ impl Term {
 /// Smooth term specification for nonlinear effects and random intercepts.
 ///
 /// Smooth terms enable flexible, data-driven modeling through penalized basis expansions.
+///
+/// # Smooths on scale/shape parameters
+///
+/// A `Smooth` is valid on any distribution parameter, not just the location
+/// (`mu`) — e.g. a `PSpline1D` on `sigma` to model nonlinear heteroskedasticity.
+/// The default REML smoothing-parameter selection recovers these scale/shape
+/// curves (see `tests/scale_smooth_recovery.rs`). If a smooth carries little
+/// signal its penalty can drive it down to a straight line (its penalty null
+/// space); when that happens the fit records a message in
+/// [`FitDiagnostics::warnings`](crate::FitDiagnostics) and you can inspect
+/// [`FittedParameter::term_edf`](crate::fitting::FittedParameter) — a per-term
+/// effective-degrees-of-freedom near the term's null-space dimension means the
+/// curve collapsed and a `Linear` term would be the honest description.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Smooth {

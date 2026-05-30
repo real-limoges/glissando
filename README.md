@@ -15,12 +15,21 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 
 ## Installation
 
-Add to your `Cargo.toml`:
+The friendliest first build uses the **pure-Rust** backend — no system libraries, works on a clean machine and in WASM:
 
 ```toml
 [dependencies]
-glissando = { git = "https://github.com/real-limoges/glissando" }
+glissando = { git = "https://github.com/real-limoges/glissando", default-features = false, features = ["pure-rust", "serialization"] }
 ```
+
+For maximum performance, opt into the OpenBLAS backend instead (this is the default feature set, but it links a system OpenBLAS — see [Requirements](#requirements)):
+
+```toml
+[dependencies]
+glissando = { git = "https://github.com/real-limoges/glissando" }  # default = openblas + parallel
+```
+
+`openblas` and `pure-rust` are mutually exclusive — pick one backend.
 
 ### Feature Flags
 
@@ -77,6 +86,11 @@ println!("Converged: {}", model.converged());
 let mu_coeffs = &model.models["mu"].coefficients;
 println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 ```
+
+> **ndarray version.** The public API hands back `ndarray` types (`Array1<f64>`,
+> `Array2<f64>`), so you must build against the same `ndarray` major (currently
+> **0.17**). To avoid guessing, use the re-export: `glissando::ndarray::Array1`
+> resolves to exactly the version this crate is built against.
 
 ## Distributions
 
@@ -440,6 +454,49 @@ match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
 | `Shape` | Array shape mismatch |
 | `Internal` | Internal logic error (indicates a bug) |
 
+## Embedding glissando behind your own FFI
+
+glissando ships three faces — the typed Rust API, the WASM bindings, and the
+Python extension. If you are embedding the crate behind a *different* boundary
+(a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON
+service), you do not need to re-implement the wire format: the `glissando::json`
+module (enabled by the `serialization` feature) is the same tested JSON
+marshalling the WASM bindings use, exposed for any embedder.
+
+```rust
+use glissando::json;
+
+// Strings in, model + boxed distribution out — keep the model in memory and
+// predict interactively (no per-call re-fit).
+let y       = "[1.2, 2.1, 2.9, 4.2, 4.8]";
+let data    = r#"{"x": [1.0, 2.0, 3.0, 4.0, 5.0]}"#;
+let formula = r#"{
+    "mu":    [{"Intercept": null}, {"Linear": {"col_name": "x"}}],
+    "sigma": [{"Intercept": null}]
+}"#;
+
+let (model, family) = json::fit(y, data, formula, "Gaussian", None)?;
+
+// Strings out: predictions, SEs, posterior samples, and fit diagnostics.
+let preds       = json::predict(&model, family.as_ref(), r#"{"x": [6.0, 7.0]}"#)?;
+let with_se     = json::predict_with_se(&model, family.as_ref(), r#"{"x": [6.0]}"#)?;
+let samples     = json::predict_samples(&model, family.as_ref(), r#"{"x": [6.0]}"#, 500)?;
+let diagnostics = json::diagnostics(&model)?;   // converged, per-param + per-term EDF, warnings
+
+// Persist and reload (round-trips the distribution name too).
+let blob = model.to_json(family.as_ref())?;
+let (restored, family) = json::load(&blob)?;
+# Ok::<(), glissando::GamlssError>(())
+```
+
+If you need typed dispatch instead of the string facade,
+`glissando::distributions::from_name("Gaussian") -> Box<dyn Distribution>`
+resolves any stateless family by name (every distribution except `Binomial`,
+which needs `n_trials` state — construct that one through the typed API). The
+`json` parsing/serialization helpers (`parse_data`, `parse_formula`,
+`serialize_predictions`, …) are also public if you want to mix glissando's wire
+format with your own fitting flow.
+
 ## Serialization & WASM
 
 Models can be serialized to JSON for transfer to browsers or other systems. Enable with the `serialization` feature:
@@ -602,7 +659,7 @@ The library includes several optimizations for large datasets:
 
 ## Benchmark (Comparison with R)
 
-The `benchmark/` directory contains a comparison framework that validates glissando against R's mgcv and gamlss packages across 15 scenarios (linear, smooth, heteroskedastic) and all supported distributions.
+The `benchmark/` directory contains a comparison framework that validates glissando against R's mgcv and gamlss packages across 16 scenarios (linear, smooth, heteroskedastic, and a scale smooth via mgcv `gaulss`) and all supported distributions.
 
 ### Quick Start
 
