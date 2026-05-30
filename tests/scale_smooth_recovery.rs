@@ -178,7 +178,11 @@ fn recovered_curve_does_not_warn() {
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
     let y_vals: Vec<f64> = x_vals
         .iter()
-        .map(|&x| Normal::new(5.0, true_log_sigma(x).exp()).unwrap().sample(&mut rng))
+        .map(|&x| {
+            Normal::new(5.0, true_log_sigma(x).exp())
+                .unwrap()
+                .sample(&mut rng)
+        })
         .collect();
     let y = Array1::from_vec(y_vals);
     let mut data = DataSet::new();
