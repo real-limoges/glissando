@@ -55,8 +55,13 @@ fn default_fit_config_uses_reml() {
 
 #[test]
 fn reml_fits_gaussian_pspline_end_to_end() {
-    let mut rng = Generator::new(42);
-    let (y, data) = rng.linear_gaussian(120, 1.0, 5.0, 1.0);
+    // Sinusoidal (not linear) truth: the smooth is genuinely identified, so REML
+    // settles on an interior λ and EDF lands in (1, p). Linear-trend data lives in
+    // the order-2 penalty's null space, leaving the REML objective flat in λ — the
+    // smoothing parameter is then unidentified and the outer loop's convergence
+    // becomes BLAS-dependent. (The intended null-space behaviour is covered by
+    // `reml_correctly_smooths_linear_trend_to_null_space`.)
+    let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
         .with_terms("mu", vec![Term::Intercept, pspline("x", 10)])
