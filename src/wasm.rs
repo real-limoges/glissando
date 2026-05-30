@@ -1,36 +1,18 @@
 //! WebAssembly bindings via wasm-bindgen for browser-based GAMLSS fitting and prediction.
 //!
 //! Provides [`WasmGamlssModel`] with JSON-based I/O for use from JavaScript.
-//! Feature-gated behind the `wasm` feature flag.
+//! Feature-gated behind the `wasm` feature flag. This is a thin marshalling
+//! shim over [`crate::json`]; the wire formats and distribution dispatch are
+//! documented there.
 
-use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
-use crate::ffi::FamilyType;
-use crate::fitting::FitConfig;
-use crate::types::{DataSet, Formula};
+use crate::distributions::Distribution;
+use crate::json;
 use crate::GamlssModel;
-use ndarray::Array1;
 
 fn to_js_err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
-}
-
-/// Expects a JSON array of numbers, e.g. `[1.0, 2.0, 3.0]`.
-fn parse_y_json(json: &str) -> Result<Array1<f64>, JsError> {
-    let values: Vec<f64> = serde_json::from_str(json).map_err(to_js_err)?;
-    Ok(Array1::from_vec(values))
-}
-
-/// Expects `{"col_name": [1.0, 2.0, ...], ...}`.
-fn parse_data_json(json: &str) -> Result<DataSet, JsError> {
-    let raw: HashMap<String, Vec<f64>> = serde_json::from_str(json).map_err(to_js_err)?;
-    DataSet::from_vecs(raw).map_err(to_js_err)
-}
-
-/// Expects `{"mu": [{"Intercept": null}, ...], "sigma": [...]}`.
-fn parse_formula_json(json: &str) -> Result<Formula, JsError> {
-    serde_json::from_str(json).map_err(to_js_err)
 }
 
 /// WASM wrapper for GAMLSS models.
@@ -40,7 +22,7 @@ fn parse_formula_json(json: &str) -> Result<Formula, JsError> {
 #[wasm_bindgen]
 pub struct WasmGamlssModel {
     model: GamlssModel,
-    family: FamilyType,
+    family: Box<dyn Distribution>,
 }
 
 #[wasm_bindgen]
@@ -58,14 +40,8 @@ impl WasmGamlssModel {
         formula_json: &str,
         distribution: &str,
     ) -> Result<WasmGamlssModel, JsError> {
-        let y = parse_y_json(y_json)?;
-        let data = parse_data_json(data_json)?;
-        let formula = parse_formula_json(formula_json)?;
-        let family = FamilyType::from_name(distribution).map_err(to_js_err)?;
-
-        let model =
-            GamlssModel::fit(&data, &y, &formula, family.as_distribution()).map_err(to_js_err)?;
-
+        let (model, family) =
+            json::fit(y_json, data_json, formula_json, distribution, None).map_err(to_js_err)?;
         Ok(WasmGamlssModel { model, family })
     }
 
@@ -82,70 +58,36 @@ impl WasmGamlssModel {
         distribution: &str,
         config_json: &str,
     ) -> Result<WasmGamlssModel, JsError> {
-        let y = parse_y_json(y_json)?;
-        let data = parse_data_json(data_json)?;
-        let formula = parse_formula_json(formula_json)?;
-        let family = FamilyType::from_name(distribution).map_err(to_js_err)?;
-        let config: FitConfig = serde_json::from_str(config_json).map_err(to_js_err)?;
-
-        let model =
-            GamlssModel::fit_with_config(&data, &y, &formula, family.as_distribution(), config)
-                .map_err(to_js_err)?;
-
+        let (model, family) = json::fit(
+            y_json,
+            data_json,
+            formula_json,
+            distribution,
+            Some(config_json),
+        )
+        .map_err(to_js_err)?;
         Ok(WasmGamlssModel { model, family })
     }
 
     #[wasm_bindgen(js_name = "fromJson")]
     pub fn from_json(json: &str) -> Result<WasmGamlssModel, JsError> {
-        let (model, distribution_name) = GamlssModel::from_json(json).map_err(to_js_err)?;
-        let family = FamilyType::from_name(&distribution_name).map_err(to_js_err)?;
+        let (model, family) = json::load(json).map_err(to_js_err)?;
         Ok(WasmGamlssModel { model, family })
     }
 
     #[wasm_bindgen(js_name = "toJson")]
     pub fn to_json(&self) -> Result<String, JsError> {
-        self.model
-            .to_json(self.family.as_distribution())
-            .map_err(to_js_err)
+        self.model.to_json(self.family.as_ref()).map_err(to_js_err)
     }
 
     /// Input/output are JSON: `{"col": [values]}` → `{"param": [predictions]}`.
     pub fn predict(&self, data_json: &str) -> Result<String, JsError> {
-        let new_data = parse_data_json(data_json)?;
-        let predictions = self
-            .model
-            .predict(&new_data, self.family.as_distribution())
-            .map_err(to_js_err)?;
-
-        let result: HashMap<String, Vec<f64>> = predictions
-            .into_iter()
-            .map(|(k, v)| (k, v.to_vec()))
-            .collect();
-        serde_json::to_string(&result).map_err(to_js_err)
+        json::predict(&self.model, self.family.as_ref(), data_json).map_err(to_js_err)
     }
 
     #[wasm_bindgen(js_name = "predictWithSe")]
     pub fn predict_with_se(&self, data_json: &str) -> Result<String, JsError> {
-        let new_data = parse_data_json(data_json)?;
-        let results = self
-            .model
-            .predict_with_se(&new_data, self.family.as_distribution())
-            .map_err(to_js_err)?;
-
-        let output: HashMap<String, PredictionWithSe> = results
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    k,
-                    PredictionWithSe {
-                        fitted: v.fitted.to_vec(),
-                        eta: v.eta.to_vec(),
-                        se_eta: v.se_eta.to_vec(),
-                    },
-                )
-            })
-            .collect();
-        serde_json::to_string(&output).map_err(to_js_err)
+        json::predict_with_se(&self.model, self.family.as_ref(), data_json).map_err(to_js_err)
     }
 
     pub fn converged(&self) -> bool {
@@ -181,28 +123,12 @@ impl WasmGamlssModel {
     /// where each inner array is one sample's predictions across all observations.
     #[wasm_bindgen(js_name = "predictSamples")]
     pub fn predict_samples(&self, data_json: &str, n_samples: usize) -> Result<String, JsError> {
-        let new_data = parse_data_json(data_json)?;
-        let results = self
-            .model
-            .predict_samples(&new_data, self.family.as_distribution(), n_samples)
-            .map_err(to_js_err)?;
-
-        let output: HashMap<String, Vec<Vec<f64>>> = results
-            .into_iter()
-            .map(|(k, samples)| (k, samples.into_iter().map(|s| s.to_vec()).collect()))
-            .collect();
-        serde_json::to_string(&output).map_err(to_js_err)
+        json::predict_samples(&self.model, self.family.as_ref(), data_json, n_samples)
+            .map_err(to_js_err)
     }
 
     #[wasm_bindgen(js_name = "diagnosticsJson")]
     pub fn diagnostics_json(&self) -> Result<String, JsError> {
-        serde_json::to_string(&self.model.diagnostics).map_err(to_js_err)
+        json::diagnostics(&self.model).map_err(to_js_err)
     }
-}
-
-#[derive(serde::Serialize)]
-struct PredictionWithSe {
-    fitted: Vec<f64>,
-    eta: Vec<f64>,
-    se_eta: Vec<f64>,
 }

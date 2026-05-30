@@ -31,6 +31,12 @@ use rand_distr::{Distribution as _, StandardNormal};
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
 
+/// How close a smooth term's EDF must sit to its penalty null-space dimension
+/// before the fit flags it as collapsed. Half an effective degree of freedom of
+/// slack keeps a genuinely (near-)linear fit from tripping the warning while
+/// still catching a smooth that has been fully penalized away.
+const EDF_COLLAPSE_SLACK: f64 = 0.5;
+
 /// Smoothing-parameter selection criterion.
 ///
 /// `Reml` (the default) minimizes the Laplace-approximate marginal likelihood
@@ -90,6 +96,11 @@ pub struct FitDiagnostics {
     pub max_gradient: Option<f64>,
     /// Per-parameter diagnostic information, ordered by `family.parameters()`.
     pub param_diagnostics: IndexMap<String, ParamDiagnostic>,
+    /// Non-fatal fit-quality warnings (e.g. a smooth term that collapsed onto
+    /// its penalty null space). Empty on a clean fit. Serialized with the model
+    /// so JSON/FFI consumers can surface fit health.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub warnings: Vec<String>,
 }
 
 /// Diagnostic information for a single distribution parameter.
@@ -131,10 +142,18 @@ pub struct FittedParameter {
     pub fitted_values: Array1<f64>,
     /// Effective degrees of freedom.
     pub edf: f64,
+    /// Effective degrees of freedom attributed to each term, aligned with
+    /// `terms`. Sums to `edf`. A smooth term whose entry sits at its penalty
+    /// null-space dimension has been driven (near-)linear by its penalty —
+    /// see `FitDiagnostics::warnings`.
+    pub term_edf: Vec<f64>,
 }
 
 pub(super) struct FittingParameter {
     pub(super) terms: Vec<Term>,
+    /// Per-term layout (coefficient counts + penalty null-space dims), aligned
+    /// with `terms`. Used to attribute EDF per term and detect null-space collapse.
+    pub(super) term_layouts: Vec<assembler::TermLayout>,
     pub(super) link: Box<dyn Link>,
     pub(super) x_matrix: ModelMatrix,
     pub(super) penalty_matrices: Vec<PenaltyMatrix>,
@@ -148,6 +167,8 @@ pub(super) struct FittingParameter {
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
     pub(super) edf: f64,
+    /// Latest per-term EDF (aligned with `terms`); updated each RS cycle.
+    pub(super) term_edf: Vec<f64>,
 }
 
 /// Fits a GAMLSS model using the RS (Rigby-Stasinopoulos) algorithm.
@@ -175,7 +196,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         })?;
         let link = family.default_link(param_name)?;
 
-        let (x_model, penalty_matrices, total_coeffs) =
+        let (x_model, penalty_matrices, total_coeffs, term_layouts) =
             assemble_model_matrices(data, n_obs, terms)?;
 
         // Initialize on response scale using distribution-specific logic
@@ -198,10 +219,12 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let mu = eta.mapv(|e| link.inv_link(e));
         let lambdas = Array1::<f64>::ones(penalty_matrices.len());
 
+        let n_terms = term_layouts.len();
         models.insert(
             param_name_str,
             FittingParameter {
                 terms: terms.clone(),
+                term_layouts,
                 link,
                 x_matrix: x_model,
                 penalty_matrices,
@@ -211,6 +234,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 lambdas,
                 covariance: None,
                 edf: 0.0,
+                term_edf: vec![0.0; n_terms],
             },
         );
     }
@@ -249,6 +273,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             model.lambdas = update.lambdas;
             model.covariance = Some(update.covariance);
             model.edf = update.edf;
+            model.term_edf = update.term_edf;
         }
 
         final_iteration = cycle + 1;
@@ -261,6 +286,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     }
 
     let mut final_results: IndexMap<String, FittedParameter> = IndexMap::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     for (name, model) in models {
         let covariance = model.covariance.ok_or_else(|| {
@@ -269,6 +295,22 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 name
             ))
         })?;
+
+        // Flag any smooth term whose EDF has decayed to its penalty null-space
+        // dimension: the penalty has driven the smooth down to its unpenalized
+        // polynomial remainder (e.g. a straight line for an order-2 P-spline),
+        // so the curve it was meant to capture is effectively gone.
+        for (layout, &t_edf) in model.term_layouts.iter().zip(model.term_edf.iter()) {
+            if layout.is_smooth && t_edf <= layout.null_dim as f64 + EDF_COLLAPSE_SLACK {
+                warnings.push(format!(
+                    "parameter '{name}': a smooth term collapsed onto its penalty null space \
+                     (edf {t_edf:.2} ≈ null-space dimension {nd}); it is effectively the \
+                     unpenalized polynomial remainder, not a curve. The smoothing parameter may \
+                     be over-selected, or the data carries little signal for this term.",
+                    nd = layout.null_dim,
+                ));
+            }
+        }
 
         let fitted_param = FittedParameter {
             coefficients: model.beta,
@@ -279,6 +321,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
             fitted_values: model.mu,
             edf: model.edf,
+            term_edf: model.term_edf,
         };
         final_results.insert(name, fitted_param);
     }
@@ -289,6 +332,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         final_change,
         max_gradient: None,
         param_diagnostics,
+        warnings,
     };
 
     Ok((final_results, diagnostics))
