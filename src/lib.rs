@@ -26,9 +26,11 @@
 
 pub mod distributions;
 mod error;
-#[cfg(any(feature = "python", feature = "wasm"))]
+#[cfg(feature = "python")]
 mod ffi;
 pub mod fitting;
+#[cfg(feature = "serialization")]
+pub mod json;
 mod linalg;
 mod math;
 pub mod preprocessing;
@@ -39,6 +41,12 @@ mod terms;
 mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
+
+/// Re-export of the exact `ndarray` major this crate is built against. Construct
+/// or consume `Array1`/`Array2` through `glissando::ndarray::…` so the types
+/// unify with this crate's public API (`predict`, `predict_with_se`) without
+/// pinning a matching `ndarray` version yourself.
+pub use ndarray;
 
 pub use error::GamlssError;
 pub use fitting::diagnostics::{self, ModelDiagnostics};
@@ -147,7 +155,12 @@ impl GamlssModel {
     /// Predict fitted values for new data.
     ///
     /// Returns a HashMap with parameter names as keys and fitted values (on response scale)
-    /// as values. The distribution is needed to obtain the appropriate link functions.
+    /// as values — the `Array1<f64>` *is* the prediction, with no wrapper. The
+    /// distribution is needed to obtain the appropriate link functions.
+    ///
+    /// For standard errors and the linear-predictor scale, use
+    /// [`predict_with_se`](Self::predict_with_se), which returns a
+    /// [`PredictionResult`] per parameter instead of a bare array.
     ///
     /// # Examples
     ///
@@ -191,7 +204,7 @@ impl GamlssModel {
         let mut predictions = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
             let link = family.default_link(param_name)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
@@ -204,9 +217,14 @@ impl GamlssModel {
 
     /// Predict fitted values with standard errors for new data.
     ///
-    /// Returns predictions on the linear predictor (eta) scale along with standard errors.
-    /// Standard errors are computed via: se = sqrt(diag(X * V * X'))
-    /// where V is the covariance matrix of the coefficients.
+    /// Returns one [`PredictionResult`] per parameter — `{ fitted, eta, se_eta }`,
+    /// so the fitted values live at `result["mu"].fitted` (not the map value
+    /// directly, as with [`predict`](Self::predict)). Standard errors are
+    /// computed via `se = sqrt(diag(X * V * X'))` where V is the covariance
+    /// matrix of the coefficients.
+    ///
+    /// If you only need fitted values, [`predict`](Self::predict) returns the
+    /// `Array1<f64>` directly and skips the SE computation.
     ///
     /// # Errors
     ///
@@ -222,7 +240,7 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
 
             let v = &fitted_param.covariance.0;
@@ -323,7 +341,7 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
 
             let beta_samples = fitting::sample_posterior(
                 &fitted_param.coefficients,
