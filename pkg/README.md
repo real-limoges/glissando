@@ -659,7 +659,7 @@ The library includes several optimizations for large datasets:
 
 ## Benchmark (Comparison with R)
 
-The `benchmark/` directory contains a comparison framework that validates glissando against R's mgcv and gamlss packages across 15 scenarios (linear, smooth, heteroskedastic) and all supported distributions.
+The `benchmark/` directory contains a comparison framework that validates glissando against R's mgcv and gamlss packages across 16 scenarios (linear, smooth, heteroskedastic, and a scale smooth via mgcv `gaulss`) and all supported distributions.
 
 ### Quick Start
 

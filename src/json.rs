@@ -54,7 +54,7 @@
 //! # }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ndarray::Array1;
 
@@ -129,7 +129,10 @@ pub fn parse_config(json: &str) -> Result<FitConfig, GamlssError> {
 pub fn serialize_predictions(
     predictions: &HashMap<String, Array1<f64>>,
 ) -> Result<String, GamlssError> {
-    let result: HashMap<&str, Vec<f64>> = predictions
+    // BTreeMap so the emitted key order is deterministic (sorted) rather than
+    // HashMap's per-call random order — embedders get stable output and two
+    // predict calls compare equal byte-for-byte.
+    let result: BTreeMap<&str, Vec<f64>> = predictions
         .iter()
         .map(|(k, v)| (k.as_str(), v.to_vec()))
         .collect();
@@ -144,7 +147,7 @@ pub fn serialize_predictions(
 pub fn serialize_predictions_with_se(
     predictions: &HashMap<String, PredictionResult>,
 ) -> Result<String, GamlssError> {
-    let output: HashMap<&str, PredictionWithSe> = predictions
+    let output: BTreeMap<&str, PredictionWithSe> = predictions
         .iter()
         .map(|(k, v)| {
             (
@@ -168,7 +171,7 @@ pub fn serialize_predictions_with_se(
 pub fn serialize_samples(
     samples: &HashMap<String, Vec<Array1<f64>>>,
 ) -> Result<String, GamlssError> {
-    let output: HashMap<&str, Vec<Vec<f64>>> = samples
+    let output: BTreeMap<&str, Vec<Vec<f64>>> = samples
         .iter()
         .map(|(k, runs)| (k.as_str(), runs.iter().map(|s| s.to_vec()).collect()))
         .collect();
