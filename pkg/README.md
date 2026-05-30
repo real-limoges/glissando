@@ -8,26 +8,35 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 
 - **Multiple distribution parameters**: Model mean, variance, and shape parameters simultaneously
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
-- **Automatic smoothing**: Smoothing parameters selected via GCV optimization
-- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via faer (no system deps)
+- **Automatic smoothing**: Smoothing parameters selected via REML (default), GCV, or Fellner-Schall
+- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via nalgebra (no system deps)
 - **WASM support**: Fit models and predict directly in the browser via wasm-bindgen
 - **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse
 
 ## Installation
 
-Add to your `Cargo.toml`:
+The friendliest first build uses the **pure-Rust** backend — no system libraries, works on a clean machine and in WASM:
 
 ```toml
 [dependencies]
-glissando = { git = "https://github.com/real-limoges/glissando" }
+glissando = { git = "https://github.com/real-limoges/glissando", default-features = false, features = ["pure-rust", "serialization"] }
 ```
+
+For maximum performance, opt into the OpenBLAS backend instead (this is the default feature set, but it links a system OpenBLAS — see [Requirements](#requirements)):
+
+```toml
+[dependencies]
+glissando = { git = "https://github.com/real-limoges/glissando" }  # default = openblas + parallel
+```
+
+`openblas` and `pure-rust` are mutually exclusive — pick one backend.
 
 ### Feature Flags
 
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `openblas` | OpenBLAS backend (ndarray-linalg) — max performance | yes |
-| `pure-rust` | Faer backend — no system dependencies, WASM-compatible | no |
+| `pure-rust` | nalgebra backend — no system dependencies, WASM-compatible | no |
 | `serialization` | Serde support for model serialization | no |
 | `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`, no parallelism) | no |
 | `python` | PyO3 bindings for Python integration (implies `openblas` + `parallel` + `serialization`) | no |
@@ -77,6 +86,11 @@ println!("Converged: {}", model.converged());
 let mu_coeffs = &model.models["mu"].coefficients;
 println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 ```
+
+> **ndarray version.** The public API hands back `ndarray` types (`Array1<f64>`,
+> `Array2<f64>`), so you must build against the same `ndarray` major (currently
+> **0.17**). To avoid guessing, use the re-export: `glissando::ndarray::Array1`
+> resolves to exactly the version this crate is built against.
 
 ## Distributions
 
@@ -164,17 +178,24 @@ Term::Smooth(Smooth::RandomEffect {
 ## Configuration
 
 ```rust
-use glissando::FitConfig;
+use glissando::{FitConfig, SmoothingCriterion};
 
 let config = FitConfig {
-    max_iterations: 100,
-    tolerance: 1e-4,
+    max_iterations: 200,
+    tolerance: 1e-3,
+    criterion: SmoothingCriterion::Reml,  // also: Gcv, FellnerSchall
 };
 
 let model = GamlssModel::fit_with_config(
     &data, &y, &formula, &Gaussian::new(), config
 )?;
 ```
+
+`SmoothingCriterion` selects the smoothing-parameter optimizer:
+
+- `Reml` (default) — Laplace-approximate marginal likelihood (Wood 2011), optimized via L-BFGS
+- `Gcv` — Generalized Cross-Validation (Craven & Wahba 1979), optimized via L-BFGS
+- `FellnerSchall` — multiplicative fixed-point update for the LAML target (Wood & Fasiolo 2017); deterministic, no line search
 
 ## Accessing Results
 
@@ -433,6 +454,49 @@ match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
 | `Shape` | Array shape mismatch |
 | `Internal` | Internal logic error (indicates a bug) |
 
+## Embedding glissando behind your own FFI
+
+glissando ships three faces — the typed Rust API, the WASM bindings, and the
+Python extension. If you are embedding the crate behind a *different* boundary
+(a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON
+service), you do not need to re-implement the wire format: the `glissando::json`
+module (enabled by the `serialization` feature) is the same tested JSON
+marshalling the WASM bindings use, exposed for any embedder.
+
+```rust
+use glissando::json;
+
+// Strings in, model + boxed distribution out — keep the model in memory and
+// predict interactively (no per-call re-fit).
+let y       = "[1.2, 2.1, 2.9, 4.2, 4.8]";
+let data    = r#"{"x": [1.0, 2.0, 3.0, 4.0, 5.0]}"#;
+let formula = r#"{
+    "mu":    [{"Intercept": null}, {"Linear": {"col_name": "x"}}],
+    "sigma": [{"Intercept": null}]
+}"#;
+
+let (model, family) = json::fit(y, data, formula, "Gaussian", None)?;
+
+// Strings out: predictions, SEs, posterior samples, and fit diagnostics.
+let preds       = json::predict(&model, family.as_ref(), r#"{"x": [6.0, 7.0]}"#)?;
+let with_se     = json::predict_with_se(&model, family.as_ref(), r#"{"x": [6.0]}"#)?;
+let samples     = json::predict_samples(&model, family.as_ref(), r#"{"x": [6.0]}"#, 500)?;
+let diagnostics = json::diagnostics(&model)?;   // converged, per-param + per-term EDF, warnings
+
+// Persist and reload (round-trips the distribution name too).
+let blob = model.to_json(family.as_ref())?;
+let (restored, family) = json::load(&blob)?;
+# Ok::<(), glissando::GamlssError>(())
+```
+
+If you need typed dispatch instead of the string facade,
+`glissando::distributions::from_name("Gaussian") -> Box<dyn Distribution>`
+resolves any stateless family by name (every distribution except `Binomial`,
+which needs `n_trials` state — construct that one through the typed API). The
+`json` parsing/serialization helpers (`parse_data`, `parse_formula`,
+`serialize_predictions`, …) are also public if you want to mix glissando's wire
+format with your own fitting flow.
+
 ## Serialization & WASM
 
 Models can be serialized to JSON for transfer to browsers or other systems. Enable with the `serialization` feature:
@@ -474,7 +538,8 @@ const model = WasmGamlssModel.fit(y, data, formula, "Gaussian");
 console.log("Converged:", model.converged());
 
 // With custom configuration
-const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001 });
+// criterion: "reml" (default), "gcv", or "fellner_schall"
+const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001, criterion: "reml" });
 const model2 = WasmGamlssModel.fitWithConfig(y, data, formula, "Gaussian", config);
 ```
 
@@ -525,7 +590,8 @@ formula = {
 # Fit (with optional config dict)
 model = GamlssModel.fit(data, y, formula, Gaussian())
 model_cfg = GamlssModel.fit_with_config(
-    data, y, formula, Gaussian(), {"max_iterations": 300, "tolerance": 1e-4}
+    data, y, formula, Gaussian(),
+    {"max_iterations": 300, "tolerance": 1e-4, "criterion": "reml"},  # also: "gcv", "fellner_schall"
 )
 
 # Point predictions (response scale) for new data
@@ -579,7 +645,7 @@ GAMLSS fitting uses a penalized quasi-likelihood approach (Rigby-Stasinopoulos a
 1. **Initialization**: Set starting values for all distribution parameters
 2. **Outer loop**: Cycle through distribution parameters
 3. **Inner loop**: For each parameter, compute working response and weights from derivatives, then fit a penalized weighted least squares model
-4. **Smoothing selection**: Optimize smoothing parameters via GCV using L-BFGS
+4. **Smoothing selection**: Optimize smoothing parameters via REML (default), GCV, or Fellner-Schall — selectable through `FitConfig::criterion`
 5. **Convergence**: Check if coefficient changes are below tolerance
 
 ## Performance

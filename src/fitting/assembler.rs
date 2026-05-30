@@ -19,6 +19,59 @@ fn get_col<'a>(data: &'a DataSet, name: &str) -> Result<&'a Array1<f64>, GamlssE
     })
 }
 
+/// Per-term layout metadata produced alongside the design matrix: how many
+/// coefficient columns the term occupies and, for penalized smooths, the
+/// dimension of its penalty null space — the EDF floor the term decays to as
+/// `λ → ∞`. This lets the fitter attribute effective degrees of freedom back to
+/// individual terms and flag a smooth that has collapsed onto its null space
+/// (e.g. an over-penalized smooth that has degenerated to a straight line).
+#[derive(Debug, Clone)]
+pub(crate) struct TermLayout {
+    /// Number of coefficient columns this term contributes to the design matrix.
+    pub(crate) n_coeffs: usize,
+    /// Dimension of the term's penalty null space (0 for unpenalized terms).
+    pub(crate) null_dim: usize,
+    /// Whether this term is a penalized smooth.
+    pub(crate) is_smooth: bool,
+}
+
+/// Penalty null-space dimension for a smooth term, accounting for the
+/// sum-to-zero centering applied when an `Intercept` shares the parameter
+/// (centering removes the constant direction). This is the minimum EDF the term
+/// can reach under heavy penalization.
+fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
+    // A difference penalty of order `d` has a null space of polynomials of
+    // degree `< d`, dimension `d`; centering removes the constant (one
+    // direction) when the basis is actually reparameterized (`n_splines >= 2`).
+    let margin = |penalty_order: usize, n_splines: usize| -> usize {
+        let base = penalty_order.min(n_splines);
+        if centered && n_splines >= 2 {
+            base.saturating_sub(1)
+        } else {
+            base
+        }
+    };
+    match smooth {
+        Smooth::PSpline1D {
+            n_splines,
+            penalty_order,
+            ..
+        } => margin(*penalty_order, *n_splines),
+        Smooth::TensorProduct {
+            n_splines_1,
+            penalty_order_1,
+            n_splines_2,
+            penalty_order_2,
+            ..
+        } => {
+            // null(S₁⊗I + I⊗S₂) = null(S₁) ⊗ null(S₂); the dimensions multiply.
+            margin(*penalty_order_1, *n_splines_1) * margin(*penalty_order_2, *n_splines_2)
+        }
+        // Ridge penalty (identity) is full rank.
+        Smooth::RandomEffect { .. } => 0,
+    }
+}
+
 fn assemble_smooth(
     data: &DataSet,
     n_obs: usize,
@@ -149,7 +202,7 @@ pub(crate) fn assemble_model_matrices(
     data: &DataSet,
     n_obs: usize,
     terms: &[Term],
-) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize), GamlssError> {
+) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize, Vec<TermLayout>), GamlssError> {
     // Smooth bases on this codebase (P-spline, tensor-product, random-effect indicator)
     // are all partition-of-unity, so `1_n ∈ col(B)`. When an `Intercept` term is also
     // present the design matrix is rank-deficient. Apply a sum-to-zero
@@ -158,6 +211,7 @@ pub(crate) fn assemble_model_matrices(
 
     let mut model_matrix_parts = Vec::with_capacity(terms.len());
     let mut penalty_blocks: Vec<(usize, PenaltyMatrix)> = Vec::new();
+    let mut term_layouts = Vec::with_capacity(terms.len());
     let mut total_coeffs = 0;
 
     for term in terms {
@@ -165,18 +219,33 @@ pub(crate) fn assemble_model_matrices(
             Term::Intercept => {
                 let part = Array1::ones(n_obs).insert_axis(Axis(1));
                 model_matrix_parts.push(part);
+                term_layouts.push(TermLayout {
+                    n_coeffs: 1,
+                    null_dim: 0,
+                    is_smooth: false,
+                });
                 total_coeffs += 1;
             }
             Term::Linear { col_name } => {
                 let x_col_vec = get_col(data, col_name)?;
                 let part: Array2<f64> = x_col_vec.to_owned().insert_axis(Axis(1));
                 model_matrix_parts.push(part);
+                term_layouts.push(TermLayout {
+                    n_coeffs: 1,
+                    null_dim: 0,
+                    is_smooth: false,
+                });
                 total_coeffs += 1;
             }
             Term::Smooth(smooth) => {
                 let (basis, penalties) = assemble_smooth(data, n_obs, smooth, has_intercept)?;
                 let n_coeffs = basis.ncols();
                 model_matrix_parts.push(basis);
+                term_layouts.push(TermLayout {
+                    n_coeffs,
+                    null_dim: smooth_null_dim(smooth, has_intercept),
+                    is_smooth: true,
+                });
 
                 for penalty_block in penalties {
                     penalty_blocks.push((total_coeffs, penalty_block));
@@ -208,7 +277,7 @@ pub(crate) fn assemble_model_matrices(
         })
         .collect::<Vec<_>>();
 
-    Ok((x_model, penalty_matrices, total_coeffs))
+    Ok((x_model, penalty_matrices, total_coeffs, term_layouts))
 }
 
 #[cfg(test)]
@@ -232,7 +301,7 @@ mod tests {
             penalty_order: 2,
         });
 
-        let (mm, _, _) = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
+        let (mm, _, _, _) = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
         for row in mm.0.rows() {
             let row_sum: f64 = row.sum();
             assert!(

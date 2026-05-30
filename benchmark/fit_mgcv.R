@@ -4,9 +4,11 @@
 # can splice the two side-by-side under `glissando` / `mgcv` keys.
 #
 # Coverage: scenarios that mgcv handles natively (Gaussian, Poisson, Gamma,
-# Negative Binomial, Beta — all in either linear or P-spline form). Student-t
-# scenarios and the heteroskedastic Gaussian model (which would model `sigma`
-# as well) are skipped here; orchestrate.py marks them mgcv_capable=FALSE.
+# Negative Binomial, Beta — in linear or P-spline form), plus a Gaussian
+# location-scale smooth via `gaulss` (gaussian_sigma_smooth). All gam() fits use
+# method="REML" to match glissando's default smoothing criterion. Student-t
+# scenarios are skipped (they need `gamlss`); orchestrate.py marks them
+# mgcv_capable=FALSE.
 
 suppressPackageStartupMessages({
   library(arrow)
@@ -46,7 +48,7 @@ emit <- function(path, m, coefficients, edf, fit_time_ms,
 
 fit_gaussian_linear <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x, data = df, family = gaussian())
+  m <- gam(y ~ x, data = df, family = gaussian(), method = "REML")
   emit(
     output, m,
     coefficients = list(
@@ -60,7 +62,7 @@ fit_gaussian_linear <- function(df, output) {
 
 fit_gaussian_multiple <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x1 + x2 + x3, data = df, family = gaussian())
+  m <- gam(y ~ x1 + x2 + x3, data = df, family = gaussian(), method = "REML")
   emit(
     output, m,
     coefficients = list(
@@ -76,7 +78,7 @@ fit_gaussian_large <- fit_gaussian_linear  # same model, larger n
 
 fit_poisson_linear <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x, data = df, family = poisson(link = "log"))
+  m <- gam(y ~ x, data = df, family = poisson(link = "log"), method = "REML")
   emit(
     output, m,
     coefficients = list(log_mu = unname(coef(m))),
@@ -87,7 +89,7 @@ fit_poisson_linear <- function(df, output) {
 
 fit_gamma_linear <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x, data = df, family = Gamma(link = "log"))
+  m <- gam(y ~ x, data = df, family = Gamma(link = "log"), method = "REML")
   log_sigma <- 0.5 * log(summary(m)$dispersion)
   emit(
     output, m,
@@ -102,7 +104,7 @@ fit_gamma_linear <- function(df, output) {
 
 fit_negative_binomial_linear <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x, data = df, family = nb())
+  m <- gam(y ~ x, data = df, family = nb(), method = "REML")
   log_sigma <- log(1.0 / m$family$getTheta(TRUE))
   emit(
     output, m,
@@ -117,7 +119,7 @@ fit_negative_binomial_linear <- function(df, output) {
 
 fit_beta_linear <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ x, data = df, family = betar(link = "logit"))
+  m <- gam(y ~ x, data = df, family = betar(link = "logit"), method = "REML")
   log_phi <- log(m$family$getTheta(TRUE))
   emit(
     output, m,
@@ -137,7 +139,7 @@ fit_beta_linear <- function(df, output) {
 
 fit_gaussian_smooth <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = gaussian())
+  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = gaussian(), method = "REML")
   emit(
     output, m,
     coefficients = list(
@@ -153,7 +155,7 @@ fit_gaussian_quadratic <- fit_gaussian_smooth  # Rust uses the same smooth body
 
 fit_poisson_smooth <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = poisson(link = "log"))
+  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = poisson(link = "log"), method = "REML")
   emit(
     output, m,
     coefficients = list(log_mu = unname(coef(m))),
@@ -164,7 +166,7 @@ fit_poisson_smooth <- function(df, output) {
 
 fit_gamma_smooth <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = Gamma(link = "log"))
+  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = Gamma(link = "log"), method = "REML")
   log_sigma <- 0.5 * log(summary(m)$dispersion)
   emit(
     output, m,
@@ -179,7 +181,7 @@ fit_gamma_smooth <- function(df, output) {
 
 fit_negative_binomial_smooth <- function(df, output) {
   start <- Sys.time()
-  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = nb())
+  m <- gam(y ~ s(x, bs = "ps", k = 20), data = df, family = nb(), method = "REML")
   log_sigma <- log(1.0 / m$family$getTheta(TRUE))
   emit(
     output, m,
@@ -192,6 +194,44 @@ fit_negative_binomial_smooth <- function(df, output) {
   )
 }
 
+# ----- Scale-smooth fitter (gaulss) -----------------------------------------------
+
+# Gaussian location-scale with a P-spline on the scale. mgcv's `gaulss` family
+# takes a two-formula list (mean, then the scale predictor) and returns a
+# two-column `fitted` matrix: column 1 is the mean μ, column 2 is `1/σ` (the
+# precision-style parameter gaulss actually models). We invert that column to
+# recover σ on the same scale glissando reports (`fitted_values` for `sigma`).
+# NOTE: validate the gaulss parameterization on first run — `run_comparison.sh`
+# is the check; this fitter is exercised only when R + mgcv are present.
+fit_gaussian_sigma_smooth <- function(df, output) {
+  start <- Sys.time()
+  m <- gam(list(y ~ 1, ~ s(x, bs = "ps", k = 20)), data = df, family = gaulss())
+  fv <- fitted(m)
+  mu_hat <- fv[, 1]
+  sigma_hat <- 1 / fv[, 2]
+  # gaulss fits via outer optimization and leaves `m$converged` NULL; the
+  # convergence flag lives in `m$outer.info$conv` instead.
+  converged <- !is.null(m$outer.info) && grepl("full conv", m$outer.info$conv, ignore.case = TRUE)
+  result <- list(
+    converged    = isTRUE(converged),
+    iterations   = if (!is.null(m$outer.info$iter)) as.integer(m$outer.info$iter) else 0L,
+    fit_time_ms  = elapsed_ms(start),
+    # Smooth scenario: coefficients aren't compared (bases differ), so emit the
+    # mean intercept and the full coefficient vector for reference only.
+    coefficients = list(
+      mu               = list(unname(coef(m))[1]),
+      log_sigma_smooth = unname(coef(m))
+    ),
+    fitted_mu    = as.list(unname(mu_hat)),
+    fitted_sigma = as.list(unname(sigma_hat)),
+    edf          = list(mu = 1.0, sigma = sum(m$edf)),
+    log_likelihood = as.numeric(stats::logLik(m)),
+    aic          = AIC(m),
+    error        = NA
+  )
+  write_json(result, output, auto_unbox = TRUE, pretty = TRUE, na = "null")
+}
+
 # ----- Dispatch -------------------------------------------------------------------
 
 dispatch <- list(
@@ -200,6 +240,7 @@ dispatch <- list(
   gaussian_large            = fit_gaussian_large,
   gaussian_smooth           = fit_gaussian_smooth,
   gaussian_quadratic        = fit_gaussian_quadratic,
+  gaussian_sigma_smooth     = fit_gaussian_sigma_smooth,
   poisson_linear            = fit_poisson_linear,
   poisson_smooth            = fit_poisson_smooth,
   gamma_linear              = fit_gamma_linear,
