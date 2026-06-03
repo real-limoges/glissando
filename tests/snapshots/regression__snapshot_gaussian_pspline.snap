@@ -3,7 +3,7 @@ source: tests/regression.rs
 expression: snap
 ---
 converged: true
-iterations: 10
+iterations: 9
 coefficients:
   mu:
     - "6.9589e1"
@@ -13,7 +13,7 @@ coefficients:
     - "8.7174e1"
     - "1.0840e2"
   sigma:
-    - "3.8166e-1"
+    - "3.8241e-1"
 edf:
   mu: "6.0000e0"
   sigma: "1.0000e0"

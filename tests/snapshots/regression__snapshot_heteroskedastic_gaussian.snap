@@ -1,16 +1,17 @@
 ---
 source: tests/regression.rs
+assertion_line: 140
 expression: snap
 ---
 converged: true
-iterations: 7
+iterations: 6
 coefficients:
   mu:
     - "9.9101e0"
-    - "2.0715e0"
+    - "2.0714e0"
   sigma:
-    - "-1.1717e0"
-    - "5.4990e-1"
+    - "-1.1716e0"
+    - "5.4979e-1"
 edf:
   mu: "2.0000e0"
   sigma: "2.0000e0"

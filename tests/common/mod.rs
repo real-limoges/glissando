@@ -59,6 +59,17 @@ pub fn tensor(col1: &str, col2: &str, n1: usize, n2: usize) -> Term {
     })
 }
 
+/// Natural cubic regression spline (`bs="cr"`) on `col` with `k` knots.
+/// Leave `pc` as `None` for sum-to-zero centering (the typical case).
+pub fn cr_spline(col: &str, k: usize) -> Term {
+    Term::Smooth(Smooth::CrSpline1D {
+        col_name: col.to_string(),
+        k,
+        pc: None,
+        knots: vec![],
+    })
+}
+
 /// Formula with `Intercept` for every named parameter.
 pub fn intercept_only(params: &[&str]) -> Formula {
     let mut f = Formula::new();
