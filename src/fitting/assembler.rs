@@ -5,8 +5,9 @@
 
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
-    create_basis_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
-    sum_to_zero_basis,
+    apply_cr_pc_constraint, create_basis_matrix, create_cr_basis_matrix,
+    create_cr_penalty_matrix, create_penalty_matrix, cr_knots, kronecker_product,
+    row_kronecker_into, sum_to_zero_basis,
 };
 use crate::types::{DataSet, ModelMatrix};
 use ndarray::concatenate;
@@ -67,9 +68,57 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
             // null(S₁⊗I + I⊗S₂) = null(S₁) ⊗ null(S₂); the dimensions multiply.
             margin(*penalty_order_1, *n_splines_1) * margin(*penalty_order_2, *n_splines_2)
         }
+        // CR penalty null space = constants + linear = dim 2.
+        // When `pc` is set it replaces centering (one constraint → dim 1).
+        // When `centered` (sum-to-zero) it removes the constant → dim 1.
+        Smooth::CrSpline1D { k, pc, .. } => {
+            if *k < 2 {
+                0
+            } else if pc.is_some() || centered {
+                1
+            } else {
+                2
+            }
+        }
         // Ridge penalty (identity) is full rank.
         Smooth::RandomEffect { .. } => 0,
     }
+}
+
+/// Resolve `CrSpline1D` knots from training data once, returning an owned
+/// `Vec<Term>` with every term's knots filled in.
+///
+/// All other terms are cloned unchanged.  `CrSpline1D` terms with already-
+/// populated knots are also cloned unchanged — this is a no-op when the model
+/// is used for prediction (the stored terms already carry their knots).
+///
+/// This must be called before [`assemble_model_matrices`] so the resulting
+/// knots are embedded in `FittedParameter::terms` and replayed verbatim at
+/// predict time, guaranteeing that the fit and predict bases are identical.
+pub(crate) fn resolve_terms(
+    terms: &[Term],
+    data: &DataSet,
+) -> Result<Vec<Term>, GamlssError> {
+    terms
+        .iter()
+        .map(|term| match term {
+            Term::Smooth(Smooth::CrSpline1D {
+                col_name,
+                k,
+                pc,
+                knots,
+            }) if knots.is_empty() => {
+                let x = get_col(data, col_name)?;
+                Ok(Term::Smooth(Smooth::CrSpline1D {
+                    col_name: col_name.clone(),
+                    k: *k,
+                    pc: *pc,
+                    knots: cr_knots(x, *k),
+                }))
+            }
+            other => Ok(other.clone()),
+        })
+        .collect()
 }
 
 fn assemble_smooth(
@@ -91,6 +140,38 @@ fn assemble_smooth(
 
             if apply_constraint && *n_splines >= 2 {
                 let z = sum_to_zero_basis(*n_splines);
+                let basis_c = basis.dot(&z);
+                let penalty_c = z.t().dot(&penalty).dot(&z);
+                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+            } else {
+                Ok((basis, vec![PenaltyMatrix(penalty)]))
+            }
+        }
+
+        Smooth::CrSpline1D {
+            col_name,
+            k,
+            pc,
+            knots,
+        } => {
+            if knots.is_empty() {
+                return Err(GamlssError::Internal(format!(
+                    "CrSpline1D knots for '{}' are unresolved; \
+                     call resolve_terms before assemble_model_matrices",
+                    col_name
+                )));
+            }
+            let x_col = get_col(data, col_name)?;
+            let mut basis = create_cr_basis_matrix(x_col, knots);
+            let penalty = create_cr_penalty_matrix(knots);
+
+            if let Some(pc_val) = pc {
+                // pc replaces centering: pin f(pc_val) = 0, skip sum_to_zero.
+                apply_cr_pc_constraint(&mut basis, knots, *pc_val);
+                Ok((basis, vec![PenaltyMatrix(penalty)]))
+            } else if apply_constraint && *k >= 2 {
+                // Same sum-to-zero reparameterization as PSpline1D.
+                let z = sum_to_zero_basis(*k);
                 let basis_c = basis.dot(&z);
                 let penalty_c = z.t().dot(&penalty).dot(&z);
                 Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))

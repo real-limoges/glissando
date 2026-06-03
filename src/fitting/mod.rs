@@ -16,7 +16,7 @@ pub mod diagnostics;
 mod scoring;
 mod solver;
 
-use self::assembler::assemble_model_matrices;
+use self::assembler::{assemble_model_matrices, resolve_terms};
 
 use super::distributions::{Distribution, Link};
 use super::error::GamlssError;
@@ -64,13 +64,18 @@ pub enum SmoothingCriterion {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FitConfig {
     /// Maximum number of RS algorithm iterations (default: 200).
+    #[cfg_attr(feature = "serde", serde(default = "default_max_iter"))]
     pub max_iterations: usize,
-    /// Convergence tolerance for coefficient changes (default: 1e-3).
+    /// Convergence tolerance for relative coefficient changes (default: 1e-3).
+    #[cfg_attr(feature = "serde", serde(default = "default_tolerance"))]
     pub tolerance: f64,
     /// Smoothing-parameter selection criterion (default: REML).
     #[cfg_attr(feature = "serde", serde(default))]
     pub criterion: SmoothingCriterion,
 }
+
+fn default_max_iter() -> usize { DEFAULT_MAX_ITER }
+fn default_tolerance() -> f64  { DEFAULT_TOLERANCE }
 
 impl Default for FitConfig {
     fn default() -> Self {
@@ -191,13 +196,16 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 
     for param_name in family.parameters() {
         let param_name_str = param_name.to_string();
-        let terms = formula.get(&param_name_str).ok_or_else(|| {
+        let formula_terms = formula.get(&param_name_str).ok_or_else(|| {
             GamlssError::Input(format!("Formula missing for parameter {}", param_name))
         })?;
+        // Resolve CrSpline1D knots once from training data so they are stored in
+        // FittedParameter::terms and replayed verbatim at predict time.
+        let terms = resolve_terms(formula_terms, data)?;
         let link = family.default_link(param_name)?;
 
         let (x_model, penalty_matrices, total_coeffs, term_layouts) =
-            assemble_model_matrices(data, n_obs, terms)?;
+            assemble_model_matrices(data, n_obs, &terms)?;
 
         // Initialize on response scale using distribution-specific logic
         let response_scale_start = family.initial_value(param_name, y);
@@ -217,13 +225,17 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             Array1::zeros(n_obs)
         };
         let mu = eta.mapv(|e| link.inv_link(e));
-        let lambdas = Array1::<f64>::ones(penalty_matrices.len());
+        let lambdas = if penalty_matrices.is_empty() {
+            Array1::zeros(0)
+        } else {
+            Array1::ones(penalty_matrices.len())
+        };
 
         let n_terms = term_layouts.len();
         models.insert(
             param_name_str,
             FittingParameter {
-                terms: terms.clone(),
+                terms, // already owned (resolved from training data above)
                 term_layouts,
                 link,
                 x_matrix: x_model,
@@ -279,7 +291,14 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         final_iteration = cycle + 1;
         final_change = max_diff;
 
-        if max_diff < config.tolerance {
+        // Relative convergence: scale by the largest |β| across all parameters so the
+        // threshold is unit-agnostic. A floor of 1.0 keeps the check identical to the
+        // old absolute threshold when coefficients are O(1) (e.g. normalized data).
+        let beta_scale = models
+            .values()
+            .flat_map(|m| m.beta.0.iter().copied().map(f64::abs))
+            .fold(1.0_f64, f64::max);
+        if max_diff / beta_scale < config.tolerance {
             converged = true;
             break;
         }

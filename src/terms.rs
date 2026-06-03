@@ -80,6 +80,31 @@ pub enum Smooth {
         /// Polynomial degree shared across both marginal bases.
         degree: usize,
     },
+    /// 1D natural cubic regression spline (mgcv `bs = "cr"`).
+    ///
+    /// Knots are placed at quantiles of the training data (matching mgcv's default).
+    /// Natural boundary conditions (`f'' = 0` at the outer knots) ensure linear
+    /// extrapolation beyond the data range — preventing the edge curl that
+    /// unconstrained B-splines produce.
+    ///
+    /// The penalty is the exact integrated squared second derivative `∫ [f'']²`,
+    /// whose null space is spanned by constants and linear functions (rank k-2).
+    CrSpline1D {
+        /// Column name for the predictor variable.
+        col_name: String,
+        /// Number of knots / basis functions (mgcv default: 6).
+        k: usize,
+        /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` for
+        /// concessions dollars). When set, replaces the sum-to-zero centering
+        /// used for identifiability when an intercept is also present.
+        #[cfg_attr(feature = "serde", serde(default))]
+        pc: Option<f64>,
+        /// Quantile knot positions, length `k`.  **Leave empty when building a
+        /// formula** — they are resolved once from training data at fit time and
+        /// then stored here so prediction reuses the identical basis.
+        #[cfg_attr(feature = "serde", serde(default))]
+        knots: Vec<f64>,
+    },
     /// Random intercept term indexed by a grouping variable.
     /// Assumes each group has its own random intercept ~ N(0, σ²_u).
     RandomEffect {
@@ -93,6 +118,7 @@ impl Smooth {
     pub fn column_names(&self) -> Vec<&str> {
         match self {
             Smooth::PSpline1D { col_name, .. } => vec![col_name.as_str()],
+            Smooth::CrSpline1D { col_name, .. } => vec![col_name.as_str()],
             Smooth::TensorProduct {
                 col_name_1,
                 col_name_2,
@@ -116,6 +142,8 @@ pub(crate) mod py_parse {
     const DEFAULT_N_SPLINES: usize = 10;
     const DEFAULT_DEGREE: usize = 3;
     const DEFAULT_PENALTY_ORDER: usize = 2;
+    /// Default number of knots for `Smooth::CrSpline1D` (matching mgcv default).
+    const DEFAULT_CR_K: usize = 6;
 
     /// Parse a Python list of term tuples into `Vec<Term>`.
     pub fn parse_terms(term_list: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term>> {
@@ -173,24 +201,59 @@ pub(crate) mod py_parse {
         }
         let col_name: String = tuple.get_item(1)?.extract()?;
 
-        let (n_splines, degree, penalty_order) = if tuple.len() >= 3 {
-            let kwargs_item = tuple.get_item(2)?;
-            let kwargs: &Bound<PyDict> = kwargs_item.cast()?;
-            (
-                kwarg_or(kwargs, "n_splines", DEFAULT_N_SPLINES)?,
-                kwarg_or(kwargs, "degree", DEFAULT_DEGREE)?,
-                kwarg_or(kwargs, "penalty_order", DEFAULT_PENALTY_ORDER)?,
-            )
+        // Hoist the kwargs item binding so it outlives the borrow taken by `kwargs`.
+        let kwargs_item = if tuple.len() >= 3 {
+            Some(tuple.get_item(2)?)
         } else {
-            (DEFAULT_N_SPLINES, DEFAULT_DEGREE, DEFAULT_PENALTY_ORDER)
+            None
+        };
+        let kwargs: Option<&Bound<PyDict>> = kwargs_item
+            .as_ref()
+            .map(|item| item.cast())
+            .transpose()?;
+
+        // Dispatch on the `bs` basis type kwarg (default: "ps" = P-spline).
+        let bs = if let Some(kw) = kwargs {
+            kwarg_str_or(kw, "bs", "ps")?
+        } else {
+            "ps".to_string()
         };
 
-        Ok(Term::Smooth(Smooth::PSpline1D {
-            col_name,
-            n_splines,
-            degree,
-            penalty_order,
-        }))
+        match bs.as_str() {
+            "cr" => {
+                let (k, pc) = if let Some(kw) = kwargs {
+                    (
+                        kwarg_or(kw, "k", DEFAULT_CR_K)?,
+                        kwarg_opt_f64(kw, "pc")?,
+                    )
+                } else {
+                    (DEFAULT_CR_K, None)
+                };
+                Ok(Term::Smooth(Smooth::CrSpline1D {
+                    col_name,
+                    k,
+                    pc,
+                    knots: vec![], // resolved from training data at fit time
+                }))
+            }
+            _ => {
+                let (n_splines, degree, penalty_order) = if let Some(kw) = kwargs {
+                    (
+                        kwarg_or(kw, "n_splines", DEFAULT_N_SPLINES)?,
+                        kwarg_or(kw, "degree", DEFAULT_DEGREE)?,
+                        kwarg_or(kw, "penalty_order", DEFAULT_PENALTY_ORDER)?,
+                    )
+                } else {
+                    (DEFAULT_N_SPLINES, DEFAULT_DEGREE, DEFAULT_PENALTY_ORDER)
+                };
+                Ok(Term::Smooth(Smooth::PSpline1D {
+                    col_name,
+                    n_splines,
+                    degree,
+                    penalty_order,
+                }))
+            }
+        }
     }
 
     fn kwarg_or(kwargs: &Bound<'_, PyDict>, key: &str, default: usize) -> PyResult<usize> {
@@ -199,5 +262,26 @@ pub(crate) mod py_parse {
             .map(|v| v.extract::<usize>())
             .transpose()?
             .unwrap_or(default))
+    }
+
+    fn kwarg_str_or(kwargs: &Bound<'_, PyDict>, key: &str, default: &str) -> PyResult<String> {
+        Ok(kwargs
+            .get_item(key)?
+            .map(|v| v.extract::<String>())
+            .transpose()?
+            .unwrap_or_else(|| default.to_string()))
+    }
+
+    fn kwarg_opt_f64(kwargs: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
+        match kwargs.get_item(key)? {
+            None => Ok(None),
+            Some(v) => {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    Ok(Some(v.extract::<f64>()?))
+                }
+            }
+        }
     }
 }
