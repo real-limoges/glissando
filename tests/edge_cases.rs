@@ -439,7 +439,11 @@ fn test_poisson_smooth_nonlinear() {
         "Poisson smooth EDF too low for sinusoidal pattern: {}",
         edf
     );
-    assert!(edf <= 12.0, "Poisson smooth EDF exceeds basis dimension: {}", edf);
+    assert!(
+        edf <= 12.0,
+        "Poisson smooth EDF exceeds basis dimension: {}",
+        edf
+    );
 }
 
 #[test]

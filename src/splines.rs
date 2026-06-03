@@ -313,7 +313,7 @@ pub(crate) fn cr_knots(x: &Array1<f64>, k: usize) -> Vec<f64> {
 ///
 /// Returns the solution vector.  No pivoting; numerically stable when E is
 /// symmetric positive-definite (which is always the case for our E matrix).
-fn solve_tridiagonal_sym(diag: &[f64], off: &[f64], rhs: &mut Vec<f64>) -> Vec<f64> {
+fn solve_tridiagonal_sym(diag: &[f64], off: &[f64], rhs: &mut [f64]) -> Vec<f64> {
     let n = diag.len();
     debug_assert_eq!(off.len() + 1, n);
     debug_assert_eq!(rhs.len(), n);
@@ -542,7 +542,11 @@ pub(crate) fn apply_cr_pc_constraint(basis: &mut Array2<f64>, knots: &[f64], pc_
 /// * `knots` — knot positions pre-computed by [`cr_knots`], length k ≥ 2
 pub(crate) fn create_cr_penalty_matrix(knots: &[f64]) -> Array2<f64> {
     let k = knots.len();
-    assert!(k >= 2, "create_cr_penalty_matrix requires k ≥ 2 (got {})", k);
+    assert!(
+        k >= 2,
+        "create_cr_penalty_matrix requires k ≥ 2 (got {})",
+        k
+    );
     let km2 = k.saturating_sub(2);
 
     let h: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
@@ -1040,7 +1044,10 @@ mod tests {
                 assert!(
                     (got - ref_val).abs() < 1e-6,
                     "B[{}, {}]: expected {:.9}, got {:.9}",
-                    i, j, ref_val, got
+                    i,
+                    j,
+                    ref_val,
+                    got
                 );
             }
         }
@@ -1068,7 +1075,10 @@ mod tests {
                 assert!(
                     (got - ref_val).abs() < 1e-6,
                     "B_pred[{}, {}]: expected {:.9}, got {:.9}",
-                    i, j, ref_val, got
+                    i,
+                    j,
+                    ref_val,
+                    got
                 );
             }
         }
@@ -1102,7 +1112,10 @@ mod tests {
                 assert!(
                     (got - expected[i][j]).abs() < 1e-6,
                     "S[{}, {}]: expected {:.9}, got {:.9}",
-                    i, j, expected[i][j], got
+                    i,
+                    j,
+                    expected[i][j],
+                    got
                 );
             }
         }

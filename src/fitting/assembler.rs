@@ -5,9 +5,9 @@
 
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
-    apply_cr_pc_constraint, create_basis_matrix, create_cr_basis_matrix,
-    create_cr_penalty_matrix, create_penalty_matrix, cr_knots, kronecker_product,
-    row_kronecker_into, sum_to_zero_basis,
+    apply_cr_pc_constraint, cr_knots, create_basis_matrix, create_cr_basis_matrix,
+    create_cr_penalty_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
+    sum_to_zero_basis,
 };
 use crate::types::{DataSet, ModelMatrix};
 use ndarray::concatenate;
@@ -95,10 +95,7 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
 /// This must be called before [`assemble_model_matrices`] so the resulting
 /// knots are embedded in `FittedParameter::terms` and replayed verbatim at
 /// predict time, guaranteeing that the fit and predict bases are identical.
-pub(crate) fn resolve_terms(
-    terms: &[Term],
-    data: &DataSet,
-) -> Result<Vec<Term>, GamlssError> {
+pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>, GamlssError> {
     terms
         .iter()
         .map(|term| match term {

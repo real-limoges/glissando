@@ -74,8 +74,14 @@ pub struct FitConfig {
     pub criterion: SmoothingCriterion,
 }
 
-fn default_max_iter() -> usize { DEFAULT_MAX_ITER }
-fn default_tolerance() -> f64  { DEFAULT_TOLERANCE }
+#[cfg(feature = "serde")]
+fn default_max_iter() -> usize {
+    DEFAULT_MAX_ITER
+}
+#[cfg(feature = "serde")]
+fn default_tolerance() -> f64 {
+    DEFAULT_TOLERANCE
+}
 
 impl Default for FitConfig {
     fn default() -> Self {

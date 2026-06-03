@@ -597,7 +597,10 @@ fn penalty_eigen(s_lambda: &Array2<f64>, eps: f64) -> Result<PenaltyEigen, Gamls
 /// weighted form tiny (≈ 10⁻²¹) for price-scale data (σ ≈ 45k) and forces
 /// L-BFGS to start near the unpenalized OLS solution where the REML landscape is
 /// badly conditioned — reliably causing the smooth to overshoot into full collapse.
-pub(super) fn initial_log_lambda(x_matrix: &ModelMatrix, penalty_matrices: &[PenaltyMatrix]) -> Array1<f64> {
+pub(super) fn initial_log_lambda(
+    x_matrix: &ModelMatrix,
+    penalty_matrices: &[PenaltyMatrix],
+) -> Array1<f64> {
     let x_t_x = x_matrix.0.t().dot(&x_matrix.0);
     let tr_xtx = x_t_x.diag().sum().max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {

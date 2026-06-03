@@ -381,10 +381,7 @@ fn cr_spline_prediction_reuses_training_knots() {
     train_data.insert_column("x", x_train.clone());
 
     let mut formula = glissando::Formula::new();
-    formula.add_terms(
-        "mu".to_string(),
-        vec![Term::Intercept, cr_spline("x", 6)],
-    );
+    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 6)]);
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&train_data, &y_train, &formula, &Gaussian::new())
@@ -394,9 +391,7 @@ fn cr_spline_prediction_reuses_training_knots() {
     // The training rows [1,10] are appended at the end so we can check them.
     let n_extra = 10;
     let x_extra: Array1<f64> = Array1::linspace(5.0, 25.0, n_extra);
-    let x_combined: Array1<f64> = Array1::from_iter(
-        x_extra.iter().chain(x_train.iter()).copied(),
-    );
+    let x_combined: Array1<f64> = Array1::from_iter(x_extra.iter().chain(x_train.iter()).copied());
     let mut new_data = DataSet::new();
     new_data.insert_column("x", x_combined);
 
@@ -413,7 +408,9 @@ fn cr_spline_prediction_reuses_training_knots() {
             diff < 1e-10,
             "In-sample prediction differs from fitted value at obs {}: \
              pred={}, fitted={}; knots may not be stable across predict calls",
-            i, mu_pred[offset + i], mu_fitted[i]
+            i,
+            mu_pred[offset + i],
+            mu_fitted[i]
         );
     }
 }

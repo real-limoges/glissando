@@ -207,10 +207,8 @@ pub(crate) mod py_parse {
         } else {
             None
         };
-        let kwargs: Option<&Bound<PyDict>> = kwargs_item
-            .as_ref()
-            .map(|item| item.cast())
-            .transpose()?;
+        let kwargs: Option<&Bound<PyDict>> =
+            kwargs_item.as_ref().map(|item| item.cast()).transpose()?;
 
         // Dispatch on the `bs` basis type kwarg (default: "ps" = P-spline).
         let bs = if let Some(kw) = kwargs {
@@ -222,10 +220,7 @@ pub(crate) mod py_parse {
         match bs.as_str() {
             "cr" => {
                 let (k, pc) = if let Some(kw) = kwargs {
-                    (
-                        kwarg_or(kw, "k", DEFAULT_CR_K)?,
-                        kwarg_opt_f64(kw, "pc")?,
-                    )
+                    (kwarg_or(kw, "k", DEFAULT_CR_K)?, kwarg_opt_f64(kw, "pc")?)
                 } else {
                     (DEFAULT_CR_K, None)
                 };
