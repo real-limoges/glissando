@@ -3,10 +3,10 @@
 
 mod common;
 
-use common::{linear_intercepts, smooth_intercepts, Generator};
+use common::{cr_spline, linear_intercepts, smooth_intercepts, Generator};
 use glissando::{
     distributions::{Gaussian, Poisson},
-    DataSet, GamlssModel,
+    DataSet, Formula, GamlssModel, Term,
 };
 use ndarray::Array1;
 use rand::RngExt;
@@ -362,4 +362,55 @@ fn test_predict_missing_column_error() {
 
     let result = model.predict(&bad_data, &Gaussian::new());
     assert!(result.is_err(), "Should error when column is missing");
+}
+
+/// CrSpline1D knot-persistence: predicting on data with different quantiles must
+/// reproduce training fitted values exactly when the training rows are included.
+///
+/// If the knots were recomputed from `new_data` instead of being stored from
+/// training, the basis would silently differ and in-sample predictions would
+/// deviate from fitted values — this test catches that.
+#[test]
+fn cr_spline_prediction_reuses_training_knots() {
+    // Training data on [1, 10]
+    let n_train = 40;
+    let x_train: Array1<f64> = Array1::linspace(1.0, 10.0, n_train);
+    let y_train: Array1<f64> = x_train.mapv(|x| 3.0 * x.sin() + 0.5 * x);
+
+    let mut train_data = DataSet::new();
+    train_data.insert_column("x", x_train.clone());
+
+    let mut formula = glissando::Formula::new();
+    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 6)]);
+    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+
+    let model = GamlssModel::fit(&train_data, &y_train, &formula, &Gaussian::new())
+        .expect("CrSpline1D fit should succeed");
+
+    // new_data has DIFFERENT range ([5, 25]) — quantiles differ from training.
+    // The training rows [1,10] are appended at the end so we can check them.
+    let n_extra = 10;
+    let x_extra: Array1<f64> = Array1::linspace(5.0, 25.0, n_extra);
+    let x_combined: Array1<f64> = Array1::from_iter(x_extra.iter().chain(x_train.iter()).copied());
+    let mut new_data = DataSet::new();
+    new_data.insert_column("x", x_combined);
+
+    let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
+    let mu_pred = &preds["mu"];
+
+    // The last n_train entries of mu_pred correspond to x_train — they must match
+    // the model's fitted values (which were computed with the stored training knots).
+    let mu_fitted = &model.models["mu"].fitted_values;
+    let offset = n_extra;
+    for i in 0..n_train {
+        let diff = (mu_pred[offset + i] - mu_fitted[i]).abs();
+        assert!(
+            diff < 1e-10,
+            "In-sample prediction differs from fitted value at obs {}: \
+             pred={}, fitted={}; knots may not be stable across predict calls",
+            i,
+            mu_pred[offset + i],
+            mu_fitted[i]
+        );
+    }
 }

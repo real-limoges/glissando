@@ -32,7 +32,10 @@ impl WasmGamlssModel {
     /// - `y_json`: Response variable as a JSON array, e.g. `[1.0, 2.0, 3.0]`
     /// - `data_json`: Predictor data as JSON object, e.g. `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`
     /// - `formula_json`: Formula mapping parameter names to terms, e.g.
-    ///   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`
+    ///   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`.
+    ///   For a natural cubic regression spline (`bs="cr"`):
+    ///   `{"mu": [{"Smooth": {"CrSpline1D": {"col_name": "x", "k": 6, "pc": null, "knots": []}}}]}`
+    ///   (leave `knots` empty — resolved from training data at fit time).
     /// - `distribution`: Distribution name (Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta)
     pub fn fit(
         y_json: &str,
