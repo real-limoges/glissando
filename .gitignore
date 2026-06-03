@@ -5,3 +5,4 @@ benchmark/target/
 CLAUDE.md
 
 .venv-prepush/
+docs/

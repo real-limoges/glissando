@@ -349,13 +349,7 @@ pub(crate) fn run_optimization_reml(
                 .ln()
                 .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
         })),
-        _ => {
-            // Cold start: build X'WX once to seed the heuristic.
-            let sqrt_w = w.mapv(f64::sqrt);
-            let x_weighted = &x_model.0 * &sqrt_w.view().insert_axis(Axis(1));
-            let x_t_w_x = x_weighted.t().dot(&x_weighted);
-            LogLambdas(initial_log_lambda(&x_t_w_x, penalty_matrices))
-        }
+        _ => LogLambdas(initial_log_lambda(x_model, penalty_matrices)),
     };
 
     let linesearch = MoreThuenteLineSearch::new();
@@ -408,12 +402,7 @@ pub(crate) fn run_optimization_fellner_schall(
     // Initialize λ: warm-start from previous, else mgcv-style heuristic.
     let mut lambdas: Array1<f64> = match initial_lambdas {
         Some(prev) if prev.len() == n_penalties => prev.mapv(|l| l.max(MIN_LAMBDA)),
-        _ => {
-            let sqrt_w = w.mapv(f64::sqrt);
-            let x_weighted = &x_model.0 * &sqrt_w.view().insert_axis(Axis(1));
-            let x_t_w_x = x_weighted.t().dot(&x_weighted);
-            initial_log_lambda(&x_t_w_x, penalty_matrices).mapv(f64::exp)
-        }
+        _ => initial_log_lambda(x_model, penalty_matrices).mapv(f64::exp),
     };
 
     let lambda_ceiling = LOG_LAMBDA_CLAMP.exp();
@@ -600,15 +589,23 @@ fn penalty_eigen(s_lambda: &Array2<f64>, eps: f64) -> Result<PenaltyEigen, Gamls
 
 /// Cold-start heuristic for log λ when no warm start is available.
 ///
-/// `λ_j^(0) = tr(X'WX) / max(tr(S_j), MIN_LAMBDA)`, in log space and clamped to
-/// `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]`. This is mgcv's `initial.sp` heuristic
-/// in spirit — pick λ so each smooth lands in the interior of the EDF range,
-/// not pinned at 0 or p.
-fn initial_log_lambda(x_t_w_x: &Array2<f64>, penalty_matrices: &[PenaltyMatrix]) -> Array1<f64> {
-    let tr_xwx = x_t_w_x.diag().sum().max(MIN_LAMBDA);
+/// Uses `tr(X'X) / tr(S_j)` (unweighted) rather than `tr(X'WX) / tr(S_j)`.
+/// The unweighted form is scale-invariant: for a B-spline basis the column norms
+/// depend only on the knot layout, not on the response scale, so the initial λ
+/// stays in a numerically friendly range regardless of how large σ is.
+/// `tr(X'WX) = tr(X'X) / σ²` for homoscedastic Gaussian, which makes the
+/// weighted form tiny (≈ 10⁻²¹) for price-scale data (σ ≈ 45k) and forces
+/// L-BFGS to start near the unpenalized OLS solution where the REML landscape is
+/// badly conditioned — reliably causing the smooth to overshoot into full collapse.
+pub(super) fn initial_log_lambda(
+    x_matrix: &ModelMatrix,
+    penalty_matrices: &[PenaltyMatrix],
+) -> Array1<f64> {
+    let x_t_x = x_matrix.0.t().dot(&x_matrix.0);
+    let tr_xtx = x_t_x.diag().sum().max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {
         let tr_sj = s_j.0.diag().sum().max(MIN_LAMBDA);
-        (tr_xwx / tr_sj)
+        (tr_xtx / tr_sj)
             .ln()
             .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
     }))
@@ -674,10 +671,12 @@ mod reml_tests {
 
     #[test]
     fn initial_log_lambda_in_clamp_bounds() {
-        // tr(X'WX) = 100, tr(S_j) = 4 → log(25) ≈ 3.22
-        let xwx = arr2(&[[50.0_f64, 0.0], [0.0, 50.0]]);
+        // 50×2 matrix of ones → X'X = [[50,50],[50,50]], tr(X'X) = 100.
+        // tr(X'X) = 100, tr(S_j) = 4 → log(25) ≈ 3.22.
+        use ndarray::Array2;
+        let x = ModelMatrix(Array2::ones((50, 2)));
         let p = PenaltyMatrix(arr2(&[[2.0_f64, 0.0], [0.0, 2.0]]));
-        let init = initial_log_lambda(&xwx, &[p]);
+        let init = initial_log_lambda(&x, &[p]);
         assert_eq!(init.len(), 1);
         assert!(init[0].abs() <= LOG_LAMBDA_CLAMP);
         assert!((init[0] - 25.0_f64.ln()).abs() < 1e-10);
@@ -685,10 +684,11 @@ mod reml_tests {
 
     #[test]
     fn initial_log_lambda_clamps_extremes() {
-        // tr(S_j) tiny → λ would be huge → clamp.
-        let xwx = arr2(&[[1.0_f64, 0.0], [0.0, 1.0]]);
+        // tr(S_j) near-zero → λ would be huge → clamp at upper bound.
+        use ndarray::Array2;
+        let x = ModelMatrix(Array2::ones((50, 2)));
         let p = PenaltyMatrix(arr2(&[[1e-30, 0.0], [0.0, 1e-30]]));
-        let init = initial_log_lambda(&xwx, &[p]);
+        let init = initial_log_lambda(&x, &[p]);
         assert!(init[0] <= LOG_LAMBDA_CLAMP);
     }
 
@@ -747,10 +747,7 @@ mod reml_tests {
         // Reproduce the F-S loop here so we can snapshot λ at each step
         // (run_optimization_fellner_schall doesn't expose intermediates).
         let n_penalties = ps.len();
-        let sqrt_w = w.mapv(f64::sqrt);
-        let x_weighted = &x.0 * &sqrt_w.view().insert_axis(Axis(1));
-        let x_t_w_x = x_weighted.t().dot(&x_weighted);
-        let mut lambdas = initial_log_lambda(&x_t_w_x, &ps).mapv(f64::exp);
+        let mut lambdas = initial_log_lambda(&x, &ps).mapv(f64::exp);
 
         let lambda_ceiling = LOG_LAMBDA_CLAMP.exp();
         let mut scores: Vec<f64> = Vec::new();
