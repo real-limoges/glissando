@@ -31,7 +31,12 @@ const LOG_LAMBDA_CLAMP: f64 = 30.0;
 const FS_MAX_ITERS: usize = 50;
 
 /// Fellner-Schall convergence threshold on max |log λ_j_new − log λ_j_old|.
-const FS_TOL: f64 = 1e-3;
+///
+/// The F-S update is first-order convergent, so stopping at 1e-3 (≈ 0.1% relative
+/// change in λ) leaves more drift than stopping at 1e-4 (≈ 0.01%).  A tighter
+/// threshold costs at most a few extra iterations — F-S is cheap — but ensures λ
+/// is genuinely stationary before the outer RS loop declares convergence.
+const FS_TOL: f64 = 1e-4;
 
 /// Relative floor on the Fellner-Schall multiplicative-update numerator
 /// `tr(S_λ⁺ S_j) − tr(V S_j)`. Wood-Fasiolo §3 discusses pathological signs
@@ -287,25 +292,18 @@ pub(crate) fn run_optimization(
         _ => LogLambdas(Array1::<f64>::zeros(n_penalties)),
     };
 
-    // Check if starting point is already good enough.
-    // Intentional fallback: if cost computation fails (e.g., singular matrix at initial lambdas),
-    // treat it as worst-case so we proceed with optimization rather than aborting.
-    let initial_cost = cost_function.cost(&initial_log_lambdas).unwrap_or(f64::MAX);
-
-    // If we have a warm start and the cost is very low, skip optimization
-    if initial_lambdas.is_some() && initial_cost < 1e-6 {
-        return Ok(initial_log_lambdas.mapv(f64::exp));
-    }
-
     let linesearch = MoreThuenteLineSearch::new();
     let solver = LBFGS::new(linesearch, 7);
 
     let res = Executor::new(cost_function, solver)
         .configure(|state| {
-            state
-                .param(initial_log_lambdas)
-                .max_iters(50)
-                .target_cost(MIN_DENOMINATOR) // Early exit if GCV is very small
+            // `target_cost` was previously set to MIN_DENOMINATOR, which would
+            // prematurely stop L-BFGS whenever RSS is tiny (e.g. a log-scale sigma
+            // parameter with a near-perfect working model) — the near-zero GCV cost
+            // was declared "optimal" and λ was frozen for the remainder of fitting.
+            // Removed here; L-BFGS converges in O(1) extra iterations from a good
+            // warm start, so the savings were negligible and the bias was harmful.
+            state.param(initial_log_lambdas).max_iters(50)
         })
         .run()?;
 
@@ -551,8 +549,19 @@ struct PenaltyEigen {
 /// Symmetric eigendecomposition of `S_λ` with rank-aware accumulation of
 /// log|S_λ|_+ and construction of the pseudo-inverse.
 ///
-/// τ = `eps · max(|eigval|, 1)`; eigenvalues at or below τ contribute to the
-/// null-space dimension and are zeroed in the pseudo-inverse.
+/// τ = `eps · max(d_max, 1)`; eigenvalues at or below τ are treated as part of the
+/// null space and zeroed in the pseudo-inverse.  The `max(d_max, 1)` floor keeps τ
+/// from collapsing to near-machine-epsilon when S_λ is a near-zero matrix (very
+/// small λ) — without it every eigenvalue would survive and `1/di` could be ~1e15.
+///
+/// **Potential concern**: when λ is small, d_max < 1 and the threshold is set to
+/// `eps = 1e-8` (the floored value).  An eigenvalue just above 1e-8 is included in
+/// the pseudo-inverse with `d_inv = 1/di ≈ 1e8`, which dominates tr(S⁺Sⱼ) in both
+/// the REML gradient and the Fellner–Schall numerator.  This is usually benign —
+/// λ is already small and the gradient moves it larger — but can be pathological
+/// near rank deficiency.  If REML/FS λ diverges for a nearly unpenalized smooth,
+/// consider raising `REML_RANK_TOL_EPS` or switching to a strictly relative cutoff
+/// `eps · d_max` with a hard lower bound.
 fn penalty_eigen(s_lambda: &Array2<f64>, eps: f64) -> Result<PenaltyEigen, GamlssError> {
     let (eigvals, eigvecs) = linalg::symmetric_eigh(s_lambda)?;
 
@@ -815,6 +824,42 @@ mod reml_tests {
             assert!(
                 rel_err < 1e-4,
                 "gradient mismatch at log λ = {}: analytic = {}, fd = {}, rel_err = {}",
+                log_lambda,
+                analytic.0[0],
+                fd,
+                rel_err
+            );
+        }
+    }
+
+    #[test]
+    fn gcv_gradient_matches_finite_diff() {
+        // Analytic ∂GCV/∂ρ_j must match the central-difference approximation.
+        // Mirrors `reml_gradient_matches_finite_diff` for the GCV path — the GCV
+        // gradient (quotient-rule + dEDF/dλ) was previously untested.
+        let (x, z, w, ps) = synthetic_pwls_problem();
+        let cost = GamlssCost {
+            x_matrix: &x,
+            z: &z,
+            w: &w,
+            penalty_matrices: &ps,
+        };
+
+        let h = 1e-5;
+        for &log_lambda in &[-2.0_f64, 0.0, 2.0] {
+            let p0 = LogLambdas(arr1(&[log_lambda]));
+            let analytic = cost.gradient(&p0).unwrap();
+
+            let mut p_plus = p0.clone();
+            p_plus.0[0] += h;
+            let mut p_minus = p0.clone();
+            p_minus.0[0] -= h;
+            let fd = (cost.cost(&p_plus).unwrap() - cost.cost(&p_minus).unwrap()) / (2.0 * h);
+
+            let rel_err = (analytic.0[0] - fd).abs() / fd.abs().max(1e-6);
+            assert!(
+                rel_err < 1e-4,
+                "GCV gradient mismatch at log λ = {}: analytic = {}, fd = {}, rel_err = {}",
                 log_lambda,
                 analytic.0[0],
                 fd,

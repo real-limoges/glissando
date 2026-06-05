@@ -264,13 +264,37 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
-        let mut max_diff = 0.0;
+        let mut max_diff = 0.0_f64; // kept for FitDiagnostics.final_change
+        let mut all_converged = true;
 
         for param_name in family.parameters() {
             let update = scoring::step(family, y, &models, param_name, config.criterion)?;
             if update.max_diff > max_diff {
                 max_diff = update.max_diff;
             }
+
+            // Per-parameter relative convergence check.
+            //
+            // The previous (global) test divided the max β-change across *all*
+            // parameters by the max |β| across *all* parameters.  When one parameter
+            // (e.g. mu) has large coefficients while another (e.g. log-scale sigma)
+            // has small ones, the shared denominator is dominated by mu's scale and
+            // the loop could declare convergence while sigma is still drifting.
+            //
+            // Fix: each parameter is checked against its own |β| scale.  The floor of
+            // 1.0 keeps the test equivalent to an absolute threshold when all
+            // coefficients are O(1) (normalised data).
+            let param_beta_scale = update
+                .beta
+                .0
+                .iter()
+                .copied()
+                .map(f64::abs)
+                .fold(1.0_f64, f64::max);
+            if update.max_diff / param_beta_scale >= config.tolerance {
+                all_converged = false;
+            }
+
             param_diagnostics.insert(
                 param_name.to_string(),
                 ParamDiagnostic {
@@ -297,14 +321,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         final_iteration = cycle + 1;
         final_change = max_diff;
 
-        // Relative convergence: scale by the largest |β| across all parameters so the
-        // threshold is unit-agnostic. A floor of 1.0 keeps the check identical to the
-        // old absolute threshold when coefficients are O(1) (e.g. normalized data).
-        let beta_scale = models
-            .values()
-            .flat_map(|m| m.beta.0.iter().copied().map(f64::abs))
-            .fold(1.0_f64, f64::max);
-        if max_diff / beta_scale < config.tolerance {
+        if all_converged {
             converged = true;
             break;
         }
