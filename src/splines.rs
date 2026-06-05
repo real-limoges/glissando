@@ -211,25 +211,29 @@ fn evaluate_basis_functions_into(
     basis.iter_mut().for_each(|v| *v = 0.0);
     basis[0] = 1.0;
 
+    // Standard de Boor–Cox recurrence (Piegl & Tiller, "The NURBS Book", Algorithm A2.2).
+    //
+    // At the start of outer iteration j, left[1..=j] and right[1..=j] must all be
+    // populated before the inner r-loop reads left[j-r] and right[r+1].  The fix is
+    // to compute left[j] and right[j] *once* here — outside the r-loop — so that
+    // slots written in previous j iterations remain valid when the inner loop reads them.
+    //
+    // Index safety (find_knot_span clamps i to [degree, n_splines-1]):
+    //   knots[i+1-j]: j in 1..=degree → index ≥ i+1-degree ≥ 1 ≥ 0.
+    //   knots[i+j]:   j in 1..=degree → index ≤ i+degree ≤ n_splines+degree-1 < knots.len().
     for j in 1..=degree {
+        left[j] = x - knots[i + 1 - j];
+        right[j] = knots[i + j] - x;
         let mut saved = 0.0;
         for r in 0..j {
-            let left_idx = (i + 1).saturating_sub(j).saturating_add(r);
-            let right_idx = i + r + 1;
-
-            if right_idx < knots.len() {
-                left[j] = x - knots[left_idx];
-                right[j] = knots[right_idx] - x;
-
-                let denom = right[r + 1] + left[j - r];
-                if denom.abs() > 1e-12 {
-                    let term = basis[r] / denom;
-                    basis[r] = saved + right[r + 1] * term;
-                    saved = left[j - r] * term;
-                } else {
-                    basis[r] = saved;
-                    saved = 0.0;
-                }
+            let denom = right[r + 1] + left[j - r];
+            if denom.abs() > 1e-12 {
+                let term = basis[r] / denom;
+                basis[r] = saved + right[r + 1] * term;
+                saved = left[j - r] * term;
+            } else {
+                basis[r] = saved;
+                saved = 0.0;
             }
         }
         basis[j] = saved;
@@ -802,6 +806,66 @@ mod tests {
         let b = create_basis_matrix(&x, 8, 3);
         assert_eq!(b.dim(), (10, 8));
         assert!(b.iter().all(|v| v.is_finite()));
+    }
+
+    /// Golden-value test for the cubic P-spline basis against the analytic de Boor result.
+    ///
+    /// Setup: n_splines=6, degree=3, x ∈ {0, 0.25, 0.5, 0.75, 1}.
+    /// Uniform knots: t = [-1, -2/3, -1/3, 0, 1/3, 2/3, 1, 4/3, 5/3, 2].
+    ///
+    /// Reference values were derived by hand from the textbook de Boor–Cox recurrence
+    /// (Piegl & Tiller Algorithm A2.2) and independently cross-checked against
+    /// scipy.interpolate.BSpline.basis_element output:
+    ///
+    /// ```python
+    /// from scipy.interpolate import BSpline
+    /// import numpy as np
+    /// # 6 cubic B-splines on uniform knots over [0,1]
+    /// knots = np.linspace(-1, 2, 10)      # same as select_knots with n=6, d=3
+    /// for j in range(6):
+    ///     for x in [0.0, 0.25, 0.5, 0.75, 1.0]:
+    ///         print(f"B[{j}]({x}) =", BSpline.basis_element(knots[j:j+5])(x))
+    /// ```
+    ///
+    /// The previous (buggy) implementation gave wrong interior basis values, e.g. at
+    /// x=0.5 it returned [0, 1/48, **2/3, 7/24**, 1/48, 0] instead of the correct
+    /// [0, 1/48, **23/48, 23/48**, 1/48, 0].  Both sum to 1, so partition-of-unity
+    /// tests did not catch the error.
+    #[test]
+    fn bspline_basis_golden_values_degree3() {
+        let x = Array1::from_vec(vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+        let b = create_basis_matrix(&x, 6, 3);
+        assert_eq!(b.dim(), (5, 6));
+
+        // Each inner array is one row of the basis matrix (one observation).
+        // Derived from the de Boor recurrence on knots t = [-1, -2/3, -1/3, 0, 1/3, 2/3, 1, 4/3, 5/3, 2].
+        #[rustfmt::skip]
+        let expected: [[f64; 6]; 5] = [
+            // x=0.00, span=3: B[0..3] = [1/6, 2/3, 1/6, 0]
+            [1.0/6.0,    2.0/3.0,    1.0/6.0,    0.0,          0.0,          0.0       ],
+            // x=0.25, span=3: B[0..3] = [1/384, 121/384, 235/384, 27/384]
+            [1.0/384.0,  121.0/384.0, 235.0/384.0, 27.0/384.0, 0.0,          0.0       ],
+            // x=0.50, span=4: B[1..4] = [1/48, 23/48, 23/48, 1/48]
+            [0.0,        1.0/48.0,   23.0/48.0,  23.0/48.0,   1.0/48.0,     0.0       ],
+            // x=0.75, span=5: B[2..5] = [27/384, 235/384, 121/384, 1/384]
+            [0.0,        0.0,        27.0/384.0, 235.0/384.0, 121.0/384.0,  1.0/384.0 ],
+            // x=1.00, span=5: B[3..5] = [0, 1/6, 2/3, 1/6]
+            [0.0,        0.0,        0.0,        1.0/6.0,     2.0/3.0,      1.0/6.0   ],
+        ];
+
+        for (i, row_ref) in expected.iter().enumerate() {
+            for (j, &ref_val) in row_ref.iter().enumerate() {
+                let got = b[[i, j]];
+                assert!(
+                    (got - ref_val).abs() < 1e-9,
+                    "B[{}, {}]: expected {:.12}, got {:.12}",
+                    i,
+                    j,
+                    ref_val,
+                    got
+                );
+            }
+        }
     }
 
     // --- create_penalty_matrix ---

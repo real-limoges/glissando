@@ -597,16 +597,27 @@ GAMLSS fits the joint model by cycling through distribution parameters one at a 
 
 ```text
 for cycle in 0..max_iterations:
-    max_diff = 0
+    all_converged = true
     for each parameter theta_k in family.parameters():
-        snapshot beta_k_old
-        beta_k = p_irls_step(theta_k | other params held fixed)
-        max_diff = max(max_diff, max_abs(beta_k - beta_k_old))
-    if max_diff < tolerance:
+        beta_k_old = beta_k
+        beta_k     = p_irls_step(theta_k | other params held fixed)
+        delta      = max_abs(beta_k - beta_k_old)
+        scale      = max(max_abs(beta_k), 1.0)   # floor at 1 for O(1) coefficients
+        if delta / scale >= tolerance:
+            all_converged = false
+    if all_converged:
         break
 ```
 
-Source: `src/fitting/mod.rs:223-263`. The convergence criterion is the **infinity norm** of coefficient changes (max absolute element), pooled across all parameters in a cycle — not the L¹ norm of each parameter separately. The active default is $\epsilon = 10^{-3}$, max iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_MAX_ITER` at `src/fitting/mod.rs:31-32`).
+Source: `src/fitting/mod.rs`. The convergence criterion is **per-parameter relative**: each distribution parameter $\theta_k$ must independently satisfy
+
+$$
+\frac{\|\beta_k^{(t+1)} - \beta_k^{(t)}\|_\infty}{\max(\|\beta_k^{(t+1)}\|_\infty,\, 1)} < \epsilon,
+$$
+
+and all parameters must pass before the outer loop terminates. Using each parameter's own scale prevents a large-coefficient parameter (e.g. $\mu$ when data are un-normalized) from dominating the denominator and masking drift in a small-coefficient parameter (e.g. a log-scale $\sigma$ whose intercept is near 0). The floor of 1 in the denominator keeps the test equivalent to an absolute threshold when all coefficients are $O(1)$.
+
+The active default is $\epsilon = 10^{-3}$, max iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_MAX_ITER` at `src/fitting/mod.rs:31-32`).
 
 ### 4.2 Inner P-IRLS Step (Fisher Scoring)
 
@@ -673,32 +684,41 @@ Persistent non-zero `weight_floor_hits` or `step_cap_hits` at convergence signal
 
 ### 5.0 B-Spline Basis (Cox–de Boor)
 
-A degree-$p$ B-spline basis with $k$ functions is defined on a clamped knot vector
+A degree-$p$ B-spline basis with $k$ functions is defined on a knot vector
 $$
-\tau_0 = \tau_1 = \cdots = \tau_p < \tau_{p+1} < \cdots < \tau_{k-1} < \tau_k = \cdots = \tau_{k+p}.
+\tau_0 < \tau_1 < \cdots < \tau_{k+p}.
 $$
 
-The implementation places the $k - p - 1$ interior knots at empirical **quantiles** of the predictor:
+**Knot placement (P-spline, `bs="ps"`).** The implementation uses **equally-spaced** knots — the requirement of the Eilers–Marx P-spline, because the difference penalty $D^T D$ only approximates a roughness integral when the basis knots are uniform:
 $$
-\tau_{p+1+i} = x_{(\,\mathrm{round}(\,q_i\,(n-1)\,))}, \qquad q_i = \frac{i}{k - p}, \quad i = 1, \ldots, k - p - 1
+\tau_j = \min(x) + (j - p)\,\Delta, \qquad \Delta = \frac{\max(x) - \min(x)}{k - p}, \quad j = 0, \ldots, k+p.
 $$
-where $x_{(j)}$ is the $j$-th order statistic. Boundary knots are replicated $p+1$ times at $\min x$ and $\max x$ (`src/splines.rs:99-128`).
+This places $\tau_p = \min(x)$ and $\tau_k = \max(x)$, with $p$ extra knots extending beyond each end of the data range. Source: `src/splines.rs` (`select_knots`).
 
-The **Cox–de Boor recursion** evaluates the basis stably:
+The **Cox–de Boor recursion** evaluates the basis stably (Piegl & Tiller 1997, Algorithm A2.2). Let $i$ be the **knot span** — the index satisfying $\tau_i \le x < \tau_{i+1}$, clamped to $[p, k-1]$. Initialize $N_0 = 1$. Then for $j = 1, \ldots, p$:
+
 $$
-B_{i,0}(x) = \begin{cases} 1 & \tau_i \le x < \tau_{i+1}\\ 0 & \text{otherwise} \end{cases}
+\mathrm{left}[j] = x - \tau_{i+1-j}, \qquad \mathrm{right}[j] = \tau_{i+j} - x,
+$$
+
+and for $r = 0, \ldots, j-1$:
+
+$$
+\text{denom} = \mathrm{right}[r+1] + \mathrm{left}[j-r], \qquad \text{term} = N_r / \text{denom},
 $$
 $$
-B_{i,p}(x) = \frac{x - \tau_i}{\tau_{i+p} - \tau_i}\, B_{i, p-1}(x) \;+\; \frac{\tau_{i+p+1} - x}{\tau_{i+p+1} - \tau_{i+1}}\, B_{i+1, p-1}(x).
+N_r \leftarrow N_r^{\mathrm{saved}} + \mathrm{right}[r+1]\cdot\text{term}, \qquad N_r^{\mathrm{saved}} \leftarrow \mathrm{left}[j-r]\cdot\text{term}.
 $$
+
+At the end of iteration $j$, $N_0, \ldots, N_j$ hold the $j+1$ non-zero degree-$j$ basis values at $x$. **Critical implementation note:** $\mathrm{left}[j]$ and $\mathrm{right}[j]$ must be computed *once, before the inner $r$-loop*, so that the full arrays $\mathrm{left}[1..j]$ and $\mathrm{right}[1..j]$ remain valid when the inner loop reads $\mathrm{left}[j-r]$ and $\mathrm{right}[r+1]$. Computing them inside the $r$-loop overwrites earlier slots and produces wrong interior basis values for degree $\ge 3$ (the endpoint functions are unaffected but the middle ones are wrong; both the correct and the broken form still satisfy partition-of-unity, so property-only tests do not catch the error).
+
+After the full degree-$p$ pass, $N_0, \ldots, N_p$ are the $p+1$ non-zero values at $x$; they map to columns $[i-p, i]$ of the basis matrix. Source: `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `find_knot_span`).
 
 Properties:
 
 - **Partition of unity**: $\sum_{j=1}^{k} B_j(x_i) = 1$ for every $x_i$ in the interior of the knot range.
 - **Non-negativity**: $B_j(x) \ge 0$.
 - **Local support**: $B_{i,p}$ is non-zero only on $[\tau_i, \tau_{i+p+1}]$, so each row of the design matrix has at most $p+1$ non-zero entries.
-
-Source: `src/splines.rs:42-160` (`create_basis_matrix`, `evaluate_basis_functions_into`, `find_knot_span` using `partition_point` for binary search).
 
 ### 5.1 Sum-to-Zero Reparameterization (Identifiability)
 
@@ -1095,7 +1115,7 @@ $$
 \frac{\mathrm{tr}\!\bigl(S_\lambda^+\, S_j\bigr) - \mathrm{tr}\!\bigl(V\, S_j\bigr)}
 {\hat\beta^T S_j\, \hat\beta}
 $$
-is **monotone non-increasing** in $-V_r$ under mild conditions, has no line search, and converges geometrically near a minimum. The implementation lives at `src/fitting/solver.rs:377-470` and applies three safeguards:
+is **monotone non-increasing** in $-V_r$ under mild conditions, has no line search, and converges geometrically near a minimum. The implementation lives at `src/fitting/solver.rs` (`run_optimization_fellner_schall`) and applies three safeguards:
 
 | Safeguard | Constant | Value | Role |
 | --- | --- | --- | --- |
@@ -1103,11 +1123,15 @@ is **monotone non-increasing** in $-V_r$ under mild conditions, has no line sear
 | Floor on the denominator $\hat\beta^T S_j \hat\beta$ | `FS_DENOMINATOR_FLOOR` | $10^{-12}$ | Avoids division by zero when $\hat\beta$ lies in the null space of $S_j$. |
 | Per-iteration clamp on $\log \lambda_j$ | `LOG_LAMBDA_CLAMP` | $\pm 30$ | Keeps $\lambda$ in $[e^{-30}, e^{30}]$, matching the REML L-BFGS clamp. |
 
-Loop control: at most `FS_MAX_ITERS = 50` iterations; converged when $\max_j |\log \lambda_j^{(t+1)} - \log \lambda_j^{(t)}| < \mathtt{FS\_TOL} = 10^{-3}$. Source: `src/fitting/solver.rs:30-43`.
+Loop control: at most `FS_MAX_ITERS = 50` iterations; converged when
+$$
+\max_j \bigl|\log \lambda_j^{(t+1)} - \log \lambda_j^{(t)}\bigr| < \mathtt{FS\_TOL} = 10^{-4}.
+$$
+The tolerance is set at $10^{-4}$ (rather than the looser $10^{-3}$) because the F-S update is first-order convergent: stopping at $10^{-3}$ leaves $\lambda$ still moving by $\approx 0.1\%$ per step, which is measurable on flat LAML landscapes. The extra iterations cost little since each F-S step is a single PWLS solve. Source: `src/fitting/solver.rs` (`FS_TOL`, `FS_MAX_ITERS`).
 
 #### When to pick which criterion
 
-- **GCV**: classical choice, computationally cheap; tends to undersmooth at moderate $n$ and is more prone to multiple local minima on the GCV surface (Reiss & Ogden 2009).
+- **GCV**: classical choice, computationally cheap; tends to undersmooth at moderate $n$ and is more prone to multiple local minima on the GCV surface (Reiss & Ogden 2009). The GCV optimizer always runs L-BFGS from the warm-started $\lambda$ and does not apply an early-exit threshold — a previous skip triggered when the warm-start GCV score was below $10^{-6}$ could freeze $\lambda$ for parameters with small residual sums of squares (e.g.\ a log-scale $\sigma$ whose working RSS is tiny), preventing those parameters from adapting their smoothness across outer cycles.
 - **REML** (default): preferred for stability; the Laplace-approximate marginal likelihood is asymptotically equivalent to true REML for the working PWLS model, and tends to undersmooth less than GCV at moderate sample sizes.
 - **FellnerSchall**: same target as REML but with a deterministic multiplicative update — no L-BFGS, no line search. Fast and well-behaved for well-conditioned problems; can stall if the numerator drifts to its floor.
 
@@ -1183,12 +1207,13 @@ The RS algorithm requires starting values for all parameters. Default initializa
 
 ### Convergence Criterion
 
-The algorithm stops when:
+The algorithm declares convergence when every distribution parameter $\theta_k$ independently satisfies the relative criterion:
 $$
-\max_k \|\beta_k^{(t+1)} - \beta_k^{(t)}\|_1 < \epsilon
+\frac{\|\beta_k^{(t+1)} - \beta_k^{(t)}\|_\infty}{\max\!\bigl(\|\beta_k^{(t+1)}\|_\infty,\; 1\bigr)} < \epsilon,
 $$
+where $k$ indexes parameters ($\mu$, $\sigma$, etc.) and $\epsilon = 10^{-3}$ by default. Each parameter is checked against its **own** coefficient scale rather than a global scale pooled across all parameters. The $\max(\cdot, 1)$ floor makes the test behave like an absolute threshold when all coefficients are $O(1)$ (typical for normalized data).
 
-where $k$ indexes parameters ($\mu$, $\sigma$, etc.) and $\epsilon = 10^{-3}$ by default.
+Using a shared global scale — dividing the maximum change across all parameters by the maximum $|\beta|$ across all parameters — was the previous behaviour. It caused the loop to declare convergence prematurely when one parameter (e.g.\ $\mu$) had large coefficients and dominated the denominator while another (e.g.\ log-scale $\sigma$) was still drifting in relative terms.
 
 **Maximum iterations**: 200 (default)
 
@@ -1303,8 +1328,8 @@ A reverse index from mathematical concept to the canonical implementation, for c
 
 | Concept (this doc) | Source location |
 | --- | --- |
-| Backfitting outer loop (§4.1) | `src/fitting/mod.rs:223-263` |
-| P-IRLS inner step (§4.2) | `src/fitting/scoring.rs:40-180` |
+| Backfitting outer loop with per-parameter convergence (§4.1) | `src/fitting/mod.rs` (`fit_gamlss`) |
+| P-IRLS inner step (§4.2) | `src/fitting/scoring.rs` (`step`) |
 | `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs:28,32` |
 | `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs:8-12` |
 | `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
@@ -1317,20 +1342,22 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Binomial derivatives (§1.7) | `src/distributions/binomial.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
-| B-spline basis & knots (§5.0) | `src/splines.rs:42-160` |
-| Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs:1-39` |
-| Difference penalty matrix (§5) | `src/splines.rs:162-196` |
-| Tensor product assembly (§5) | `src/fitting/assembler.rs:44-102` |
-| Random effect assembly (§5) | `src/fitting/assembler.rs:103-126` |
-| Block-sparse penalty (§5.1) | `src/fitting/assembler.rs:128-187`, `src/types/newtypes.rs` |
-| PWLS / Cholesky solve (§8.1) | `src/fitting/solver.rs:466-545` |
-| EDF (§6) | `src/fitting/solver.rs:514-530` |
-| GCV cost and gradient (§8) | `src/fitting/solver.rs:67-160` |
-| GCV L-BFGS driver | `src/fitting/solver.rs:290-373` |
-| REML / LAML cost and gradient (§8.2) | `src/fitting/solver.rs:170-303` |
-| Penalty pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs:547-595` (`penalty_eigen`) |
-| Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs:377-470` |
-| `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs:46-54` |
+| B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
+| Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs` (`sum_to_zero_basis`) |
+| Difference penalty matrix (§5) | `src/splines.rs` (`create_penalty_matrix`) |
+| Tensor product assembly (§5) | `src/fitting/assembler.rs` |
+| Random effect assembly (§5) | `src/fitting/assembler.rs` |
+| Block-sparse penalty (§5.1) | `src/fitting/assembler.rs`, `src/types/newtypes.rs` |
+| PWLS / Cholesky solve (§8.1) | `src/fitting/solver.rs` (`fit_pwls`, `fit_pwls_with_grad_info`) |
+| EDF (§6) | `src/fitting/solver.rs` (`fit_pwls_with_grad_info`) |
+| GCV cost and gradient (§8) | `src/fitting/solver.rs` (`GamlssCost`) |
+| GCV gradient finite-difference test | `src/fitting/solver.rs` (`gcv_gradient_matches_finite_diff`) |
+| GCV L-BFGS driver (§8) | `src/fitting/solver.rs` (`run_optimization`) |
+| REML / LAML cost and gradient (§8.2) | `src/fitting/solver.rs` (`RemlCost`) |
+| REML gradient finite-difference test | `src/fitting/solver.rs` (`reml_gradient_matches_finite_diff`) |
+| Penalty pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs` (`penalty_eigen`) |
+| Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs` (`run_optimization_fellner_schall`) |
+| `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs` |
 | Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs:31-32` |
 | Diagnostics (AIC/BIC/EDF/residuals, §11) | `src/fitting/diagnostics.rs` |
 
@@ -1394,3 +1421,5 @@ Symbols used throughout this document.
 9. McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman and Hall. — IRLS / Fisher scoring derivation underlying §4.3.
 
 10. Abramowitz, M., & Stegun, I. A. (1972). *Handbook of Mathematical Functions*. Dover Publications. — Digamma / trigamma asymptotic expansions (6.3.18, 6.4.11).
+
+11. Piegl, L., & Tiller, W. (1997). *The NURBS Book* (2nd ed.). Springer. — Algorithm A2.2: de Boor–Cox recurrence for stable B-spline evaluation; the canonical reference for the `left`/`right` array structure used in `evaluate_basis_functions_into`.
