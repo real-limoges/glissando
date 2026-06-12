@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn fit_predict_round_trip() {
-        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
+        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
         assert!(model.converged());
 
         let preds = predict(&model, family.as_ref(), r#"{"x": [11.0, 12.0]}"#).unwrap();
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn unknown_distribution_errors() {
-        assert!(fit(Y, DATA, FORMULA, "Wishart", None).is_err());
+        assert!(fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
     }
 
     #[test]
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn save_then_load_preserves_coefficients() {
-        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
+        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
         let serialized = model.to_json(family.as_ref()).unwrap();
         let (restored, restored_family) = load(&serialized).unwrap();
         assert_eq!(restored_family.name(), "Gaussian");

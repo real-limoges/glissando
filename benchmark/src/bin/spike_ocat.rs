@@ -168,10 +168,12 @@ fn main() {
     let mut probs: Vec<Vec<f64>> = Vec::with_capacity(n_test);
     let mut n_violations = 0usize;
 
-    for idx in 0..n_test {
-        let c1 = cum_preds[0][idx];
-        let c2 = cum_preds[1][idx];
-        let c3 = cum_preds[2][idx];
+    for ((&c1, &c2), &c3) in cum_preds[0]
+        .iter()
+        .take(n_test)
+        .zip(cum_preds[1].iter())
+        .zip(cum_preds[2].iter())
+    {
 
         // Monotonicity violation: the three independent fits need not be ordered.
         if c1 > c2 || c2 > c3 {
