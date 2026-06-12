@@ -174,7 +174,6 @@ fn main() {
         .zip(cum_preds[1].iter())
         .zip(cum_preds[2].iter())
     {
-
         // Monotonicity violation: the three independent fits need not be ordered.
         if c1 > c2 || c2 > c3 {
             n_violations += 1;
