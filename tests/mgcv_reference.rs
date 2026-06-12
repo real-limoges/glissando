@@ -65,6 +65,7 @@ struct FitResult {
     #[serde(default)]
     edf: HashMap<String, f64>,
     log_likelihood: Option<f64>,
+    #[allow(dead_code)]
     aic: Option<f64>,
     /// Per-parameter selected λ values. Not gated — basis normalisations differ.
     #[serde(default)]
