@@ -165,6 +165,30 @@ mod backend {
 
 pub use backend::{cholesky_lower, inv, log_det_via_cholesky, solve, symmetric_eigh};
 
+/// Numerically stable log-determinant via symmetric eigendecomposition.
+///
+/// Uses LAPACK `dsyev` (symmetric eigensolver) instead of Cholesky.  This is
+/// consistent with the analytic REML gradient, which contains the term
+/// `tr(V·S_j)` for `V = (H+S_λ)⁻¹` — the gradient of `log|H+S_λ|` w.r.t.
+/// `log λ_j` is `λ_j·tr(V·S_j)`, regardless of whether V was computed via LU
+/// or Cholesky.  Unlike Cholesky, `dsyev` succeeds for near-PD matrices (e.g.
+/// evenly-spaced B-spline designs whose normal-equation matrix develops tiny
+/// negative floating-point pivots) and returns meaningful eigenvalues.  Near-
+/// zero eigenvalues are clamped to `1e-300` before the log, which makes the
+/// log-det very negative, causing the REML optimizer to naturally avoid those
+/// λ regions — correct behavior rather than a crash.
+pub fn log_det_robust(a: &ndarray::Array2<f64>) -> Result<f64> {
+    // Fast path: well-conditioned matrices skip the eigensolver.
+    if let Ok(ld) = log_det_via_cholesky(a) {
+        return Ok(ld);
+    }
+    // Cholesky failed — matrix is near-PD in floating point.  Eigenvalues of
+    // a symmetric matrix are always real and computed stably by dsyev; clamp
+    // any negative floating-point artifacts before taking the log.
+    let (eigvals, _) = symmetric_eigh(a)?;
+    Ok(eigvals.iter().map(|&v| v.max(1e-300_f64).ln()).sum())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

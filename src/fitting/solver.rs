@@ -199,10 +199,11 @@ impl<'a> CostFunction for RemlCost<'a> {
         .map_err(Error::new)?;
 
         let s_lambda = weighted_penalty_sum(&lambdas, self.penalty_matrices);
-        let eig = penalty_eigen(&s_lambda, REML_RANK_TOL_EPS).map_err(Error::new)?;
+        let eig = penalty_eigen(self.penalty_matrices, &lambdas, REML_RANK_TOL_EPS)
+            .map_err(Error::new)?;
 
         let lhs = &info.x_t_w_x + &s_lambda;
-        let log_det_lhs = linalg::log_det_via_cholesky(&lhs).map_err(Error::new)?;
+        let log_det_lhs = linalg::log_det_robust(&lhs).map_err(Error::new)?;
 
         let beta_s_beta = info.beta.0.dot(&s_lambda.dot(&info.beta.0));
         let m_p = eig.null_dim as f64;
@@ -241,8 +242,8 @@ impl<'a> Gradient for RemlCost<'a> {
         )
         .map_err(Error::new)?;
 
-        let s_lambda = weighted_penalty_sum(&lambdas, self.penalty_matrices);
-        let eig = penalty_eigen(&s_lambda, REML_RANK_TOL_EPS).map_err(Error::new)?;
+        let eig = penalty_eigen(self.penalty_matrices, &lambdas, REML_RANK_TOL_EPS)
+            .map_err(Error::new)?;
 
         let mut grad = Array1::<f64>::zeros(n_penalties);
         for j in 0..n_penalties {
@@ -407,8 +408,7 @@ pub(crate) fn run_optimization_fellner_schall(
 
     for _iter in 0..FS_MAX_ITERS {
         let info = fit_pwls_with_grad_info(x_model, z, w, penalty_matrices, &lambdas)?;
-        let s_lambda = weighted_penalty_sum(&lambdas, penalty_matrices);
-        let eig = penalty_eigen(&s_lambda, REML_RANK_TOL_EPS)?;
+        let eig = penalty_eigen(penalty_matrices, &lambdas, REML_RANK_TOL_EPS)?;
 
         let mut max_log_change: f64 = 0.0;
         let mut new_lambdas = lambdas.clone();
@@ -546,54 +546,124 @@ struct PenaltyEigen {
     pinv: Array2<f64>,
 }
 
-/// Symmetric eigendecomposition of `S_λ` with rank-aware accumulation of
-/// log|S_λ|_+ and construction of the pseudo-inverse.
+/// Compute REML eigendecomposition quantities, grouping penalties by their coefficient block.
 ///
-/// τ = `eps · max(d_max, 1)`; eigenvalues at or below τ are treated as part of the
-/// null space and zeroed in the pseudo-inverse.  The `max(d_max, 1)` floor keeps τ
-/// from collapsing to near-machine-epsilon when S_λ is a near-zero matrix (very
-/// small λ) — without it every eigenvalue would survive and `1/di` could be ~1e15.
+/// The naive approach eigendecomposes S_λ = Σ_j λ_j S_j once with a single relative
+/// threshold τ = eps · max(eigenvalue of S_λ).  When λ values span many orders of
+/// magnitude (e.g. λ₁ ≈ 1e-8 and λ₄ ≈ 5e10 in a 5-smooth model), the threshold is
+/// dominated by the large-λ term and misclassifies the non-null directions of small-λ
+/// penalties as null space — producing the wrong REML gradient sign.
 ///
-/// **Potential concern**: when λ is small, d_max < 1 and the threshold is set to
-/// `eps = 1e-8` (the floored value).  An eigenvalue just above 1e-8 is included in
-/// the pseudo-inverse with `d_inv = 1/di ≈ 1e8`, which dominates tr(S⁺Sⱼ) in both
-/// the REML gradient and the Fellner–Schall numerator.  This is usually benign —
-/// λ is already small and the gradient moves it larger — but can be pathological
-/// near rank deficiency.  If REML/FS λ diverges for a nearly unpenalized smooth,
-/// consider raising `REML_RANK_TOL_EPS` or switching to a strictly relative cutoff
-/// `eps · d_max` with a hard lower bound.
-fn penalty_eigen(s_lambda: &Array2<f64>, eps: f64) -> Result<PenaltyEigen, GamlssError> {
-    let (eigvals, eigvecs) = linalg::symmetric_eigh(s_lambda)?;
+/// Fix: group penalty matrices by their non-zero block range and eigendecompose each
+/// group independently.  Within a group the combined scaled block is formed first,
+/// then eigendecomposed.  This gives two correctness guarantees simultaneously:
+///
+/// - **Per-group threshold**: τ_g = eps · max(eigenvalue of Σ_{j∈g} λ_j S_j_block)
+///   is relative to the group's own eigenvalue scale, not polluted by other groups.
+/// - **Overlapping supports**: penalties in the same coefficient block (e.g. the two
+///   marginal penalties of a tensor-product smooth, which both act on the same k₁k₂
+///   coefficients) are combined before eigendecomposition, so
+///   `(λ₁S₁+λ₂S₂)⁺ ≠ (λ₁S₁)⁺ + (λ₂S₂)⁺` is never violated.
+///
+/// For the common all-disjoint case (each smooth has its own coefficient block), every
+/// group is a single penalty and the formula reduces to the per-penalty decomposition.
+///
+/// ```text
+/// log|S_λ|_+  = Σ_g Σ_{i: dᵢ > τ_g} ln(dᵢ)   where dᵢ = eigenvalue of Σ_{j∈g} λⱼSⱼ
+/// S_λ⁺        = block-diag{ (Σ_{j∈g} λⱼSⱼ)⁺ }  (exact when groups have disjoint support)
+/// M_p         = Σ_g null_dim(Σ_{j∈g} λⱼSⱼ_block)
+/// ```
+fn penalty_eigen(
+    penalty_matrices: &[PenaltyMatrix],
+    lambdas: &Array1<f64>,
+    eps: f64,
+) -> Result<PenaltyEigen, GamlssError> {
+    debug_assert!(!penalty_matrices.is_empty());
+    let p = penalty_matrices[0].0.nrows();
 
-    let d_max = eigvals
+    let mut log_pdet = 0.0_f64;
+    let mut null_dim = 0_usize;
+    let mut pinv = Array2::<f64>::zeros((p, p));
+
+    // Find the non-zero block range for each penalty.
+    let ranges: Vec<(usize, usize)> = penalty_matrices
         .iter()
-        .cloned()
-        .fold(0.0_f64, |acc, x| acc.max(x.abs()));
-    let tau = eps * d_max.max(1.0);
+        .map(|s_j| penalty_nonzero_block_range(&s_j.0))
+        .collect();
 
-    let n = eigvals.len();
-    let mut log_pdet = 0.0;
-    let mut null_dim = 0usize;
-    let mut d_inv = Array1::<f64>::zeros(n);
-    for (i, &di) in eigvals.iter().enumerate() {
-        if di > tau {
-            log_pdet += di.ln();
-            d_inv[i] = 1.0 / di;
-        } else {
-            null_dim += 1;
+    // Process each unique block range exactly once, combining all penalties in that block.
+    let mut processed = vec![false; penalty_matrices.len()];
+
+    for first in 0..penalty_matrices.len() {
+        if processed[first] {
+            continue;
         }
-    }
+        let (start, end) = ranges[first];
+        let block_size = end - start + 1;
 
-    // pinv = Q · diag(d_inv) · Qᵀ. Multiply each column j of Q by d_inv[j],
-    // then post-multiply by Qᵀ.
-    let q_scaled = &eigvecs * &d_inv.view().insert_axis(Axis(0));
-    let pinv = q_scaled.dot(&eigvecs.t());
+        // Collect indices of all penalties sharing this exact block range.
+        let group: Vec<usize> = (first..penalty_matrices.len())
+            .filter(|&k| ranges[k] == (start, end))
+            .collect();
+        for &k in &group {
+            processed[k] = true;
+        }
+
+        // Build the combined scaled block: Σ_{j ∈ group} λ_j · S_j_block.
+        // For a single-penalty group this is just λ_j · S_j_block; for a tensor-product
+        // group this is the anisotropic penalty λ₁(S_x₁⊗I) + λ₂(I⊗S_x₂) restricted to
+        // the shared k₁k₂ coefficient block.
+        let mut combined = Array2::<f64>::zeros((block_size, block_size));
+        for &k in &group {
+            let slice = penalty_matrices[k].0.slice(s![start..=end, start..=end]);
+            combined.scaled_add(lambdas[k], &slice);
+        }
+
+        let (eigvals, eigvecs) = linalg::symmetric_eigh(&combined)?;
+
+        // Per-group relative threshold: relative to the combined block's spectral norm.
+        let d_max = eigvals.iter().cloned().fold(0.0_f64, |a, x| a.max(x));
+        let tau = (eps * d_max).max(1e-300);
+
+        let mut d_inv = Array1::<f64>::zeros(block_size);
+        for i in 0..block_size {
+            let di = eigvals[i];
+            if di > tau {
+                log_pdet += di.ln();
+                d_inv[i] = 1.0 / di;
+            } else {
+                null_dim += 1;
+            }
+        }
+
+        // pinv[start..=end, start..=end] += Q · diag(d_inv) · Qᵀ
+        let q_scaled = &eigvecs * &d_inv.view().insert_axis(Axis(0));
+        let mut sub = pinv.slice_mut(s![start..=end, start..=end]);
+        sub += &q_scaled.dot(&eigvecs.t());
+    }
 
     Ok(PenaltyEigen {
         log_pdet,
         null_dim,
         pinv,
     })
+}
+
+/// Returns the `[start, end]` index range of the contiguous non-zero block in a symmetric
+/// penalty matrix that was embedded into the full coefficient space by the assembler.
+///
+/// The embedder writes exact zeros outside the block, so any non-zero row marks the boundary.
+/// Falls back to `(0, nrows-1)` if the matrix is entirely zero (degenerate).
+fn penalty_nonzero_block_range(s: &Array2<f64>) -> (usize, usize) {
+    let n = s.nrows();
+    let start = (0..n)
+        .find(|&i| s.row(i).iter().any(|&x| x != 0.0))
+        .unwrap_or(0);
+    let end = (0..n)
+        .rev()
+        .find(|&i| s.row(i).iter().any(|&x| x != 0.0))
+        .unwrap_or(n - 1);
+    (start, end)
 }
 
 /// Cold-start heuristic for log λ when no warm start is available.
@@ -630,7 +700,9 @@ mod reml_tests {
         // Order-2 difference penalty on basis size 10 has null space of dim 2
         // (constants and lines).
         let p = create_penalty_matrix(10, 2);
-        let eig = penalty_eigen(&p, REML_RANK_TOL_EPS).unwrap();
+        let pm = PenaltyMatrix(p.clone());
+        let lambdas = arr1(&[1.0_f64]);
+        let eig = penalty_eigen(&[pm], &lambdas, REML_RANK_TOL_EPS).unwrap();
         assert_eq!(
             eig.null_dim, 2,
             "second-order P-spline penalty should have null dim 2"
@@ -766,8 +838,7 @@ mod reml_tests {
             scores.push(score);
 
             let info = fit_pwls_with_grad_info(&x, &z, &w, &ps, &lambdas).unwrap();
-            let s_lambda = weighted_penalty_sum(&lambdas, &ps);
-            let eig = penalty_eigen(&s_lambda, REML_RANK_TOL_EPS).unwrap();
+            let eig = penalty_eigen(&ps, &lambdas, REML_RANK_TOL_EPS).unwrap();
             let mut new_lambdas = lambdas.clone();
             for j in 0..n_penalties {
                 let s_j = &ps[j].0;

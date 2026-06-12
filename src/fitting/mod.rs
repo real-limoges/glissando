@@ -215,7 +215,11 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let lambdas = if penalty_matrices.is_empty() {
             Array1::zeros(0)
         } else {
-            Array1::ones(penalty_matrices.len())
+            // Seed from the trace-ratio heuristic so the first REML/F-S step
+            // starts with a well-conditioned X'WX + S_lambda. lambda=1 can be
+            // too small for high-cardinality bases (e.g. k=20) or models with
+            // prior weights, leaving the system near-singular on the first call.
+            solver::initial_log_lambda(&x_model, &penalty_matrices).mapv(f64::exp)
         };
 
         let n_terms = term_layouts.len();

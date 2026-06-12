@@ -1,6 +1,5 @@
 ---
 source: tests/regression.rs
-assertion_line: 153
 expression: snap
 ---
 converged: true
@@ -20,7 +19,7 @@ edf:
   sigma: "1.0000e0"
 lambdas:
   mu:
-    - "1.0000e-10"
+    - "3.4874e-9"
   sigma: []
 log_likelihood: "-1.5840e2"
 aic: "3.3081e2"
