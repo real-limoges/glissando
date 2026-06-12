@@ -11,7 +11,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
-use crate::distributions::{Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT};
+use crate::distributions::{
+    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
+};
 use crate::ffi::FamilyType;
 use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
@@ -51,6 +53,23 @@ impl PyBinomial {
     #[new]
     fn new(n_trials: Vec<f64>) -> Self {
         Self { n_trials }
+    }
+}
+
+/// Ocat carries `n_categories` state, so it gets a manual `pyclass`.
+#[pyclass(name = "Ocat", frozen)]
+struct PyOcat {
+    n_categories: usize,
+}
+
+#[pymethods]
+impl PyOcat {
+    #[new]
+    fn new(n_categories: usize) -> PyResult<Self> {
+        if !(2..=5).contains(&n_categories) {
+            return Err(PyValueError::new_err("Ocat: n_categories must be 2–5"));
+        }
+        Ok(Self { n_categories })
     }
 }
 
@@ -100,9 +119,12 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyStudentT>>().is_ok() {
         return Ok(FamilyType::StudentT(StudentT::new()));
     }
+    if let Ok(o) = family_obj.extract::<PyRef<PyOcat>>() {
+        return Ok(FamilyType::Ocat(Ocat::new(o.n_categories)));
+    }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), or StudentT()",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), or Ocat(n_categories)",
     ))
 }
 
@@ -110,10 +132,18 @@ fn fit_with_family(
     family: &FamilyType,
     data: &DataSet,
     y: &Array1<f64>,
+    weights: Option<&Array1<f64>>,
     formula: &Formula,
 ) -> PyResult<GamlssModel> {
-    GamlssModel::fit(data, y, formula, family.as_distribution())
-        .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
+    GamlssModel::fit_with_config(
+        data,
+        y,
+        weights,
+        formula,
+        family.as_distribution(),
+        Default::default(),
+    )
+    .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
 }
 
 fn predict_with_family(
@@ -154,18 +184,27 @@ impl PyGamlssModel {
     /// GamlssModel
     ///     Fitted model object
     #[staticmethod]
+    #[pyo3(signature = (data, y, formula, family, weights=None))]
     fn fit(
         data: &Bound<PyDict>,
         y: PyReadonlyArray1<f64>,
         formula: &Bound<PyDict>,
         family: &Bound<PyAny>,
+        weights: Option<PyReadonlyArray1<f64>>,
     ) -> PyResult<Self> {
         let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
+        let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
-        let model = fit_with_family(&family_type, &dataset, &y_array, &rust_formula)?;
+        let model = fit_with_family(
+            &family_type,
+            &dataset,
+            &y_array,
+            w_array.as_ref(),
+            &rust_formula,
+        )?;
 
         Ok(Self {
             inner: model,
@@ -184,15 +223,18 @@ impl PyGamlssModel {
     ///         `tolerance` (float)
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
     #[staticmethod]
+    #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(
         data: &Bound<PyDict>,
         y: PyReadonlyArray1<f64>,
         formula: &Bound<PyDict>,
         family: &Bound<PyAny>,
         config: &Bound<PyDict>,
+        weights: Option<PyReadonlyArray1<f64>>,
     ) -> PyResult<Self> {
         let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
+        let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
@@ -221,6 +263,7 @@ impl PyGamlssModel {
         let model = GamlssModel::fit_with_config(
             &dataset,
             &y_array,
+            w_array.as_ref(),
             &rust_formula,
             family_type.as_distribution(),
             fit_config,
@@ -379,6 +422,28 @@ impl PyGamlssModel {
         }
         Ok(d.into())
     }
+
+    /// Predict the `(n_obs × R)` category-probability matrix for an ordered-categorical model.
+    ///
+    /// Returns a 2D numpy array of shape `(n_obs, R)` where each row sums to 1.
+    /// Raises `RuntimeError` if the model was not fitted with an `Ocat` family.
+    fn predict_class_probabilities<'py>(
+        &self,
+        py: Python<'py>,
+        new_data: &Bound<'_, PyDict>,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let ocat = self.family.as_ocat().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "predict_class_probabilities requires a model fitted with Ocat family",
+            )
+        })?;
+        let dataset = py_dict_to_dataset(new_data)?;
+        let probs = self
+            .inner
+            .predict_class_probabilities(&dataset, ocat)
+            .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
+        Ok(probs.to_pyarray(py))
+    }
 }
 
 #[pymodule]
@@ -391,5 +456,6 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyNegativeBinomial>()?;
     m.add_class::<PyBeta>()?;
     m.add_class::<PyStudentT>()?;
+    m.add_class::<PyOcat>()?;
     Ok(())
 }

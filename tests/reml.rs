@@ -71,7 +71,8 @@ fn reml_fits_gaussian_pspline_end_to_end() {
         criterion: SmoothingCriterion::Reml,
         ..FitConfig::default()
     };
-    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
+    let model =
+        GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), cfg).unwrap();
 
     assert!(model.converged(), "REML fit failed to converge");
 
@@ -97,7 +98,8 @@ fn reml_fits_poisson_pspline_end_to_end() {
         criterion: SmoothingCriterion::Reml,
         ..FitConfig::default()
     };
-    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Poisson::new(), cfg).unwrap();
+    let model =
+        GamlssModel::fit_with_config(&data, &y, None, &formula, &Poisson::new(), cfg).unwrap();
 
     assert!(model.converged(), "REML Poisson fit failed to converge");
     let mu = &model.models["mu"];
@@ -127,6 +129,7 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
     let reml = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -157,6 +160,7 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
     let reml = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -168,6 +172,7 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
     let gcv = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -215,7 +220,8 @@ fn fellner_schall_fits_gaussian_pspline_end_to_end() {
         criterion: SmoothingCriterion::FellnerSchall,
         ..FitConfig::default()
     };
-    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), cfg).unwrap();
+    let model =
+        GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), cfg).unwrap();
 
     assert!(model.converged(), "F-S fit failed to converge");
     let mu = &model.models["mu"];
@@ -238,7 +244,8 @@ fn fellner_schall_fits_poisson_pspline_end_to_end() {
         criterion: SmoothingCriterion::FellnerSchall,
         ..FitConfig::default()
     };
-    let model = GamlssModel::fit_with_config(&data, &y, &formula, &Poisson::new(), cfg).unwrap();
+    let model =
+        GamlssModel::fit_with_config(&data, &y, None, &formula, &Poisson::new(), cfg).unwrap();
 
     assert!(model.converged(), "F-S Poisson fit failed to converge");
     let mu = &model.models["mu"];
@@ -266,6 +273,7 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
     let reml = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -277,6 +285,7 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
     let fs = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -316,6 +325,7 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
     let fs = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -327,6 +337,7 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
     let gcv = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -356,6 +367,7 @@ fn criterion_dispatch_is_observable() {
     let reml = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {
@@ -367,6 +379,7 @@ fn criterion_dispatch_is_observable() {
     let gcv = GamlssModel::fit_with_config(
         &data,
         &y,
+        None,
         &formula,
         &Gaussian::new(),
         FitConfig {

@@ -28,14 +28,25 @@ pub struct WasmGamlssModel {
 #[wasm_bindgen]
 impl WasmGamlssModel {
     /// Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
+    ///
+    /// `weights_json` is an optional JSON array of per-observation prior weights,
+    /// e.g. `"[0.5, 1.0, 1.5]"`.  Pass `null` / `undefined` for unweighted fitting.
     pub fn fit(
         y_json: &str,
         data_json: &str,
         formula_json: &str,
         distribution: &str,
+        weights_json: Option<String>,
     ) -> Result<WasmGamlssModel, JsError> {
-        let (model, family) =
-            json::fit(y_json, data_json, formula_json, distribution, None).map_err(to_js_err)?;
+        let (model, family) = json::fit(
+            y_json,
+            data_json,
+            formula_json,
+            distribution,
+            None,
+            weights_json.as_deref(),
+        )
+        .map_err(to_js_err)?;
         Ok(WasmGamlssModel { model, family })
     }
 
@@ -46,6 +57,7 @@ impl WasmGamlssModel {
         formula_json: &str,
         distribution: &str,
         config_json: &str,
+        weights_json: Option<String>,
     ) -> Result<WasmGamlssModel, JsError> {
         let (model, family) = json::fit(
             y_json,
@@ -53,6 +65,7 @@ impl WasmGamlssModel {
             formula_json,
             distribution,
             Some(config_json),
+            weights_json.as_deref(),
         )
         .map_err(to_js_err)?;
         Ok(WasmGamlssModel { model, family })

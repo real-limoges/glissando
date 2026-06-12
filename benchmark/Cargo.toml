@@ -7,6 +7,14 @@ edition = "2021"
 name = "compare_fit"
 path = "src/bin/compare_fit.rs"
 
+[[bin]]
+name = "spike_ocat"
+path = "src/bin/spike_ocat.rs"
+
+[[bin]]
+name = "fit_ocat"
+path = "src/bin/fit_ocat.rs"
+
 [dependencies]
 glissando = { path = ".." }
 ndarray = "0.17"

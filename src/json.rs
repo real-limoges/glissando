@@ -45,7 +45,7 @@
 //!     "sigma": [{"Intercept": null}]
 //! }"#;
 //!
-//! let (model, family) = json::fit(y, data, formula, "Gaussian", None).unwrap();
+//! let (model, family) = json::fit(y, data, formula, "Gaussian", None, None).unwrap();
 //! assert!(model.converged());
 //!
 //! // Keep the model in memory and predict interactively.
@@ -177,6 +177,7 @@ pub fn fit(
     formula_json: &str,
     distribution: &str,
     config_json: Option<&str>,
+    weights_json: Option<&str>,
 ) -> Result<(GamlssModel, Box<dyn Distribution>), GamlssError> {
     let y = parse_response(y_json)?;
     let data = parse_data(data_json)?;
@@ -186,7 +187,15 @@ pub fn fit(
         Some(c) => parse_config(c)?,
         None => FitConfig::default(),
     };
-    let model = GamlssModel::fit_with_config(&data, &y, &formula, family.as_ref(), config)?;
+    let weights = weights_json.map(parse_response).transpose()?;
+    let model = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        weights.as_ref(),
+        &formula,
+        family.as_ref(),
+        config,
+    )?;
     Ok((model, family))
 }
 
@@ -319,7 +328,7 @@ mod tests {
 
     #[test]
     fn fit_predict_round_trip() {
-        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
+        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
         assert!(model.converged());
 
         let preds = predict(&model, family.as_ref(), r#"{"x": [11.0, 12.0]}"#).unwrap();
@@ -330,7 +339,7 @@ mod tests {
 
     #[test]
     fn unknown_distribution_errors() {
-        assert!(fit(Y, DATA, FORMULA, "Wishart", None).is_err());
+        assert!(fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
     }
 
     #[test]
@@ -342,7 +351,7 @@ mod tests {
 
     #[test]
     fn save_then_load_preserves_coefficients() {
-        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
+        let (model, family) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
         let serialized = model.to_json(family.as_ref()).unwrap();
         let (restored, restored_family) = load(&serialized).unwrap();
         assert_eq!(restored_family.name(), "Gaussian");

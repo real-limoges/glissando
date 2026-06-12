@@ -148,7 +148,8 @@ fn snapshot_gaussian_pspline() {
         .with_terms("mu", vec![Term::Intercept, pspline("x", 6)])
         .with_terms("sigma", vec![Term::Intercept]);
     let model =
-        GamlssModel::fit_with_config(&data, &y, &formula, &Gaussian::new(), gcv_config()).unwrap();
+        GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), gcv_config())
+            .unwrap();
     let snap = ModelSnapshot::from_fit(&model, &Gaussian::new(), &y);
     insta::assert_yaml_snapshot!(snap);
 }

@@ -18,7 +18,7 @@ const FORMULA: &str = r#"{
 
 #[test]
 fn fit_then_predict_round_trip() {
-    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     assert!(model.converged());
 
     let preds_json =
@@ -33,13 +33,13 @@ fn fit_then_predict_round_trip() {
 #[test]
 fn fit_with_config_json() {
     let cfg = r#"{"max_iterations": 50, "tolerance": 0.001, "criterion": "gcv"}"#;
-    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", Some(cfg)).expect("fit");
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", Some(cfg), None).expect("fit");
     assert!(model.converged());
 }
 
 #[test]
 fn predict_with_se_shape() {
-    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let se_json =
         json::predict_with_se(&model, family.as_ref(), r#"{"x": [2.0, 4.0]}"#).expect("se");
     let parsed: serde_json::Value = serde_json::from_str(&se_json).unwrap();
@@ -51,7 +51,7 @@ fn predict_with_se_shape() {
 
 #[test]
 fn diagnostics_expose_per_term_edf_and_warnings_field() {
-    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let diag_json = json::diagnostics(&model).expect("diagnostics");
     let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
     assert!(diag["converged"].as_bool().unwrap());
@@ -62,7 +62,7 @@ fn diagnostics_expose_per_term_edf_and_warnings_field() {
 
 #[test]
 fn save_then_load_preserves_predictions() {
-    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let before = json::predict(&model, family.as_ref(), r#"{"x": [6.0]}"#).unwrap();
 
     let blob = model.to_json(family.as_ref()).expect("to_json");
@@ -74,8 +74,8 @@ fn save_then_load_preserves_predictions() {
 
 #[test]
 fn errors_surface_as_gamlss_error() {
-    assert!(json::fit(Y, DATA, FORMULA, "Wishart", None).is_err());
-    assert!(json::fit("not json", DATA, FORMULA, "Gaussian", None).is_err());
+    assert!(json::fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
+    assert!(json::fit("not json", DATA, FORMULA, "Gaussian", None, None).is_err());
     assert!(json::parse_data(r#"{"x": [1.0], "z": [1.0, 2.0]}"#).is_err()); // ragged columns
 }
 
@@ -85,7 +85,7 @@ fn errors_surface_as_gamlss_error() {
 
 #[test]
 fn design_matrix_json_shape_matches_data_and_coefficients() {
-    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
 
     let dm_json = json::design_matrix(&model, DATA, "mu").expect("design_matrix");
     let dm: Vec<Vec<f64>> = serde_json::from_str(&dm_json).unwrap();
@@ -109,7 +109,7 @@ fn design_matrix_json_shape_matches_data_and_coefficients() {
 
 #[test]
 fn covariance_matrix_json_is_square_and_symmetric() {
-    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let cv_json = json::covariance_matrix(&model, "mu").expect("covariance_matrix");
     let cv: Vec<Vec<f64>> = serde_json::from_str(&cv_json).unwrap();
 
@@ -128,7 +128,7 @@ fn covariance_matrix_json_is_square_and_symmetric() {
 
 #[test]
 fn term_index_map_json_is_contiguous_and_sums_to_n_coeffs() {
-    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let map_json = json::term_index_map(&model, "mu").expect("term_index_map");
     let map: std::collections::BTreeMap<String, [usize; 2]> =
         serde_json::from_str(&map_json).unwrap();
@@ -144,7 +144,7 @@ fn term_index_map_json_is_contiguous_and_sums_to_n_coeffs() {
 
 #[test]
 fn predict_samples_seeded_json_is_reproducible() {
-    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None).expect("fit");
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let new_x = r#"{"x": [5.0, 6.0, 7.0]}"#;
 
     let run1 = json::predict_samples(&model, family.as_ref(), new_x, 10, Some(42)).unwrap();

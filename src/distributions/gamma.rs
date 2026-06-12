@@ -33,6 +33,23 @@ impl Distribution for Gamma {
         }
     }
 
+    /// Gamma σ is the coefficient of variation CV = SD(Y)/E[Y], not the raw SD.
+    /// The default `initial_value` returns `y.std()`, which is wildly wrong for
+    /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
+    /// A bad σ_init causes REML to over-penalize the σ smooth on the first RS
+    /// iteration and warm-start into a full-collapse trap.
+    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        match param {
+            "mu" => y.mean().expect("validate_inputs rejects empty y"),
+            "sigma" => {
+                let mu = y.mean().expect("validate_inputs rejects empty y");
+                let cv = y.std(1.0) / mu.max(MIN_POSITIVE);
+                cv.clamp(0.05, 10.0)
+            }
+            _ => 0.1,
+        }
+    }
+
     fn derivatives(
         &self,
         y: &Array1<f64>,

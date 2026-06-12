@@ -57,9 +57,15 @@ pub(super) struct Update {
 
 /// Run one Fisher-scoring step on `target_param`, given the current state of every
 /// parameter in `models`.
+///
+/// `prior_weights` is an optional per-row scale applied to each observation's
+/// likelihood contribution.  When `Some(w)`, the solve weight becomes
+/// `w_solve_i = prior_i · safe_w_i`; the working response `z` always uses only
+/// `safe_w_i` in its denominator so the IRLS step size is not distorted.
 pub(super) fn step<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
     models: &IndexMap<String, FittingParameter>,
     target_param: &str,
     criterion: SmoothingCriterion,
@@ -94,12 +100,23 @@ pub(super) fn step<D: Distribution + ?Sized>(
     let mut w = Array1::<f64>::zeros(n);
     let mut weight_floor_hits = 0usize;
     let mut step_cap_hits = 0usize;
+    // When prior weights are absent, treat every row as weight 1 by using a temporary
+    // ones array.  This lets the Zip stay uniform without a per-element branch.
+    let ones;
+    let pw: &Array1<f64> = match prior_weights {
+        Some(pw) => pw,
+        None => {
+            ones = Array1::ones(n);
+            &ones
+        }
+    };
     Zip::from(&target.eta)
         .and(deriv_u)
         .and(deriv_w)
+        .and(pw)
         .and(&mut z)
         .and(&mut w)
-        .for_each(|&eta_i, &u_i, &w_i, z_out, w_out| {
+        .for_each(|&eta_i, &u_i, &w_i, &prior_i, z_out, w_out| {
             let safe_w = if w_i < MIN_WEIGHT {
                 weight_floor_hits += 1;
                 MIN_WEIGHT
@@ -116,8 +133,11 @@ pub(super) fn step<D: Distribution + ?Sized>(
             } else {
                 step
             };
+            // z uses safe_w (not safe_w * prior_i): the IRLS step size is a property
+            // of log-likelihood curvature and must not be scaled by the observation
+            // weight.  Only w_solve carries the prior factor into the normal equations.
             *z_out = eta_i + clipped;
-            *w_out = safe_w;
+            *w_out = prior_i * safe_w;
         });
 
     // 4. Optimize λ via the configured criterion (GCV or REML).  Warm-start from
@@ -266,7 +286,7 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n)); // σ = 1
 
-        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert!(
             (update.beta.0[0] - 3.0).abs() < 1e-6,
             "expected β ≈ 3.0 (ȳ), got {}",
@@ -283,7 +303,7 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
-        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert!(update.max_diff.is_finite() && update.max_diff > 0.0);
         assert!(update.eta_change.is_finite() && update.eta_change > 0.0);
         assert!(update.lambda_change.is_finite());
@@ -300,7 +320,7 @@ mod tests {
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
         let beta_before = models["mu"].beta.0.clone();
-        let _ = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let _ = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         let beta_after = &models["mu"].beta.0;
         assert_eq!(beta_before, *beta_after);
     }
@@ -347,7 +367,7 @@ mod tests {
         models.insert("mu".to_string(), mu);
         models.insert("sigma".to_string(), sigma);
 
-        let update = step(&Gaussian, &y, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert_eq!(update.lambdas.len(), 1);
         assert!(update.lambdas[0].is_finite() && update.lambdas[0] > 0.0);
         assert!(update.edf > 0.0 && update.edf <= n_splines as f64);
@@ -362,7 +382,15 @@ mod tests {
         models.insert("mu".to_string(), intercept_only(0.0, n));
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
-        let err = step(&Gaussian, &y, &models, "zeta", SmoothingCriterion::Gcv).unwrap_err();
+        let err = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            "zeta",
+            SmoothingCriterion::Gcv,
+        )
+        .unwrap_err();
         // family.derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
         assert!(format!("{}", err).contains("zeta"));
     }

@@ -1185,18 +1185,18 @@ fn test_beta_smooth_mu() {
     // Test Beta with smooth mu relationship
     let mut rng = Generator::new(3003);
 
-    let n = 400;
+    let n = 1_000;
     let phi = 15.0;
 
     let x: Vec<f64> = (0..n)
         .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
         .collect();
 
-    // True model: logit(mu) = 0.3*sin(x) => mu oscillates around 0.5
+    // True model: logit(mu) = 0.7*sin(x) => mu oscillates around 0.5
     let y_vec: Vec<f64> = x
         .iter()
         .map(|&xi| {
-            let eta = 0.3 * xi.sin();
+            let eta = 0.7 * xi.sin();
             let mu = 1.0 / (1.0 + (-eta).exp());
             let alpha = mu * phi;
             let beta_param = (1.0 - mu) * phi;

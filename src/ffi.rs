@@ -8,7 +8,7 @@
 #![cfg(any(feature = "python", feature = "wasm"))]
 
 use crate::distributions::{
-    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
+    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
 };
 use crate::error::GamlssError;
 
@@ -20,11 +20,13 @@ use crate::error::GamlssError;
 pub(crate) enum FamilyType {
     Gaussian(Gaussian),
     Poisson(Poisson),
-    // Binomial is only constructed by the python binding (n_trials state can't be
+    // Binomial and Ocat are only constructed by the python binding (their state can't be
     // serialized into the wasm name-based JSON dispatch). Suppress dead_code warnings
     // when only the wasm feature is enabled.
     #[cfg_attr(not(feature = "python"), allow(dead_code))]
     Binomial(Binomial),
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
+    Ocat(Ocat),
     Gamma(Gamma),
     NegativeBinomial(NegativeBinomial),
     Beta(Beta),
@@ -38,10 +40,21 @@ impl FamilyType {
             FamilyType::Gaussian(d) => d,
             FamilyType::Poisson(d) => d,
             FamilyType::Binomial(d) => d,
+            FamilyType::Ocat(d) => d,
             FamilyType::Gamma(d) => d,
             FamilyType::NegativeBinomial(d) => d,
             FamilyType::Beta(d) => d,
             FamilyType::StudentT(d) => d,
+        }
+    }
+
+    /// Return a reference to the inner `Ocat` if this is an `Ocat` variant.
+    #[cfg(feature = "python")]
+    pub(crate) fn as_ocat(&self) -> Option<&Ocat> {
+        if let FamilyType::Ocat(d) = self {
+            Some(d)
+        } else {
+            None
         }
     }
 

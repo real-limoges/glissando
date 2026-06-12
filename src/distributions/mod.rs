@@ -139,6 +139,7 @@ mod binomial;
 mod gamma;
 mod gaussian;
 mod negative_binomial;
+mod ocat;
 mod poisson;
 mod student_t;
 
@@ -147,13 +148,14 @@ pub use binomial::Binomial;
 pub use gamma::Gamma;
 pub use gaussian::Gaussian;
 pub use negative_binomial::NegativeBinomial;
+pub use ocat::Ocat;
 pub use poisson::Poisson;
 pub use student_t::StudentT;
 
 /// Construct a stateless distribution from its name (e.g. for WASM JSON I/O).
 ///
-/// Excludes [`Binomial`] because it requires `n_trials` state that cannot be recovered
-/// from the name alone.
+/// Excludes [`Binomial`] and [`Ocat`] because they carry state (`n_trials` /
+/// `n_categories`) that cannot be recovered from the name string alone.
 ///
 /// # Errors
 ///
