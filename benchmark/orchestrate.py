@@ -162,6 +162,57 @@ def gen_beta_linear(rng, n):
     return {"y": y, "x": x}
 
 
+def _listing_weights(rng, n):
+    """Simulate listing-level weights: 1 / n_obs_per_listing.
+
+    Groups n rows into listings of size 1–4; each row's weight is the
+    reciprocal of its listing's size so every listing contributes equally.
+    """
+    weights = np.ones(n)
+    i = 0
+    while i < n:
+        group_size = rng.integers(1, 5)  # 1..4 rows per listing
+        end = min(i + group_size, n)
+        w = 1.0 / (end - i)
+        weights[i:end] = w
+        i = end
+    return weights
+
+
+def gen_b1_weighted(rng, n):
+    """B1: Gaussian with five smooths + binary dummy, weights=1/n_obs_per_listing."""
+    x1 = np.linspace(0, 2 * np.pi, n)
+    x2 = np.linspace(0, 1, n)
+    x3 = np.linspace(-1, 1, n)
+    x4 = np.linspace(0, 4, n)
+    x5 = np.linspace(0, 3, n)
+    d1 = (rng.random(n) > 0.5).astype(float)
+    mu = (
+        np.sin(x1)
+        + 0.4 * x2 ** 2
+        + 0.3 * x3
+        + 0.2 * np.cos(x4)
+        + 0.1 * x5
+        + 0.5 * d1
+        + 2.0
+    )
+    y = rng.normal(mu, scale=0.5)
+    weights = _listing_weights(rng, n)
+    return {"y": y, "x1": x1, "x2": x2, "x3": x3, "x4": x4, "x5": x5, "d1": d1, "weights": weights}
+
+
+def gen_b2_weighted(rng, n):
+    """B2: StudentT with four smooths, weights=1/n_obs_per_listing."""
+    x1 = np.linspace(0, 2 * np.pi, n)
+    x2 = np.linspace(0, 1, n)
+    x3 = np.linspace(-1, 1, n)
+    x4 = np.linspace(0, 4, n)
+    mu = np.sin(x1) + 0.4 * x2 ** 2 + 0.3 * x3 + 0.2 * np.cos(x4) + 2.0
+    y = mu + rng.standard_t(df=5.0, size=n)
+    weights = _listing_weights(rng, n)
+    return {"y": y, "x1": x1, "x2": x2, "x3": x3, "x4": x4, "weights": weights}
+
+
 SCENARIOS: list[Scenario] = [
     Scenario("gaussian_linear", False, True, None, gen_gaussian_linear),
     Scenario("gaussian_heteroskedastic", False, False, None, gen_gaussian_heteroskedastic),
@@ -181,6 +232,10 @@ SCENARIOS: list[Scenario] = [
     # Appended at the end: per-scenario seeds are spawned in iteration order, so
     # adding here leaves every existing scenario's generated data unchanged.
     Scenario("gaussian_sigma_smooth", True, True, None, gen_gaussian_sigma_smooth),
+    # B1: Gaussian + prior weights (5 smooths + binary dummy); mgcv-capable via gam(..., weights=w).
+    Scenario("b1_weighted_gaussian", True, True, None, gen_b1_weighted),
+    # B2: StudentT + prior weights (4 smooths); mgcv needs gamlss so mgcv_capable=False.
+    Scenario("b2_weighted_studentt", True, False, None, gen_b2_weighted),
 ]
 
 

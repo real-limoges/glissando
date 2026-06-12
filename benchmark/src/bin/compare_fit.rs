@@ -828,6 +828,148 @@ fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
     }
 }
 
+fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
+    // B1 shape: Gaussian, 5 P-spline smooths + binary linear term, listing-level weights.
+    let start = Instant::now();
+
+    let y = extract_column(df, "y");
+    let weights = extract_column(df, "weights");
+    let mut data = DataSet::new();
+    for col in ["x1", "x2", "x3", "x4", "x5", "d1"] {
+        data.insert_column(col, extract_column(df, col));
+    }
+
+    let mk_smooth = |col: &str| {
+        Term::Smooth(Smooth::PSpline1D {
+            col_name: col.to_string(),
+            n_splines: 20,
+            degree: 3,
+            penalty_order: 2,
+        })
+    };
+
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                Term::Intercept,
+                mk_smooth("x1"),
+                mk_smooth("x2"),
+                mk_smooth("x3"),
+                mk_smooth("x4"),
+                mk_smooth("x5"),
+                Term::Linear {
+                    col_name: "d1".to_string(),
+                },
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept]);
+
+    match GamlssModel::fit_weighted(&data, &y, &weights, &formula, &Gaussian::new()) {
+        Ok(model) => {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+            let mut coefficients = HashMap::new();
+            coefficients.insert("mu".to_string(), model.models["mu"].coefficients.0.to_vec());
+            coefficients.insert(
+                "log_sigma".to_string(),
+                model.models["sigma"].coefficients.0.to_vec(),
+            );
+
+            let mut edf = HashMap::new();
+            edf.insert("mu".to_string(), model.models["mu"].edf);
+            edf.insert("sigma".to_string(), model.models["sigma"].edf);
+
+            FitResult {
+                converged: model.converged(),
+                iterations: model.diagnostics.iterations,
+                fit_time_ms: elapsed,
+                coefficients,
+                fitted_mu: model.models["mu"].fitted_values.to_vec(),
+                fitted_sigma: model.models["sigma"].fitted_values.to_vec(),
+                edf,
+                log_likelihood: None,
+                aic: None,
+                error: None,
+            }
+        }
+        Err(e) => error_result(start, e),
+    }
+}
+
+fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
+    // B2 shape: StudentT, 4 P-spline smooths, listing-level weights.
+    let start = Instant::now();
+
+    let y = extract_column(df, "y");
+    let weights = extract_column(df, "weights");
+    let mut data = DataSet::new();
+    for col in ["x1", "x2", "x3", "x4"] {
+        data.insert_column(col, extract_column(df, col));
+    }
+
+    let mk_smooth = |col: &str| {
+        Term::Smooth(Smooth::PSpline1D {
+            col_name: col.to_string(),
+            n_splines: 20,
+            degree: 3,
+            penalty_order: 2,
+        })
+    };
+
+    let formula = Formula::new()
+        .with_terms(
+            "mu",
+            vec![
+                mk_smooth("x1"),
+                mk_smooth("x2"),
+                mk_smooth("x3"),
+                mk_smooth("x4"),
+            ],
+        )
+        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms("nu", vec![Term::Intercept]);
+
+    match GamlssModel::fit_weighted(&data, &y, &weights, &formula, &StudentT::new()) {
+        Ok(model) => {
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+            let mut coefficients = HashMap::new();
+            coefficients.insert(
+                "mu_smooth".to_string(),
+                model.models["mu"].coefficients.0.to_vec(),
+            );
+            coefficients.insert(
+                "log_sigma".to_string(),
+                model.models["sigma"].coefficients.0.to_vec(),
+            );
+            coefficients.insert(
+                "log_nu".to_string(),
+                model.models["nu"].coefficients.0.to_vec(),
+            );
+
+            let mut edf = HashMap::new();
+            edf.insert("mu".to_string(), model.models["mu"].edf);
+            edf.insert("sigma".to_string(), model.models["sigma"].edf);
+            edf.insert("nu".to_string(), model.models["nu"].edf);
+
+            FitResult {
+                converged: model.converged(),
+                iterations: model.diagnostics.iterations,
+                fit_time_ms: elapsed,
+                coefficients,
+                fitted_mu: model.models["mu"].fitted_values.to_vec(),
+                fitted_sigma: model.models["sigma"].fitted_values.to_vec(),
+                edf,
+                log_likelihood: None,
+                aic: None,
+                error: None,
+            }
+        }
+        Err(e) => error_result(start, e),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -883,6 +1025,8 @@ fn main() {
         "negative_binomial_linear" => fit_negative_binomial_linear(&df),
         "negative_binomial_smooth" => fit_negative_binomial_smooth(&df),
         "beta_linear" => fit_beta_linear(&df),
+        "b1_weighted_gaussian" => fit_b1_weighted_gaussian(&df),
+        "b2_weighted_studentt" => fit_b2_weighted_studentt(&df),
         other => FitResult {
             converged: false,
             iterations: 0,

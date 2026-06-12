@@ -172,6 +172,7 @@ pub(super) struct FittingParameter {
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
     formula: &Formula,
     family: &D,
     config: &FitConfig,
@@ -248,7 +249,14 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let mut all_converged = true;
 
         for param_name in family.parameters() {
-            let update = scoring::step(family, y, &models, param_name, config.criterion)?;
+            let update = scoring::step(
+                family,
+                y,
+                prior_weights,
+                &models,
+                param_name,
+                config.criterion,
+            )?;
             if update.max_diff > max_diff {
                 max_diff = update.max_diff;
             }

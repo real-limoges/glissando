@@ -94,10 +94,43 @@ impl GamlssModel {
         formula: &Formula,
         family: &D,
     ) -> Result<Self, GamlssError> {
-        Self::fit_with_config(data, y, formula, family, FitConfig::default())
+        Self::fit_with_config(data, y, None, formula, family, FitConfig::default())
     }
 
-    /// Fits a GAMLSS model with custom iteration limits and tolerance.
+    /// Fits a GAMLSS model with per-observation prior weights and default configuration.
+    ///
+    /// Each observation's likelihood contribution is scaled by its corresponding weight
+    /// before fitting.  This replicates `mgcv::bam(..., weights=w)` semantics: the
+    /// prior weights multiply the IRLS working weights (they do not replace them).
+    ///
+    /// `weights` must be finite, non-negative, and the same length as `y`.  A weight
+    /// of zero effectively excludes that observation.
+    ///
+    /// # Errors
+    ///
+    /// Same error set as [`GamlssModel::fit`], plus [`GamlssError::Input`] if the
+    /// weights vector fails validation.
+    pub fn fit_weighted<D: Distribution + ?Sized>(
+        data: &DataSet,
+        y: &Array1<f64>,
+        weights: &Array1<f64>,
+        formula: &Formula,
+        family: &D,
+    ) -> Result<Self, GamlssError> {
+        Self::fit_with_config(
+            data,
+            y,
+            Some(weights),
+            formula,
+            family,
+            FitConfig::default(),
+        )
+    }
+
+    /// Fits a GAMLSS model with custom iteration limits, tolerance, and optional prior weights.
+    ///
+    /// `weights` follows the same semantics as [`GamlssModel::fit_weighted`].  Pass
+    /// `None` for unweighted fitting (equivalent to all-ones weights).
     ///
     /// # Errors
     ///
@@ -105,13 +138,15 @@ impl GamlssModel {
     pub fn fit_with_config<D: Distribution + ?Sized>(
         data: &DataSet,
         y: &Array1<f64>,
+        weights: Option<&Array1<f64>>,
         formula: &Formula,
         family: &D,
         config: FitConfig,
     ) -> Result<Self, GamlssError> {
-        validate_inputs(y, data, formula, family)?;
+        validate_inputs(y, data, formula, family, weights)?;
 
-        let (fitted_models, diagnostics) = fitting::fit_gamlss(data, y, formula, family, &config)?;
+        let (fitted_models, diagnostics) =
+            fitting::fit_gamlss(data, y, weights, formula, family, &config)?;
 
         Ok(Self {
             models: fitted_models,

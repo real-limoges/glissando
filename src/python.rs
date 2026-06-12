@@ -110,10 +110,18 @@ fn fit_with_family(
     family: &FamilyType,
     data: &DataSet,
     y: &Array1<f64>,
+    weights: Option<&Array1<f64>>,
     formula: &Formula,
 ) -> PyResult<GamlssModel> {
-    GamlssModel::fit(data, y, formula, family.as_distribution())
-        .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
+    GamlssModel::fit_with_config(
+        data,
+        y,
+        weights,
+        formula,
+        family.as_distribution(),
+        Default::default(),
+    )
+    .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))
 }
 
 fn predict_with_family(
@@ -154,18 +162,27 @@ impl PyGamlssModel {
     /// GamlssModel
     ///     Fitted model object
     #[staticmethod]
+    #[pyo3(signature = (data, y, formula, family, weights=None))]
     fn fit(
         data: &Bound<PyDict>,
         y: PyReadonlyArray1<f64>,
         formula: &Bound<PyDict>,
         family: &Bound<PyAny>,
+        weights: Option<PyReadonlyArray1<f64>>,
     ) -> PyResult<Self> {
         let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
+        let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
-        let model = fit_with_family(&family_type, &dataset, &y_array, &rust_formula)?;
+        let model = fit_with_family(
+            &family_type,
+            &dataset,
+            &y_array,
+            w_array.as_ref(),
+            &rust_formula,
+        )?;
 
         Ok(Self {
             inner: model,
@@ -184,15 +201,18 @@ impl PyGamlssModel {
     ///         `tolerance` (float)
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
     #[staticmethod]
+    #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(
         data: &Bound<PyDict>,
         y: PyReadonlyArray1<f64>,
         formula: &Bound<PyDict>,
         family: &Bound<PyAny>,
         config: &Bound<PyDict>,
+        weights: Option<PyReadonlyArray1<f64>>,
     ) -> PyResult<Self> {
         let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
+        let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
@@ -221,6 +241,7 @@ impl PyGamlssModel {
         let model = GamlssModel::fit_with_config(
             &dataset,
             &y_array,
+            w_array.as_ref(),
             &rust_formula,
             family_type.as_distribution(),
             fit_config,

@@ -232,6 +232,35 @@ fit_gaussian_sigma_smooth <- function(df, output) {
   write_json(result, output, auto_unbox = TRUE, pretty = TRUE, na = "null")
 }
 
+# ----- B1: Gaussian + prior weights -----------------------------------------------
+# Replicates mgcv::bam(..., weights=w) semantics for the B1 listing-weighted model.
+# Five P-spline smooths + one binary linear term; weights=1/n_obs_per_listing.
+
+fit_b1_weighted_gaussian <- function(df, output) {
+  start <- Sys.time()
+  m <- gam(
+    y ~ s(x1, bs = "ps", k = 20) +
+        s(x2, bs = "ps", k = 20) +
+        s(x3, bs = "ps", k = 20) +
+        s(x4, bs = "ps", k = 20) +
+        s(x5, bs = "ps", k = 20) +
+        d1,
+    data    = df,
+    weights = df$weights,
+    family  = gaussian(),
+    method  = "REML"
+  )
+  emit(
+    output, m,
+    coefficients = list(
+      mu        = unname(coef(m)),
+      log_sigma = list(0.5 * log(m$sig2))
+    ),
+    edf = list(mu = sum(m$edf), sigma = 1.0),
+    fit_time_ms = elapsed_ms(start)
+  )
+}
+
 # ----- Dispatch -------------------------------------------------------------------
 
 dispatch <- list(
@@ -247,7 +276,8 @@ dispatch <- list(
   gamma_smooth              = fit_gamma_smooth,
   negative_binomial_linear  = fit_negative_binomial_linear,
   negative_binomial_smooth  = fit_negative_binomial_smooth,
-  beta_linear               = fit_beta_linear
+  beta_linear               = fit_beta_linear,
+  b1_weighted_gaussian      = fit_b1_weighted_gaussian
 )
 
 if (is.null(dispatch[[opts$scenario]])) {
