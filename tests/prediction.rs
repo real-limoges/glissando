@@ -153,7 +153,7 @@ fn test_posterior_samples() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Get posterior samples for mu
-    let samples = model.posterior_samples("mu", 100).unwrap();
+    let samples = model.posterior_samples("mu", 100, None).unwrap();
 
     assert_eq!(samples.len(), 100, "Should have 100 samples");
 
@@ -193,7 +193,9 @@ fn test_predict_samples() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Get prediction samples
-    let pred_samples = model.predict_samples(&data, &Gaussian::new(), 50).unwrap();
+    let pred_samples = model
+        .predict_samples(&data, &Gaussian::new(), 50, None)
+        .unwrap();
 
     // Check mu predictions
     let mu_samples = &pred_samples["mu"];
@@ -335,7 +337,7 @@ fn predict_samples_shape_matches_request_for_poisson() {
 
     for &n_samples in &[1usize, 10, 100] {
         let samples = model
-            .predict_samples(&data, &Poisson::new(), n_samples)
+            .predict_samples(&data, &Poisson::new(), n_samples, None)
             .unwrap();
         let mu_samples = &samples["mu"];
         assert_eq!(mu_samples.len(), n_samples, "outer dim should be n_samples");
@@ -343,6 +345,236 @@ fn predict_samples_shape_matches_request_for_poisson() {
             assert_eq!(s.len(), n, "inner dim should be n_obs");
             // Log link guarantees positive predictions.
             assert!(s.iter().all(|v| *v > 0.0 && v.is_finite()));
+        }
+    }
+}
+
+// ============================================================================
+// Guide 1 — design_matrix / covariance_matrix / term_index_map / seed
+// ============================================================================
+
+/// design_matrix identity: X · β must equal the fitted linear predictor on
+/// the training data (confirming the exported matrix is the fit-time one).
+#[test]
+fn design_matrix_dot_beta_equals_eta() {
+    let mut rng = Generator::new(77);
+    let n = 80;
+    let (y, data) = rng.linear_gaussian(n, 1.5, 3.0, 0.8);
+
+    // Intercept + CR spline (safe combination — no redundant linear term).
+    let mut formula = Formula::new();
+    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 8)]);
+    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let x = model.design_matrix(&data, "mu").unwrap();
+    let beta = &model.models["mu"].coefficients.0;
+    let eta_exported = x.dot(beta);
+    let eta_fitted = &model.models["mu"].eta;
+
+    assert_eq!(eta_exported.len(), n);
+    for i in 0..n {
+        let diff = (eta_exported[i] - eta_fitted[i]).abs();
+        assert!(
+            diff < 1e-9,
+            "X·β[{i}] = {} but fitted η = {} (diff = {})",
+            eta_exported[i],
+            eta_fitted[i],
+            diff
+        );
+    }
+}
+
+/// covariance_matrix is symmetric and positive-definite.
+///
+/// Symmetry is checked directly. PD is confirmed indirectly: `posterior_samples`
+/// internally does a Cholesky factorization and returns `PosteriorNotPositiveDefinite`
+/// if it fails — so a successful call is our PD certificate.
+#[test]
+fn covariance_matrix_is_symmetric_and_psd() {
+    let mut rng = Generator::new(88);
+    let (y, data) = rng.linear_gaussian(60, 2.0, 1.0, 0.5);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    for param in &["mu", "sigma"] {
+        let v = model.covariance_matrix(param).unwrap();
+        let mat = &v.0;
+        let p = mat.nrows();
+        assert_eq!(mat.ncols(), p, "covariance must be square for {param}");
+
+        // Symmetry: V[i,j] ≈ V[j,i]
+        for i in 0..p {
+            for j in 0..p {
+                let diff = (mat[[i, j]] - mat[[j, i]]).abs();
+                assert!(
+                    diff < 1e-10,
+                    "V[{i},{j}] != V[{j},{i}] for {param}: diff={diff}"
+                );
+            }
+        }
+
+        // PD: posterior_samples does Cholesky internally; success proves the matrix is PD.
+        model
+            .posterior_samples(param, 1, Some(0))
+            .expect("covariance must be PD");
+    }
+}
+
+/// term_index_map is non-overlapping, contiguous, starts at 0, and the total
+/// width equals the coefficient count and design-matrix column count.
+#[test]
+fn term_index_map_is_contiguous_and_complete() {
+    let mut rng = Generator::new(55);
+    let n = 100;
+    let (y, data) = rng.linear_gaussian(n, 2.0, 4.0, 1.0);
+
+    let mut formula = Formula::new();
+    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 7)]);
+    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    for param in &["mu", "sigma"] {
+        let blocks = model.term_index_map(param).unwrap();
+        let n_coeffs = model.models[*param].coefficients.0.len();
+        let x_ncols = model.design_matrix(&data, param).unwrap().ncols();
+
+        assert!(
+            !blocks.is_empty(),
+            "term_blocks must not be empty for {param}"
+        );
+        // Starts at 0
+        assert_eq!(
+            blocks[0].1, 0,
+            "first block must start at col 0 for {param}"
+        );
+        // Contiguous and non-overlapping
+        for i in 1..blocks.len() {
+            assert_eq!(
+                blocks[i].1,
+                blocks[i - 1].2,
+                "block {i} start ({}) != block {} end ({}) for {param}",
+                blocks[i].1,
+                i - 1,
+                blocks[i - 1].2
+            );
+        }
+        // Total width == n_coeffs == design matrix column count
+        let total: usize = blocks.iter().map(|(_, f, l)| l - f).sum();
+        assert_eq!(
+            total, n_coeffs,
+            "sum of block widths != n_coeffs for {param}"
+        );
+        assert_eq!(
+            total, x_ncols,
+            "sum of block widths != design_matrix ncols for {param}"
+        );
+    }
+}
+
+/// Linear term name: `Term::Linear { col_name: "x" }` → `"x"`.
+/// (Tested separately since combining Linear + CrSpline on the same column
+/// causes collinearity in a real fit.)
+#[test]
+fn linear_term_name_is_col_name() {
+    use glissando::Term;
+    let t = Term::Linear {
+        col_name: "my_var".to_string(),
+    };
+    assert_eq!(t.term_name(), "my_var");
+    let intercept = Term::Intercept;
+    assert_eq!(intercept.term_name(), "(intercept)");
+}
+
+/// term_name strings match expected mgcv-style labels.
+#[test]
+fn term_name_strings_are_correct() {
+    let mut rng = Generator::new(66);
+    let n = 40;
+    let (y, data) = rng.linear_gaussian(n, 1.0, 1.0, 0.5);
+
+    // Add a group column for random effect
+    let groups: Array1<f64> = Array1::from_iter((0..n).map(|i| (i % 5) as f64));
+    let mut data2 = data.clone();
+    data2.insert_column("group", groups);
+
+    let mut formula = Formula::new();
+    formula.add_terms(
+        "mu".to_string(),
+        vec![
+            Term::Intercept,
+            cr_spline("x", 6),
+            Term::Smooth(glissando::Smooth::RandomEffect {
+                col_name: "group".to_string(),
+            }),
+        ],
+    );
+    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    let model = GamlssModel::fit(&data2, &y, &formula, &Gaussian::new()).unwrap();
+
+    let blocks = model.term_index_map("mu").unwrap();
+    let names: Vec<&str> = blocks.iter().map(|(n, _, _)| n.as_str()).collect();
+    assert_eq!(names[0], "(intercept)");
+    assert_eq!(names[1], "s(x)");
+    assert_eq!(names[2], "s(group)");
+
+    let sigma_blocks = model.term_index_map("sigma").unwrap();
+    assert_eq!(sigma_blocks[0].0, "(intercept)");
+}
+
+/// Seeded posterior: same seed → identical samples. No seed → differs (probabilistically).
+#[test]
+fn seeded_predict_samples_are_reproducible() {
+    let mut rng = Generator::new(321);
+    let (y, data) = rng.linear_gaussian(50, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let n_samples = 20;
+    let seed = Some(42u64);
+
+    let run1 = model
+        .predict_samples(&data, &Gaussian::new(), n_samples, seed)
+        .unwrap();
+    let run2 = model
+        .predict_samples(&data, &Gaussian::new(), n_samples, seed)
+        .unwrap();
+
+    // Same seed → identical arrays.
+    for s in 0..n_samples {
+        for v in 0..run1["mu"][s].len() {
+            assert_eq!(
+                run1["mu"][s][v], run2["mu"][s][v],
+                "seeded runs differ at sample {s}, obs {v}"
+            );
+        }
+    }
+
+    // No seed → different (with overwhelming probability for 20 samples × 50 obs).
+    let run_unseeded = model
+        .predict_samples(&data, &Gaussian::new(), n_samples, None)
+        .unwrap();
+    let all_equal = run1["mu"]
+        .iter()
+        .zip(run_unseeded["mu"].iter())
+        .all(|(a, b)| a.iter().zip(b.iter()).all(|(x, y)| x == y));
+    assert!(!all_equal, "unseeded run should differ from seeded run");
+}
+
+/// Same test through posterior_samples (coefficient-space samples).
+#[test]
+fn seeded_posterior_samples_are_reproducible() {
+    let mut rng = Generator::new(444);
+    let (y, data) = rng.linear_gaussian(60, 1.5, 2.0, 0.5);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let run1 = model.posterior_samples("mu", 30, Some(7)).unwrap();
+    let run2 = model.posterior_samples("mu", 30, Some(7)).unwrap();
+
+    for (s1, s2) in run1.iter().zip(run2.iter()) {
+        for (a, b) in s1.0.iter().zip(s2.0.iter()) {
+            assert_eq!(a, b, "seeded posterior samples differ");
         }
     }
 }

@@ -27,16 +27,7 @@ pub struct WasmGamlssModel {
 
 #[wasm_bindgen]
 impl WasmGamlssModel {
-    /// Fit a GAMLSS model in the browser.
-    ///
-    /// - `y_json`: Response variable as a JSON array, e.g. `[1.0, 2.0, 3.0]`
-    /// - `data_json`: Predictor data as JSON object, e.g. `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`
-    /// - `formula_json`: Formula mapping parameter names to terms, e.g.
-    ///   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`.
-    ///   For a natural cubic regression spline (`bs="cr"`):
-    ///   `{"mu": [{"Smooth": {"CrSpline1D": {"col_name": "x", "k": 6, "pc": null, "knots": []}}}]}`
-    ///   (leave `knots` empty — resolved from training data at fit time).
-    /// - `distribution`: Distribution name (Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta)
+    /// Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
     pub fn fit(
         y_json: &str,
         data_json: &str,
@@ -48,11 +39,6 @@ impl WasmGamlssModel {
         Ok(WasmGamlssModel { model, family })
     }
 
-    /// Fit a GAMLSS model with custom configuration.
-    ///
-    /// `config_json` is a JSON object with optional fields:
-    /// `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`.
-    /// `criterion` accepts `"reml"` (default), `"gcv"`, or `"fellner_schall"`.
     #[wasm_bindgen(js_name = "fitWithConfig")]
     pub fn fit_with_config(
         y_json: &str,
@@ -124,10 +110,47 @@ impl WasmGamlssModel {
     ///
     /// Returns JSON: `{"mu": [[s1_v1, s1_v2, ...], [s2_v1, ...], ...], "sigma": [...]}`
     /// where each inner array is one sample's predictions across all observations.
+    ///
+    /// Pass an integer `seed` for reproducible output; omit or pass `null`/`undefined`
+    /// for non-deterministic sampling.
     #[wasm_bindgen(js_name = "predictSamples")]
-    pub fn predict_samples(&self, data_json: &str, n_samples: usize) -> Result<String, JsError> {
-        json::predict_samples(&self.model, self.family.as_ref(), data_json, n_samples)
-            .map_err(to_js_err)
+    pub fn predict_samples(
+        &self,
+        data_json: &str,
+        n_samples: usize,
+        seed: Option<u64>,
+    ) -> Result<String, JsError> {
+        json::predict_samples(
+            &self.model,
+            self.family.as_ref(),
+            data_json,
+            n_samples,
+            seed,
+        )
+        .map_err(to_js_err)
+    }
+
+    /// Returns the linear-predictor design matrix X for `data_json` and `param`
+    /// as a JSON array of rows (`[[col0, col1, ...], ...]`).
+    ///
+    /// Equivalent to mgcv's `predict(type="lpmatrix")`.
+    #[wasm_bindgen(js_name = "designMatrix")]
+    pub fn design_matrix(&self, data_json: &str, param: &str) -> Result<String, JsError> {
+        json::design_matrix(&self.model, data_json, param).map_err(to_js_err)
+    }
+
+    /// Returns the `p × p` posterior covariance matrix for `param`
+    /// as a JSON array of rows.
+    #[wasm_bindgen(js_name = "covarianceMatrix")]
+    pub fn covariance_matrix(&self, param: &str) -> Result<String, JsError> {
+        json::covariance_matrix(&self.model, param).map_err(to_js_err)
+    }
+
+    /// Returns the term → coefficient column block map for `param` as a JSON
+    /// object `{"term_name": [first, last], ...}`.
+    #[wasm_bindgen(js_name = "termIndexMap")]
+    pub fn term_index_map(&self, param: &str) -> Result<String, JsError> {
+        json::term_index_map(&self.model, param).map_err(to_js_err)
     }
 
     #[wasm_bindgen(js_name = "diagnosticsJson")]

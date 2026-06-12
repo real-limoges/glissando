@@ -5,7 +5,7 @@
 //! marshalling layer between Python and the core Rust API.
 
 use ndarray::Array1;
-use numpy::{PyReadonlyArray1, ToPyArray};
+use numpy::{PyArray2, PyReadonlyArray1, ToPyArray};
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -270,16 +270,21 @@ impl PyGamlssModel {
     ///
     /// Returns `{param_name: list[array]}` — each list has `n_samples` arrays
     /// of length n_obs.
+    ///
+    /// Pass an integer `seed` for reproducible samples; omit or pass `None` for
+    /// non-deterministic (unseeded) sampling.
+    #[pyo3(signature = (new_data, n_samples, seed = None))]
     fn predict_samples(
         &self,
         py: Python<'_>,
         new_data: &Bound<PyDict>,
         n_samples: usize,
+        seed: Option<u64>,
     ) -> PyResult<Py<PyDict>> {
         let dataset = py_dict_to_dataset(new_data)?;
         let results = self
             .inner
-            .predict_samples(&dataset, self.family.as_distribution(), n_samples)
+            .predict_samples(&dataset, self.family.as_distribution(), n_samples, seed)
             .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
 
         let py_dict = PyDict::new(py);
@@ -327,6 +332,52 @@ impl PyGamlssModel {
 
     fn converged(&self) -> bool {
         self.inner.converged()
+    }
+
+    /// Returns the `(n_obs × n_coeffs)` linear-predictor design matrix for `param`
+    /// as a numpy float64 array. Equivalent to mgcv's `predict(type="lpmatrix")`.
+    fn design_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        new_data: &Bound<'_, PyDict>,
+        param: &str,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let dataset = py_dict_to_dataset(new_data)?;
+        let x = self
+            .inner
+            .design_matrix(&dataset, param)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(x.to_pyarray(py))
+    }
+
+    /// Returns the `(p × p)` posterior covariance matrix `V = (X'WX + Σλ·S)⁻¹`
+    /// for `param` as a numpy float64 array.
+    fn covariance_matrix<'py>(
+        &self,
+        py: Python<'py>,
+        param: &str,
+    ) -> PyResult<Bound<'py, PyArray2<f64>>> {
+        let v = self
+            .inner
+            .covariance_matrix(param)
+            .map_err(|e| PyKeyError::new_err(e.to_string()))?;
+        Ok(v.0.to_pyarray(py))
+    }
+
+    /// Returns the term → coefficient column block map for `param` as a Python dict.
+    ///
+    /// Each key is the mgcv-style term name; each value is a `(first_col, last_col_exclusive)`
+    /// tuple of ints. Column order matches `design_matrix` and `coefficients`.
+    fn term_index_map(&self, py: Python<'_>, param: &str) -> PyResult<Py<pyo3::types::PyDict>> {
+        let blocks = self
+            .inner
+            .term_index_map(param)
+            .map_err(|e| PyKeyError::new_err(e.to_string()))?;
+        let d = pyo3::types::PyDict::new(py);
+        for (name, first, last) in blocks {
+            d.set_item(name, (*first, *last))?;
+        }
+        Ok(d.into())
     }
 }
 
