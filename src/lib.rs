@@ -355,6 +355,66 @@ impl GamlssModel {
         Ok(results)
     }
 
+    /// Predict the (n_obs × R) matrix of category probabilities for an ordered-categorical model.
+    ///
+    /// Calls [`predict`](Self::predict) to obtain response-scale parameter vectors, then
+    /// reconstructs the per-observation probability vector `[P(y=1), …, P(y=R)]` using
+    /// the proportional-odds formula.
+    ///
+    /// Returns an `Array2<f64>` of shape `(n_obs, R)` where each row sums to 1.
+    ///
+    /// # Errors
+    ///
+    /// Same error set as [`GamlssModel::predict`].
+    pub fn predict_class_probabilities(
+        &self,
+        new_data: &DataSet,
+        family: &distributions::Ocat,
+    ) -> Result<Array2<f64>, GamlssError> {
+        let params_map = self.predict(new_data, family)?;
+        let n_obs = params_map["mu"].len();
+        let r = family.n_categories();
+
+        // Re-assemble the params HashMap in the form that Ocat::category_probs needs.
+        // compute_thresholds_at expects per-observation vectors so we build them here.
+        let n_thresh = r - 1;
+
+        // Collect threshold parameter arrays; index k (0-based) → delta_{k+1}
+        let mut delta_arrs: Vec<&ndarray::Array1<f64>> = Vec::with_capacity(n_thresh);
+        for k in 1..=n_thresh {
+            let name = match k {
+                1 => "delta_1",
+                2 => "delta_2",
+                3 => "delta_3",
+                4 => "delta_4",
+                _ => unreachable!(),
+            };
+            delta_arrs.push(params_map.get(name).ok_or_else(|| {
+                GamlssError::Input(format!(
+                    "predict_class_probabilities: missing parameter '{name}'"
+                ))
+            })?);
+        }
+        let eta_mu = &params_map["mu"];
+
+        let mut out = Array2::zeros((n_obs, r));
+        for i in 0..n_obs {
+            let mut thresholds = Vec::with_capacity(n_thresh);
+            for k in 0..n_thresh {
+                if k == 0 {
+                    thresholds.push(delta_arrs[0][i]);
+                } else {
+                    thresholds.push(thresholds[k - 1] + delta_arrs[k][i].max(1e-10));
+                }
+            }
+            let probs = distributions::Ocat::category_probs(eta_mu[i], &thresholds);
+            for (j, &p) in probs.iter().enumerate() {
+                out[(i, j)] = p;
+            }
+        }
+        Ok(out)
+    }
+
     /// Compute aggregate diagnostics (residuals, log-likelihood, AIC, BIC, EDF)
     /// for this fitted model against the observed response `y`.
     ///
