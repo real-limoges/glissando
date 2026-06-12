@@ -25,7 +25,8 @@ use super::types::*;
 use crate::linalg;
 use indexmap::IndexMap;
 use ndarray::{Array1, Array2};
-use rand::{rng, Rng};
+use rand::rngs::StdRng;
+use rand::{rng, Rng, SeedableRng};
 use rand_distr::{Distribution as _, StandardNormal};
 
 const DEFAULT_MAX_ITER: usize = 200;
@@ -118,20 +119,12 @@ pub struct FitDiagnostics {
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ParamDiagnostic {
-    /// Sum of absolute changes in linear predictor (eta) in final iteration.
     pub final_eta_change: f64,
-    /// Sum of absolute changes in smoothing parameters (lambda) in final iteration.
     pub final_lambda_change: f64,
-    /// Effective degrees of freedom for this parameter's model.
     pub edf: f64,
-    /// Number of observations whose IRLS working weight hit the lower floor
-    /// in the final iteration. Non-zero values suggest degenerate Fisher info
-    /// (extreme score with vanishing curvature) — the fit may be unreliable.
+    /// Non-zero suggests degenerate Fisher info (extreme score, vanishing curvature).
     pub weight_floor_hits: usize,
-    /// Number of observations whose Fisher-scoring step `u/w` was clipped to
-    /// `±MAX_STEP` in the final iteration. Non-zero values suggest the IRLS
-    /// step is being damped to keep η updates finite — typically transient
-    /// during early iterations, persistent at convergence indicates trouble.
+    /// Non-zero means IRLS steps were damped; persistent at convergence indicates trouble.
     pub step_cap_hits: usize,
 }
 
@@ -139,25 +132,21 @@ pub struct ParamDiagnostic {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedParameter {
-    /// Estimated regression coefficients (beta).
     pub coefficients: Coefficients,
-    /// Covariance matrix of the coefficient estimates.
     pub covariance: CovarianceMatrix,
-    /// Terms included in this parameter's model formula.
     pub terms: Vec<Term>,
-    /// Optimized smoothing parameters for each penalty matrix.
     pub lambdas: Array1<f64>,
-    /// Linear predictor values (X * beta).
     pub eta: Array1<f64>,
-    /// Fitted values on the response scale (link^-1(eta)).
     pub fitted_values: Array1<f64>,
-    /// Effective degrees of freedom.
     pub edf: f64,
-    /// Effective degrees of freedom attributed to each term, aligned with
-    /// `terms`. Sums to `edf`. A smooth term whose entry sits at its penalty
-    /// null-space dimension has been driven (near-)linear by its penalty —
-    /// see `FitDiagnostics::warnings`.
+    /// Per-term EDF aligned with `terms`, summing to `edf`. An entry at the
+    /// term's penalty null-space dimension means the smooth collapsed to its
+    /// unpenalized polynomial remainder — see `FitDiagnostics::warnings`.
     pub term_edf: Vec<f64>,
+    /// `(term_name, first_col, last_col_exclusive)` per term, aligned with
+    /// `terms`. Column order matches `coefficients` and the design matrix.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub term_blocks: Vec<(String, usize, usize)>,
 }
 
 pub(super) struct FittingParameter {
@@ -170,10 +159,8 @@ pub(super) struct FittingParameter {
     pub(super) penalty_matrices: Vec<PenaltyMatrix>,
     pub(super) beta: Coefficients,
     pub(super) eta: Array1<f64>,
-    /// Cached response-scale predictor `μ = link⁻¹(η)`. Kept in lockstep with
-    /// `eta` so the IRLS step can hand out `&μ` references to every parameter
-    /// instead of re-running `inv_link` on the full vector at each call —
-    /// eliminates K length-n allocations per Fisher-scoring step.
+    /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
+    /// `inv_link` passes per Fisher-scoring step.
     pub(super) mu: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
@@ -182,12 +169,6 @@ pub(super) struct FittingParameter {
     pub(super) term_edf: Vec<f64>,
 }
 
-/// Fits a GAMLSS model using the RS (Rigby-Stasinopoulos) algorithm.
-///
-/// The RS algorithm cycles through distribution parameters (μ, σ, ν, ...) fitting each
-/// as a penalized additive model while holding others fixed. Each parameter update uses
-/// penalized iteratively reweighted least squares (P-IRLS) with a working response z
-/// and working weights w derived from the distribution's score and Fisher information.
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
@@ -213,7 +194,6 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let (x_model, penalty_matrices, total_coeffs, term_layouts) =
             assemble_model_matrices(data, n_obs, &terms)?;
 
-        // Initialize on response scale using distribution-specific logic
         let response_scale_start = family.initial_value(param_name, y);
         let eta_start = link.link(response_scale_start);
 
@@ -354,6 +334,21 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
         }
 
+        // Build the term→column-block map from term_layouts (same offset walk as
+        // the EDF attribution in scoring.rs). Must be done before `model.terms`
+        // is moved into the FittedParameter literal below.
+        let mut offset = 0usize;
+        let term_blocks: Vec<(String, usize, usize)> = model
+            .terms
+            .iter()
+            .zip(model.term_layouts.iter())
+            .map(|(term, layout)| {
+                let block = (term.term_name(), offset, offset + layout.n_coeffs);
+                offset += layout.n_coeffs;
+                block
+            })
+            .collect();
+
         let fitted_param = FittedParameter {
             coefficients: model.beta,
             covariance,
@@ -364,6 +359,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             fitted_values: model.mu,
             edf: model.edf,
             term_edf: model.term_edf,
+            term_blocks,
         };
         final_results.insert(name, fitted_param);
     }
@@ -384,17 +380,13 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 // Posterior sampling
 // ============================================================================
 
-/// Draws samples from the approximate posterior N(beta_hat, V_beta) via Cholesky decomposition.
-///
-/// Most callers should reach for [`crate::GamlssModel::posterior_samples`] or
-/// [`crate::GamlssModel::predict_samples`]; this is exposed for advanced consumers that
-/// already have a fitted `(β̂, V_β)` pair and want to drive sampling directly.
+/// Draws samples from N(beta_hat, V_beta) via Cholesky. Advanced consumers with
+/// a pre-fitted `(β̂, V_β)` pair can call this directly; most callers should use
+/// [`crate::GamlssModel::posterior_samples`].
 ///
 /// # Errors
 ///
-/// Returns [`GamlssError::PosteriorNotPositiveDefinite`] if the Cholesky factorization
-/// of `v_beta` fails. A non-PD covariance signals a degenerate fit; callers should
-/// surface this rather than silently dropping the samples.
+/// Returns [`GamlssError::PosteriorNotPositiveDefinite`] if Cholesky fails.
 pub fn sample_posterior(
     beta_hat: &Coefficients,
     v_beta: &CovarianceMatrix,
@@ -410,6 +402,33 @@ pub fn sample_posterior(
         n_samples,
         &mut rng_rs,
     ))
+}
+
+/// Like [`sample_posterior`] with an optional seed; `None` uses the unseeded RNG.
+///
+/// # Errors
+///
+/// Returns [`GamlssError::PosteriorNotPositiveDefinite`] if Cholesky fails.
+pub fn sample_posterior_seeded(
+    beta_hat: &Coefficients,
+    v_beta: &CovarianceMatrix,
+    n_samples: usize,
+    seed: Option<u64>,
+) -> Result<Vec<Array1<f64>>, GamlssError> {
+    let l_factor =
+        linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
+    Ok(match seed {
+        Some(s) => sample_from_cholesky(
+            &beta_hat.0,
+            &l_factor,
+            n_samples,
+            &mut StdRng::seed_from_u64(s),
+        ),
+        None => {
+            let mut rng_rs = rng();
+            sample_from_cholesky(&beta_hat.0, &l_factor, n_samples, &mut rng_rs)
+        }
+    })
 }
 
 pub(crate) fn sample_from_cholesky(

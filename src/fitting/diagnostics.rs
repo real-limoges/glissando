@@ -18,19 +18,15 @@ const MIN_POSITIVE: f64 = 1e-10;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelDiagnostics {
-    /// Pearson residuals: `(y − E[Y]) / √Var(Y)`.
+    /// `(y − E[Y]) / √Var(Y)`
     pub pearson_residuals: Array1<f64>,
-    /// Raw response residuals: `y − E[Y]`.
+    /// `y − E[Y]`
     pub response_residuals: Array1<f64>,
-    /// Total effective degrees of freedom across all parameters.
+    /// Summed across all distribution parameters.
     pub total_edf: f64,
-    /// Akaike Information Criterion.
     pub aic: f64,
-    /// Bayesian Information Criterion.
     pub bic: f64,
-    /// Model log-likelihood evaluated at fitted parameters.
     pub log_likelihood: f64,
-    /// Number of observations.
     pub n_obs: usize,
 }
 
@@ -71,12 +67,10 @@ pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
     -2.0 * log_likelihood + (n_obs as f64).ln() * total_edf
 }
 
-/// Sums effective degrees of freedom across all fitted parameters.
 pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
     fitted_params.values().map(|p| p.edf).sum()
 }
 
-/// Computes raw response residuals: `y − E[Y]`.
 pub fn response_residuals(y: &Array1<f64>, expected: &Array1<f64>) -> Array1<f64> {
     y - expected
 }
@@ -171,6 +165,7 @@ mod tests {
             fitted_values: array![0.0],
             edf,
             term_edf: vec![edf],
+            term_blocks: vec![("(intercept)".to_string(), 0, 1)],
         }
     }
 
