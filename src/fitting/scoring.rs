@@ -35,27 +35,23 @@ const MAX_STEP: f64 = 20.0;
 #[derive(Debug)]
 pub(super) struct Update {
     pub beta: Coefficients,
-    /// Linear predictor η = X·β.
     pub eta: Array1<f64>,
-    /// Response-scale predictor μ = link⁻¹(η); kept in lockstep with `eta`
-    /// so callers can avoid a second `inv_link` pass.
+    /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
+    /// `inv_link` passes per Fisher-scoring step.
     pub mu: Array1<f64>,
-    /// Smoothing parameters on the response scale (not log).
+    /// Smoothing parameters on the response scale (not log-scale).
     pub lambdas: Array1<f64>,
     pub covariance: CovarianceMatrix,
     pub edf: f64,
-    /// Effective degrees of freedom attributed to each term, aligned with the
-    /// parameter's `terms` / `term_layouts`. Sums to `edf`.
+    /// Per-term EDF, summing to `edf`.
     pub term_edf: Vec<f64>,
-    /// Max absolute change in β; drives the outer-loop convergence check.
+    /// Max |Δβ|; drives the outer-loop convergence check.
     pub max_diff: f64,
-    /// Sum of absolute changes in η, recorded as a per-parameter diagnostic.
     pub eta_change: f64,
-    /// Sum of absolute changes in λ, recorded as a per-parameter diagnostic.
     pub lambda_change: f64,
-    /// Count of observations whose working weight `w` was clamped at `MIN_WEIGHT`.
+    /// Observations whose working weight `w` was clamped at `MIN_WEIGHT`.
     pub weight_floor_hits: usize,
-    /// Count of observations whose `u/w` step was clipped at `±MAX_STEP`.
+    /// Observations whose `u/w` step was clipped at `±MAX_STEP`.
     pub step_cap_hits: usize,
 }
 

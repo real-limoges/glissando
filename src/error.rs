@@ -9,58 +9,44 @@ use thiserror::Error;
 /// Errors that can occur during GAMLSS model fitting, prediction, or serialization.
 #[derive(Debug, Error)]
 pub enum GamlssError {
-    /// L-BFGS or other optimizer failed.
     #[error("Optimization failed: {0}")]
     Optimization(String),
 
-    /// Linear algebra operation failed (e.g., singular matrix).
-    ///
-    /// Payload is stringified at the backend boundary so downstream pattern
-    /// matching is identical under both `openblas` and `pure-rust`.
+    /// Payload is stringified at the backend boundary so pattern matching is
+    /// identical under both `openblas` and `pure-rust`.
     #[error("Linear algebra error: {0}")]
     Linalg(String),
 
-    /// Posterior covariance matrix is not positive definite, so a Cholesky factor
-    /// (and therefore a Gaussian-posterior sample) cannot be produced. Indicates
-    /// a degenerate fit — typically a rank-deficient design or a parameter at the
-    /// boundary of its support. Callers asking for posterior samples must handle
-    /// this rather than silently receiving an empty vector.
+    /// Cholesky factorization of the posterior covariance failed — typically a
+    /// rank-deficient design or a parameter at the boundary of its support.
     #[error("Posterior covariance is not positive definite (Cholesky failed)")]
     PosteriorNotPositiveDefinite,
 
-    /// Array shape mismatch.
     #[error("Array shape error: {0}")]
     Shape(String),
 
-    /// RS algorithm did not converge within the iteration limit.
     #[error("RS algorithm failed to converge after {0} iterations")]
     Convergence(usize),
 
-    /// Invalid user input.
     #[error("Invalid input: {0}")]
     Input(String),
 
-    /// Requested parameter not defined by the distribution.
     #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
     UnknownParameter { distribution: String, param: String },
 
-    /// Internal logic error (indicates a bug).
+    /// Indicates a bug in the library, not a user error.
     #[error("Internal error: {0}")]
     Internal(String),
 
-    /// Variable referenced in formula not found in dataset.
     #[error("Variable '{name}' not found in data")]
     MissingVariable { name: String },
 
-    /// Variable contains NaN or infinite values.
     #[error("Variable '{name}' contains {count} non-finite values (NaN or Inf)")]
     NonFiniteValues { name: String, count: usize },
 
-    /// No formula terms specified for a required parameter.
     #[error("Formula missing terms for distribution parameter '{param}'")]
     MissingFormula { param: String },
 
-    /// Dataset has zero observations.
     #[error("Empty dataset: no observations provided")]
     EmptyData,
 }

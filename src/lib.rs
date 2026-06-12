@@ -57,7 +57,7 @@ pub use types::{Coefficients, CovarianceMatrix, DataSet, Formula};
 use distributions::Distribution;
 use fitting::assembler::assemble_model_matrices;
 use indexmap::IndexMap;
-use ndarray::Array1;
+use ndarray::{Array1, Array2};
 use preprocessing::validate_inputs;
 use std::collections::HashMap;
 use std::fmt;
@@ -66,12 +66,9 @@ use std::fmt;
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamlssModel {
-    /// Fitted results keyed by parameter name (e.g., "mu", "sigma").
-    ///
-    /// `IndexMap` preserves insertion order (matching `family.parameters()`), so
-    /// iteration over `models`, `posterior_samples`, and `predict_samples` is
-    /// deterministic — `HashMap`'s hash-order iteration previously caused
-    /// nondeterministic output of multi-parameter prediction samples.
+    /// Fitted results keyed by parameter name, in `family.parameters()` order.
+    /// `IndexMap` preserves insertion order so iteration over `models` and
+    /// `predict_samples` is deterministic.
     pub models: IndexMap<String, fitting::FittedParameter>,
     /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
@@ -126,6 +123,68 @@ impl GamlssModel {
         self.diagnostics.converged
     }
 
+    /// Returns the linear-predictor design matrix X for `new_data` and the named
+    /// distribution parameter (`predict(type="lpmatrix")` in mgcv). Column order
+    /// matches `coefficients` and `term_index_map`.
+    ///
+    /// # Errors
+    ///
+    /// - [`GamlssError::UnknownParameter`] if `param` is not in the fitted model.
+    /// - [`GamlssError::Input`] if `new_data` has no columns.
+    /// - [`GamlssError::MissingVariable`] if `new_data` is missing a column the formula references.
+    pub fn design_matrix(
+        &self,
+        new_data: &DataSet,
+        param: &str,
+    ) -> Result<Array2<f64>, GamlssError> {
+        let fitted = self
+            .models
+            .get(param)
+            .ok_or_else(|| GamlssError::UnknownParameter {
+                distribution: "<fitted model>".to_string(),
+                param: param.to_string(),
+            })?;
+        let n_obs = new_data
+            .n_obs()
+            .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
+        let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted.terms)?;
+        Ok(x_matrix.0)
+    }
+
+    /// Returns the `p × p` posterior covariance matrix `V = (X'WX + Σλ·S)⁻¹` for
+    /// the named distribution parameter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GamlssError::UnknownParameter`] if `param` is not in the fitted model.
+    pub fn covariance_matrix(&self, param: &str) -> Result<&types::CovarianceMatrix, GamlssError> {
+        self.models
+            .get(param)
+            .map(|f| &f.covariance)
+            .ok_or_else(|| GamlssError::UnknownParameter {
+                distribution: "<fitted model>".to_string(),
+                param: param.to_string(),
+            })
+    }
+
+    /// Returns the term → coefficient column block map for the named distribution parameter.
+    ///
+    /// Each entry is `(term_name, first_col, last_col_exclusive)`. Column order matches
+    /// `design_matrix` and `coefficients`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GamlssError::UnknownParameter`] if `param` is not in the fitted model.
+    pub fn term_index_map(&self, param: &str) -> Result<&[(String, usize, usize)], GamlssError> {
+        self.models
+            .get(param)
+            .map(|f| f.term_blocks.as_slice())
+            .ok_or_else(|| GamlssError::UnknownParameter {
+                distribution: "<fitted model>".to_string(),
+                param: param.to_string(),
+            })
+    }
+
     /// Serializes the model to JSON, including the distribution name for later deserialization.
     ///
     /// # Errors
@@ -154,13 +213,8 @@ impl GamlssModel {
 
     /// Predict fitted values for new data.
     ///
-    /// Returns a HashMap with parameter names as keys and fitted values (on response scale)
-    /// as values — the `Array1<f64>` *is* the prediction, with no wrapper. The
-    /// distribution is needed to obtain the appropriate link functions.
-    ///
-    /// For standard errors and the linear-predictor scale, use
-    /// [`predict_with_se`](Self::predict_with_se), which returns a
-    /// [`PredictionResult`] per parameter instead of a bare array.
+    /// Returns a map of parameter name → response-scale fitted values. For
+    /// standard errors see [`predict_with_se`](Self::predict_with_se).
     ///
     /// # Examples
     ///
@@ -216,16 +270,10 @@ impl GamlssModel {
         Ok(predictions)
     }
 
-    /// Predict fitted values with standard errors for new data.
+    /// Predict fitted values with standard errors (`se = √diag(X V X')`).
     ///
-    /// Returns one [`PredictionResult`] per parameter — `{ fitted, eta, se_eta }`,
-    /// so the fitted values live at `result["mu"].fitted` (not the map value
-    /// directly, as with [`predict`](Self::predict)). Standard errors are
-    /// computed via `se = sqrt(diag(X * V * X'))` where V is the covariance
-    /// matrix of the coefficients.
-    ///
-    /// If you only need fitted values, [`predict`](Self::predict) returns the
-    /// `Array1<f64>` directly and skips the SE computation.
+    /// Returns one [`PredictionResult`] per parameter. For bare fitted values
+    /// without SEs, prefer [`predict`](Self::predict).
     ///
     /// # Errors
     ///
@@ -294,6 +342,9 @@ impl GamlssModel {
     /// Uses Cholesky decomposition of the covariance matrix to generate samples
     /// from the approximate posterior N(beta_hat, V_beta).
     ///
+    /// Pass `seed = Some(s)` for reproducible samples; `seed = None` uses an
+    /// unseeded thread-local RNG.
+    ///
     /// # Errors
     ///
     /// Returns [`GamlssError::UnknownParameter`] if `param_name` is not in the fitted
@@ -303,6 +354,7 @@ impl GamlssModel {
         &self,
         param_name: &str,
         n_samples: usize,
+        seed: Option<u64>,
     ) -> Result<Vec<Coefficients>, GamlssError> {
         let fitted_param =
             self.models
@@ -312,10 +364,11 @@ impl GamlssModel {
                     param: param_name.to_string(),
                 })?;
 
-        let samples = fitting::sample_posterior(
+        let samples = fitting::sample_posterior_seeded(
             &fitted_param.coefficients,
             &fitted_param.covariance,
             n_samples,
+            seed,
         )?;
 
         Ok(samples.into_iter().map(Coefficients).collect())
@@ -325,6 +378,9 @@ impl GamlssModel {
     ///
     /// For each posterior sample of coefficients, computes predictions on new data.
     /// Returns samples of fitted values on the response scale.
+    ///
+    /// Pass `seed = Some(s)` for reproducible samples across calls; `seed = None`
+    /// uses an unseeded thread-local RNG.
     ///
     /// # Errors
     ///
@@ -336,6 +392,7 @@ impl GamlssModel {
         new_data: &DataSet,
         family: &D,
         n_samples: usize,
+        seed: Option<u64>,
     ) -> Result<HashMap<String, Vec<Array1<f64>>>, GamlssError> {
         let n_obs = new_data
             .n_obs()
@@ -346,10 +403,11 @@ impl GamlssModel {
             let (x_matrix, _, _, _) =
                 assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
 
-            let beta_samples = fitting::sample_posterior(
+            let beta_samples = fitting::sample_posterior_seeded(
                 &fitted_param.coefficients,
                 &fitted_param.covariance,
                 n_samples,
+                seed,
             )?;
 
             let link = family.default_link(param_name)?;
@@ -373,11 +431,10 @@ impl GamlssModel {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PredictionResult {
-    /// Fitted values on the response scale (link⁻¹(eta)).
+    /// Response-scale: link⁻¹(eta).
     pub fitted: Array1<f64>,
-    /// Linear predictor values (X * beta).
     pub eta: Array1<f64>,
-    /// Standard errors on the linear predictor scale.
+    /// Standard errors on the linear-predictor scale.
     pub se_eta: Array1<f64>,
 }
 

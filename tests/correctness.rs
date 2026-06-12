@@ -36,7 +36,9 @@ fn posterior_samples_propagates_non_pd_error() {
     let formula = linear_intercepts("x", &["mu", "sigma"]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let err = model.posterior_samples("does_not_exist", 5).unwrap_err();
+    let err = model
+        .posterior_samples("does_not_exist", 5, None)
+        .unwrap_err();
     assert!(
         matches!(err, GamlssError::UnknownParameter { .. }),
         "expected UnknownParameter, got {:?}",

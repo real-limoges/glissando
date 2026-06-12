@@ -5,16 +5,14 @@
 //! (smooth with penalties, random effects).
 
 /// A single term in a model formula: intercept, linear effect, or smooth.
-///
-/// Terms are combined into a `Formula` to specify which predictors affect each parameter.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Term {
-    /// Intercept term (no column needed).
     Intercept,
-    /// Linear effect of a column.
-    Linear { col_name: String },
-    /// Smooth effect: P-spline, tensor product, or random effect.
+    Linear {
+        col_name: String,
+    },
+    /// P-spline, tensor product, or random effect.
     Smooth(Smooth),
 }
 
@@ -25,6 +23,20 @@ impl Term {
             Term::Intercept => vec![],
             Term::Linear { col_name } => vec![col_name.as_str()],
             Term::Smooth(smooth) => smooth.column_names(),
+        }
+    }
+
+    /// Returns an mgcv-style label for this term, used as the key in
+    /// `FittedParameter::term_blocks` and downstream `predictors_info` maps.
+    ///
+    /// - `Intercept`  → `"(intercept)"`
+    /// - `Linear(x)`  → `"x"`
+    /// - `Smooth`     → delegates to [`Smooth::term_name`]
+    pub fn term_name(&self) -> String {
+        match self {
+            Term::Intercept => "(intercept)".to_string(),
+            Term::Linear { col_name } => col_name.clone(),
+            Term::Smooth(s) => s.term_name(),
         }
     }
 }
@@ -48,36 +60,27 @@ impl Term {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Smooth {
-    /// 1D P-spline: flexible univariate smooth effect.
-    /// The smoothing parameter (λ) balances fit vs. smoothness.
+    /// 1D P-spline smooth.
     PSpline1D {
-        /// Column name for the predictor variable.
         col_name: String,
-        /// Number of B-spline basis functions (typical: 5-50).
+        /// Typical: 5–50.
         n_splines: usize,
-        /// Polynomial degree of the B-spline basis (typical: 2-3).
+        /// Typical: 2–3.
         degree: usize,
-        /// Penalty matrix order: 1 = linear trends, 2 = constant second differences (typical).
+        /// 1 = linear trends, 2 = constant second differences.
         penalty_order: usize,
     },
-    /// 2D tensor product of two P-spline bases for interaction terms.
-    /// Suitable for modeling smooth interactions: f(x₁, x₂).
+    /// 2D tensor product of two P-spline bases: f(x₁, x₂).
     TensorProduct {
-        /// Column name for the first predictor.
         col_name_1: String,
-        /// Number of basis functions for the first marginal basis.
         n_splines_1: usize,
-        /// Penalty order for the first margin.
         penalty_order_1: usize,
 
-        /// Column name for the second predictor.
         col_name_2: String,
-        /// Number of basis functions for the second marginal basis.
         n_splines_2: usize,
-        /// Penalty order for the second margin.
         penalty_order_2: usize,
 
-        /// Polynomial degree shared across both marginal bases.
+        /// Shared across both marginal bases.
         degree: usize,
     },
     /// 1D natural cubic regression spline (mgcv `bs = "cr"`).
@@ -90,9 +93,8 @@ pub enum Smooth {
     /// The penalty is the exact integrated squared second derivative `∫ [f'']²`,
     /// whose null space is spanned by constants and linear functions (rank k-2).
     CrSpline1D {
-        /// Column name for the predictor variable.
         col_name: String,
-        /// Number of knots / basis functions (mgcv default: 6).
+        /// mgcv default: 6.
         k: usize,
         /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` for
         /// concessions dollars). When set, replaces the sum-to-zero centering
@@ -107,13 +109,33 @@ pub enum Smooth {
     },
     /// Random intercept term indexed by a grouping variable.
     /// Assumes each group has its own random intercept ~ N(0, σ²_u).
-    RandomEffect {
-        /// Column name containing group identifiers (e.g., subject ID).
-        col_name: String,
-    },
+    RandomEffect { col_name: String },
 }
 
 impl Smooth {
+    /// Returns an mgcv-style label for this smooth term.
+    ///
+    /// - `PSpline1D(x)` / `CrSpline1D(x)` / `RandomEffect(x)` → `"s(x)"` (with
+    ///   an optional `, pc={v}` suffix on point-constrained CR splines).
+    /// - `TensorProduct(x1, x2)` → `"te(x1,x2)"`.
+    pub fn term_name(&self) -> String {
+        match self {
+            Smooth::PSpline1D { col_name, .. } => format!("s({col_name})"),
+            Smooth::CrSpline1D {
+                col_name,
+                pc: Some(v),
+                ..
+            } => format!("s({col_name}), pc={v}"),
+            Smooth::CrSpline1D { col_name, .. } => format!("s({col_name})"),
+            Smooth::RandomEffect { col_name } => format!("s({col_name})"),
+            Smooth::TensorProduct {
+                col_name_1,
+                col_name_2,
+                ..
+            } => format!("te({col_name_1},{col_name_2})"),
+        }
+    }
+
     /// Returns the column names referenced by this smooth term.
     pub fn column_names(&self) -> Vec<&str> {
         match self {

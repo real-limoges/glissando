@@ -79,37 +79,27 @@ fn json_err(e: impl std::fmt::Display) -> GamlssError {
 // Parsing (JSON → typed inputs)
 // ---------------------------------------------------------------------------
 
-/// Parse the response vector from a JSON array of numbers, e.g. `[1.0, 2.0, 3.0]`.
-///
 /// # Errors
-/// Returns [`GamlssError::Input`] if the JSON is malformed or not an array of numbers.
+/// Returns [`GamlssError::Input`] if the JSON is malformed.
 pub fn parse_response(json: &str) -> Result<Array1<f64>, GamlssError> {
     let values: Vec<f64> = serde_json::from_str(json).map_err(json_err)?;
     Ok(Array1::from_vec(values))
 }
 
-/// Parse a [`DataSet`] from a JSON object of equal-length numeric columns,
-/// e.g. `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`.
-///
 /// # Errors
-/// Returns [`GamlssError::Input`] for malformed JSON, or the validation error
-/// from [`DataSet::from_vecs`] if columns differ in length.
+/// Returns [`GamlssError::Input`] for malformed JSON or ragged columns.
 pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
     let raw: HashMap<String, Vec<f64>> = serde_json::from_str(json).map_err(json_err)?;
     DataSet::from_vecs(raw)
 }
 
-/// Parse a [`Formula`] mapping parameter names to term lists, e.g.
-/// `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`.
-///
 /// # Errors
 /// Returns [`GamlssError::Input`] if the JSON does not match the term schema.
 pub fn parse_formula(json: &str) -> Result<Formula, GamlssError> {
     serde_json::from_str(json).map_err(json_err)
 }
 
-/// Parse a [`FitConfig`] from JSON; all fields are optional and default to
-/// [`FitConfig::default`].
+/// All fields are optional and default to [`FitConfig::default`].
 ///
 /// # Errors
 /// Returns [`GamlssError::Input`] if the JSON is malformed.
@@ -121,9 +111,6 @@ pub fn parse_config(json: &str) -> Result<FitConfig, GamlssError> {
 // Serialization (typed outputs → JSON)
 // ---------------------------------------------------------------------------
 
-/// Serialize fitted-value predictions (`{"param": [values]}`) as produced by
-/// [`GamlssModel::predict`].
-///
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_predictions(
@@ -139,9 +126,6 @@ pub fn serialize_predictions(
     serde_json::to_string(&result).map_err(json_err)
 }
 
-/// Serialize predictions with standard errors (`{"param": {"fitted", "eta",
-/// "se_eta"}}`) as produced by [`GamlssModel::predict_with_se`].
-///
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_predictions_with_se(
@@ -163,9 +147,6 @@ pub fn serialize_predictions_with_se(
     serde_json::to_string(&output).map_err(json_err)
 }
 
-/// Serialize posterior prediction samples (`{"param": [[sample], ...]}`) as
-/// produced by [`GamlssModel::predict_samples`].
-///
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_samples(
@@ -253,6 +234,8 @@ pub fn predict_with_se(
 /// Generate posterior prediction samples, returning
 /// `{"param": [[sample], ...]}`.
 ///
+/// Pass `seed = Some(s)` for reproducible samples; `seed = None` uses an unseeded RNG.
+///
 /// # Errors
 /// Returns [`GamlssError`] for malformed data JSON or any sampling failure.
 pub fn predict_samples(
@@ -260,10 +243,58 @@ pub fn predict_samples(
     family: &dyn Distribution,
     data_json: &str,
     n_samples: usize,
+    seed: Option<u64>,
 ) -> Result<String, GamlssError> {
     let new_data = parse_data(data_json)?;
-    let results = model.predict_samples(&new_data, family, n_samples)?;
+    let results = model.predict_samples(&new_data, family, n_samples, seed)?;
     serialize_samples(&results)
+}
+
+/// Returns the linear-predictor design matrix X for `new_data` and the named
+/// distribution parameter, serialized as a JSON array of rows (list of lists).
+///
+/// This is the `predict(type="lpmatrix")` equivalent from mgcv.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed data JSON or any prediction failure.
+pub fn design_matrix(
+    model: &GamlssModel,
+    data_json: &str,
+    param: &str,
+) -> Result<String, GamlssError> {
+    let new_data = parse_data(data_json)?;
+    let x = model.design_matrix(&new_data, param)?;
+    let rows: Vec<Vec<f64>> = x.rows().into_iter().map(|r| r.to_vec()).collect();
+    serde_json::to_string(&rows).map_err(json_err)
+}
+
+/// Returns the `p × p` posterior covariance matrix `V = (X'WX + Σλ·S)⁻¹`
+/// for the named distribution parameter, serialized as a JSON array of rows.
+///
+/// # Errors
+/// Returns [`GamlssError::UnknownParameter`] if `param` is not in the model,
+/// or [`GamlssError::Input`] if serialization fails.
+pub fn covariance_matrix(model: &GamlssModel, param: &str) -> Result<String, GamlssError> {
+    let v = model.covariance_matrix(param)?;
+    let rows: Vec<Vec<f64>> = v.0.rows().into_iter().map(|r| r.to_vec()).collect();
+    serde_json::to_string(&rows).map_err(json_err)
+}
+
+/// Returns the term → coefficient column block map for the named distribution
+/// parameter, serialized as a JSON object `{"term_name": [first, last], ...}`.
+///
+/// Key order is alphabetical (BTreeMap) for deterministic output.
+///
+/// # Errors
+/// Returns [`GamlssError::UnknownParameter`] if `param` is not in the model,
+/// or [`GamlssError::Input`] if serialization fails.
+pub fn term_index_map(model: &GamlssModel, param: &str) -> Result<String, GamlssError> {
+    let blocks = model.term_index_map(param)?;
+    let map: BTreeMap<&str, [usize; 2]> = blocks
+        .iter()
+        .map(|(name, first, last)| (name.as_str(), [*first, *last]))
+        .collect();
+    serde_json::to_string(&map).map_err(json_err)
 }
 
 /// Serialize the model's [`crate::FitDiagnostics`] (convergence, per-parameter
