@@ -456,7 +456,94 @@ $$
 
 ---
 
-### 1.8 Example: Computing Derivatives for Gaussian Data
+### 1.8 Ordered Categorical Distribution (`Ocat`)
+
+**Parameterization**: Proportional-odds / cumulative-logit for ordinal response $y \in \{1, \ldots, R\}$, $R \in \{2, 3, 4, 5\}$.
+
+**Parameters**:
+- $\mu$ (latent linear predictor): identity link
+- $\delta_1$ (first threshold $\theta_1$): identity link
+- $\delta_k$ (positive increment $\theta_k - \theta_{k-1}$), $k = 2, \ldots, R-1$: log link
+
+**Threshold reconstruction**: $\theta_1 = \delta_1$ (unconstrained); $\theta_k = \theta_{k-1} + \exp(\delta_k)$ for $k \ge 2$, ensuring strict monotonicity $\theta_1 < \cdots < \theta_{R-1}$.
+
+#### Cumulative-Logit Probabilities
+
+Define the logistic CDF (argument clamped to $[-30, 30]$) and density:
+$$
+F_k = \text{logistic}(\theta_k - \mu) = \frac{1}{1 + e^{-(\theta_k - \mu)}}, \qquad f_k = F_k(1 - F_k)
+$$
+with boundary conventions $F_0 = 0$, $F_R = 1$. Category probabilities:
+$$
+\pi_r = F_r - F_{r-1}, \quad r = 1, \ldots, R.
+$$
+Each $\pi_r$ is floored at $\mathrm{MIN\_PROB} = 10^{-10}$ and the vector is renormalized to sum to 1.
+
+#### Log-Likelihood
+
+$$
+\ell_i = \log \pi_{y_i} = \log(F_{y_i} - F_{y_i - 1})
+$$
+
+#### Derivatives for $\mu$ (identity link)
+
+Using boundary conventions $f_0 = f_R = 0$, for observation $y_i = r$:
+
+Score:
+$$
+u_\mu = \frac{f_{r-1} - f_r}{\pi_r}
+$$
+
+Expected Fisher information (sum over all categories):
+$$
+w_\mu = \sum_{r=1}^{R} \frac{(f_{r-1} - f_r)^2}{\pi_r}
+$$
+
+**Implementation**:
+$$
+u_\mu = \frac{f_{r-1} - f_r}{\pi_r}, \quad w_\mu = \sum_{r=1}^{R} \frac{(f_{r-1} - f_r)^2}{\pi_r}
+$$
+
+Both floored at $\mathrm{MIN\_WEIGHT}$ where needed.
+
+#### Derivatives for $\delta_k$ (identity link for $k=1$, log link for $k \ge 2$)
+
+The Jacobian of the $\eta_k \to \theta_k$ map is:
+$$
+\mathrm{jac}_k = \begin{cases} 1 & k = 1 \text{ (identity link)} \\ \exp(\eta_k) = \delta_k & k \ge 2 \text{ (log link; stored as response-scale value)} \end{cases}
+$$
+
+For observation $y_i = r$, threshold $\delta_k$ only affects $\pi_r$ when $r \ge k$:
+
+Score:
+$$
+u_k = \begin{cases}
+0 & r < k \\[4pt]
+\dfrac{\mathrm{jac}_k\,\bigl(f_r\,\mathbf{1}\{r \le R-1\} - f_{r-1}\,\mathbf{1}\{r > k\}\bigr)}{\pi_r} & r \ge k
+\end{cases}
+$$
+
+Expected Fisher information (sum over categories $r = k, \ldots, R$):
+$$
+w_k = \sum_{r=k}^{R} \frac{\Bigl(\mathrm{jac}_k\,\bigl(f_r\,\mathbf{1}\{r \le R-1\} - f_{r-1}\,\mathbf{1}\{r > k\}\bigr)\Bigr)^2}{\pi_r}
+$$
+floored at $\mathrm{MIN\_WEIGHT}$.
+
+#### Moments
+
+$$
+\mathbb{E}[Y] = \sum_{r=1}^{R} r\,\pi_r, \qquad \mathrm{Var}(Y) = \sum_{r=1}^{R} r^2\,\pi_r - \bigl(\mathbb{E}[Y]\bigr)^2
+$$
+
+(variance clamped to $\ge 0$).
+
+> **Implementation note**: `Ocat` carries `n_categories` state and cannot be recovered from a name string alone. It is excluded from `from_name` and from the WASM / JSON string-dispatch routes. Construct it explicitly in Rust or via the Python `Ocat(n_categories=R)` class. The fitting loop treats each threshold $\delta_k$ as an intercept-only formula — no new solver machinery is required beyond what drives any other scalar distribution parameter.
+
+Source: `src/distributions/ocat.rs`.
+
+---
+
+### 1.9 Example: Computing Derivatives for Gaussian Data
 
 Suppose we have data $y = [2.1, 1.9, 3.2]$ and current parameter estimates $\mu = [2.0, 2.0, 3.0]$, $\sigma = [0.5, 0.5, 0.5]$.
 
@@ -578,6 +665,10 @@ To prevent numerical issues, parameters are clamped to safe ranges:
 **Negative Binomial**:
 - Ensure $1 + \sigma\mu$ stays positive and bounded away from zero
 
+**Ordered Categorical**:
+- Floor each category probability $\pi_r$ at $\mathrm{MIN\_PROB} = 10^{-10}$ before computing scores and Fisher info
+- Renormalize: divide all $\pi_r$ by their sum after flooring, so that $\sum_r \pi_r = 1$ is maintained
+
 ### 3.3 Batched Special Function Computation
 
 Digamma and trigamma functions are computed in batched vectorized form for performance:
@@ -677,6 +768,32 @@ Cataloged here so the magic constants are auditable. All apply per observation, 
 | `MIN_POSITIVE` | $10^{-10}$ | `links.rs:8`, `diagnostics.rs:15` | Floor on parameters that must be strictly positive ($\sigma$, $\phi$, probabilities), and on variances before the square-root in residual computation. |
 
 Persistent non-zero `weight_floor_hits` or `step_cap_hits` at convergence signals model misspecification or ill-conditioned data; transient hits in early iterations are normal.
+
+### 4.5 Prior / Observation Weights
+
+Each call to the P-IRLS `step` function accepts an optional `prior_weights: Option<&Array1<f64>>` — a per-observation scale applied to each observation's likelihood contribution. When absent, a ones vector is substituted (uniform weights).
+
+Let $\mathrm{safe\_w}_i = \max(w_i, \mathrm{MIN\_WEIGHT})$ where $w_i$ is the distribution's Fisher information for observation $i$.
+
+**Working response — unchanged by prior weights**:
+$$
+z_i = \eta_i + \mathrm{clip}\!\left(\frac{u_i}{\mathrm{safe\_w}_i},\; \pm\mathrm{MAX\_STEP}\right)
+$$
+The step size $u_i / \mathrm{safe\_w}_i$ is a property of log-likelihood curvature and must not be scaled by the observation weight.
+
+**Solve weight — carries the prior factor**:
+$$
+W_{ii} = \mathrm{prior}_i \cdot \mathrm{safe\_w}_i
+$$
+
+**Effect on the penalized normal equations**: because $z$ divides by $\mathrm{safe\_w}$ while $W$ multiplies by $\mathrm{prior} \cdot \mathrm{safe\_w}$, the prior weight scales each observation's contribution to both $X^T W X$ and $X^T W z$ exactly once — standard frequency / precision-weight semantics without distorting the IRLS step length:
+$$
+(X^T W X + S_\lambda)\hat{\beta} = X^T W z, \qquad W = \mathrm{diag}(\mathrm{prior}_i \cdot \mathrm{safe\_w}_i).
+$$
+
+When `prior_weights = None`, the formula reduces to $W = \mathrm{diag}(\mathrm{safe\_w}_i)$, identical to the unweighted case.
+
+Source: `src/fitting/scoring.rs:61-141` (`step`).
 
 ---
 
@@ -1023,6 +1140,8 @@ where $S_\lambda = \sum_j \lambda_j S_j$.
 
 **Fallback**: If Cholesky fails (due to numerical issues or near-singularity), fall back to LU decomposition with partial pivoting.
 
+**Robust log-determinant** (`log_det_robust`, `src/linalg.rs`): For the REML cost term $\log|X^T W X + S_\lambda|$, the Cholesky log-det is tried first; on failure (evenly-spaced B-spline design matrices can develop tiny negative floating-point pivots) the symmetric eigensolver `dsyev` is used, clamping eigenvalues to $10^{-300}$ before summing the logs. This means the REML objective gracefully returns a very negative log-det rather than an error, steering the L-BFGS optimizer away from degenerate $\lambda$ regions.
+
 #### Covariance Matrix
 
 The covariance matrix for $\hat{\beta}$ is:
@@ -1075,24 +1194,34 @@ $$
 $$
 where $|\,\cdot\,|_+$ denotes the **pseudo-determinant** — the product of strictly positive eigenvalues — required because $S_\lambda$ is rank-deficient (its null space contains the unpenalized polynomial directions: constants for order-1 penalties, lines for order-2, etc., plus the unpenalized intercept and linear columns).
 
-Source: `src/fitting/solver.rs:170-250` (`RemlCost`).
+$\log|X^T W X + S_\lambda|$ is computed via `log_det_robust` (see §8.1): Cholesky on the fast path; symmetric eigensolver fallback for near-PD matrices with tiny negative floating-point pivots (common for evenly-spaced B-spline designs), clamping eigenvalues to $10^{-300}$ before the log so the REML optimizer naturally avoids degenerate $\lambda$ regions instead of crashing.
 
-#### Pseudo-determinant via eigendecomposition
+Source: `src/fitting/solver.rs:170-250` (`RemlCost`); `src/linalg.rs` (`log_det_robust`).
 
-$S_\lambda$ is real symmetric PSD. Decompose
+#### Pseudo-determinant via grouped block eigendecomposition
+
+`penalty_eigen` takes the full list of penalty matrices and their $\lambda$ values and processes them in **coefficient-block groups**: `penalty_nonzero_block_range` identifies the non-zero row/column range of each penalty, and all penalties that share the exact same range are combined into one group before eigendecomposition.
+
+**For each group $g$:**
+
+1. Form the combined scaled block: $B_g = \sum_{j \in g} \lambda_j S_j\big|_{\mathrm{block}}$
+2. Symmetric eigendecompose: $B_g = Q_g\,\mathrm{diag}(d_1^{(g)}, \ldots)\,Q_g^T$
+3. Per-group relative threshold: $\tau_g = \max\!\bigl(\varepsilon \cdot d_{\max}^{(g)},\; 10^{-300}\bigr)$, where $\varepsilon = \mathtt{REML\_RANK\_TOL\_EPS} = 10^{-8}$
+
+Then:
 $$
-S_\lambda = U\, \mathrm{diag}(d_1, \ldots, d_p)\, U^T, \qquad d_1 \ge \cdots \ge d_p \ge 0.
-$$
-Declare eigenvalue $d_i$ numerically zero when
-$$
-d_i \;<\; \tau \cdot d_1, \qquad \tau = \mathtt{REML\_RANK\_TOL\_EPS} = 10^{-8}
-$$
-(`src/fitting/solver.rs:23`). Then
-$$
-\log |S_\lambda|_+ = \sum_{d_i > \tau d_1} \log d_i, \qquad S_\lambda^+ = U\, \mathrm{diag}\bigl(d_i^{-1}\mathbf{1}\{d_i > \tau d_1\}\bigr)\, U^T.
+\log |S_\lambda|_+ = \sum_g \sum_{d_i^{(g)} > \tau_g} \log d_i^{(g)},
+\qquad
+S_\lambda^+ = \mathrm{block\text{-}diag}\!\bigl\{ B_g^+ \bigr\},
+\qquad
+M_p = \sum_g \mathrm{null\_dim}(B_g).
 $$
 
-Source: `src/fitting/solver.rs:547-595` (`penalty_eigen`).
+**Why grouped decomposition?** A single global threshold $\tau = \varepsilon \cdot \max(d_{\max}, 1)$ is dominated by the largest-$\lambda$ term when smoothing parameters span many orders of magnitude (e.g.\ $\lambda_1 \approx 10^{-8}$ and $\lambda_4 \approx 5 \times 10^{10}$). This misclassifies small-$\lambda$ non-null directions as null space, flipping the REML gradient sign. The per-group threshold is relative to each block's own spectral norm, eliminating this pollution. The $10^{-300}$ hard floor prevents collapse when $d_{\max}^{(g)} \approx 0$ (very small $\lambda$).
+
+**Tensor-product smooths**: the two marginal penalties $\lambda_1(S_1 \otimes I_{k_2})$ and $\lambda_2(I_{k_1} \otimes S_2)$ share the same $k_1 k_2$ coefficient block and are therefore combined before eigendecomposition, so the identity $(\lambda_1 S_1 + \lambda_2 S_2)^+ \ne (\lambda_1 S_1)^+ + (\lambda_2 S_2)^+$ is never violated. For disjoint blocks (one smooth per coefficient block) the formula reduces to a per-penalty decomposition.
+
+Source: `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`).
 
 #### REML gradient
 
@@ -1150,8 +1279,12 @@ A key feature distinguishing different distributions is how variance relates to 
 | **Binomial** | $n\mu$ | $n\mu(1-\mu)$ | Quadratic in mean, max at $\mu=0.5$ |
 | **Beta** | $\mu$ | $\frac{\mu(1-\mu)}{1+\phi}$ | Max at $\mu=0.5$, decreases with $\phi$ |
 | **Student-t** | $\mu$ | $\frac{\nu\sigma^2}{\nu-2}$ | Heavier tails than Gaussian |
+| **Ordered Categorical** | $\sum_r r\,\pi_r$ | $\sum_r r^2\,\pi_r - (\mathbb{E}Y)^2$ | Discrete $\{1,\ldots,R\}$; depends on all thresholds |
 
 ### Choosing a Distribution
+
+**Ordinal responses**:
+- Fixed ordered categories $\{1, \ldots, R\}$: Ordered Categorical (`Ocat`)
 
 **Count data**:
 - Equidispersed: Poisson
@@ -1199,11 +1332,18 @@ The RS algorithm requires starting values for all parameters. Default initializa
 
 2. **$\sigma$**:
    - Gaussian/Student-t: $s_y$ (sample std dev)
-   - Gamma/NB/Beta: 1.0 (or estimated from sample CV)
+   - Gamma: $\hat\sigma_0 = s_y / \bar{y}$ (sample CV), clamped to $[0.05, 10.0]$. $\sigma$ parameterizes the coefficient of variation, not the raw SD; a raw-SD start makes REML over-penalize the $\sigma$ smooth on the first RS iteration and warm-start into a full-collapse trap.
+   - NB/Beta: 1.0
 
 3. **$\nu$** (Student-t): 5.0
 
 4. **$\phi$** (Beta): 1.0
+
+5. **Smoothing parameters $\lambda$**: initialized from the trace-ratio cold-start heuristic
+   $$
+   \log\lambda_j^{(0)} = \log\!\left(\frac{\mathrm{tr}(X^T X)}{\mathrm{tr}(S_j)}\right)
+   $$
+   per penalty (unweighted, using the assembled $X$ for the current distribution parameter). The all-ones start $\lambda = 1$ can leave $X^T W X + S_\lambda$ near-singular for high-cardinality bases (e.g.\ $k = 20$) or prior-weighted models where $X^T W X$ is scaled by large prior weights. Source: `src/fitting/mod.rs`, `src/fitting/solver.rs` (`initial_log_lambda`).
 
 ### Convergence Criterion
 
@@ -1331,6 +1471,7 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Backfitting outer loop with per-parameter convergence (§4.1) | `src/fitting/mod.rs` (`fit_gamlss`) |
 | P-IRLS inner step (§4.2) | `src/fitting/scoring.rs` (`step`) |
 | `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs:28,32` |
+| Prior / observation weights (§4.5) | `src/fitting/scoring.rs` (`step`) |
 | `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs:8-12` |
 | `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
 | Gaussian derivatives (§1.1) | `src/distributions/gaussian.rs` |
@@ -1340,6 +1481,7 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Negative Binomial derivatives (§1.5) | `src/distributions/negative_binomial.rs` |
 | Beta derivatives (§1.6) | `src/distributions/beta.rs` |
 | Binomial derivatives (§1.7) | `src/distributions/binomial.rs` |
+| Ordered categorical derivatives (§1.8) | `src/distributions/ocat.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
 | B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
@@ -1349,13 +1491,15 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Random effect assembly (§5) | `src/fitting/assembler.rs` |
 | Block-sparse penalty (§5.1) | `src/fitting/assembler.rs`, `src/types/newtypes.rs` |
 | PWLS / Cholesky solve (§8.1) | `src/fitting/solver.rs` (`fit_pwls`, `fit_pwls_with_grad_info`) |
+| Robust log-det fallback (§8.1, §8.2) | `src/linalg.rs` (`log_det_robust`) |
+| Initial-$\lambda$ trace-ratio heuristic (§10) | `src/fitting/mod.rs`, `src/fitting/solver.rs` (`initial_log_lambda`) |
 | EDF (§6) | `src/fitting/solver.rs` (`fit_pwls_with_grad_info`) |
 | GCV cost and gradient (§8) | `src/fitting/solver.rs` (`GamlssCost`) |
 | GCV gradient finite-difference test | `src/fitting/solver.rs` (`gcv_gradient_matches_finite_diff`) |
 | GCV L-BFGS driver (§8) | `src/fitting/solver.rs` (`run_optimization`) |
 | REML / LAML cost and gradient (§8.2) | `src/fitting/solver.rs` (`RemlCost`) |
 | REML gradient finite-difference test | `src/fitting/solver.rs` (`reml_gradient_matches_finite_diff`) |
-| Penalty pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs` (`penalty_eigen`) |
+| Penalty grouped pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`) |
 | Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs` (`run_optimization_fellner_schall`) |
 | `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs` |
 | Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs:31-32` |
@@ -1375,6 +1519,13 @@ Symbols used throughout this document.
 | $P$ | Number of distribution parameters (e.g.\ $P = 2$ for Gaussian) |
 | $\theta_k$ | $k$-th distribution parameter ($\mu, \sigma, \nu, \phi$) |
 | $\mu, \sigma, \nu, \phi$ | Location, scale, degrees of freedom (Student-t), precision (Beta) |
+| $R$ | Number of ordered categories in `Ocat` ($R \in \{2,3,4,5\}$) |
+| $\theta_k$ | $k$-th threshold in `Ocat` ($k = 1,\ldots,R-1$); also used generically for the $k$-th distribution parameter — context distinguishes |
+| $\delta_k$ | $k$-th threshold increment parameter fed to the RS loop: $\theta_1 = \delta_1$ (identity link), $\theta_k = \theta_{k-1} + e^{\delta_k}$ for $k \ge 2$ (log link) |
+| $F_k, f_k$ | Cumulative-logit CDF and logistic density at threshold $\theta_k$: $F_k = \mathrm{logistic}(\theta_k - \mu)$, $f_k = F_k(1-F_k)$ |
+| $\pi_r$ | Category probability in `Ocat`: $\pi_r = F_r - F_{r-1}$, $F_0=0$, $F_R=1$ |
+| $\mathrm{prior}_i$ | Per-observation prior / observation weight (§4.5); defaults to 1 |
+| $\mathrm{safe\_w}_i$ | Floored Fisher weight: $\max(w_i, \mathrm{MIN\_WEIGHT})$ |
 | $g, g^{-1}$ | Link function and its inverse |
 | $\eta = g(\theta)$ | Linear predictor for a distribution parameter |
 | $X$ | Design matrix ($n \times p$); collects intercept, linear, and smooth basis columns |
@@ -1423,3 +1574,5 @@ Symbols used throughout this document.
 10. Abramowitz, M., & Stegun, I. A. (1972). *Handbook of Mathematical Functions*. Dover Publications. — Digamma / trigamma asymptotic expansions (6.3.18, 6.4.11).
 
 11. Piegl, L., & Tiller, W. (1997). *The NURBS Book* (2nd ed.). Springer. — Algorithm A2.2: de Boor–Cox recurrence for stable B-spline evaluation; the canonical reference for the `left`/`right` array structure used in `evaluate_basis_functions_into`.
+
+12. McCullagh, P. (1980). Regression models for ordinal data. *Journal of the Royal Statistical Society: Series B*, 42(2), 109-142. — Proportional-odds / cumulative-logit model; foundational reference for the `Ocat` distribution (§1.8).

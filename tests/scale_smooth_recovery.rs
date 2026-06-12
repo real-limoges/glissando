@@ -41,7 +41,7 @@ fn true_log_sigma(x: f64) -> f64 {
 
 #[test]
 fn sigma_smooth_recovers_nonlinear_scale() {
-    let n = 4_000;
+    let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
 
     // Constant mean; all of the structure lives in the scale parameter.
@@ -173,7 +173,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 fn recovered_curve_does_not_warn() {
     // The strong-signal recovery case from `sigma_smooth_recovers_nonlinear_scale`
     // must NOT raise a spurious collapse warning.
-    let n = 4_000;
+    let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
     let y_vals: Vec<f64> = x_vals
@@ -215,7 +215,7 @@ fn recovered_curve_does_not_warn() {
 /// machinery in general.
 #[test]
 fn mu_smooth_recovers_nonlinear_mean_control() {
-    let n = 4_000;
+    let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
 
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();

@@ -9,7 +9,7 @@ use crate::types::{DataSet, Formula};
 use ndarray::prelude::*;
 use std::collections::HashSet;
 
-/// Validates input data and formula for model fitting.
+/// Validates input data, formula, and optional prior weights for model fitting.
 ///
 /// Checks that:
 /// - Dataset is not empty
@@ -18,11 +18,13 @@ use std::collections::HashSet;
 /// - All parameters in the distribution have formulas
 /// - All variables referenced in formulas exist in the data
 /// - All numeric variables contain only finite values
+/// - If `weights` is `Some`, its length matches `y`, all values are finite and ≥ 0
 pub fn validate_inputs<D: Distribution + ?Sized>(
     y: &Array1<f64>,
     data: &DataSet,
     formula: &Formula,
     family: &D,
+    weights: Option<&Array1<f64>>,
 ) -> Result<(), GamlssError> {
     // Check dataset is not empty
     if y.is_empty() {
@@ -91,6 +93,22 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
         }
     }
 
+    // Validate prior weights when provided.
+    if let Some(w) = weights {
+        if w.len() != n_obs {
+            return Err(GamlssError::Input(format!(
+                "weights length {} != y length {}",
+                w.len(),
+                n_obs,
+            )));
+        }
+        if w.iter().any(|&v| !v.is_finite() || v < 0.0) {
+            return Err(GamlssError::Input(
+                "weights must be finite and non-negative".to_string(),
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -117,7 +135,7 @@ mod tests {
         let y = Array1::<f64>::zeros(0);
         let data = DataSet::new();
         let f = gaussian_formula();
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         assert!(matches!(err, GamlssError::EmptyData));
     }
 
@@ -126,7 +144,7 @@ mod tests {
         let y = Array1::from_vec(vec![1.0, f64::NAN, 3.0]);
         let data = DataSet::new();
         let f = gaussian_formula();
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::NonFiniteValues { count, .. } => assert_eq!(count, 1),
             other => panic!("expected NonFiniteValues, got {:?}", other),
@@ -138,7 +156,7 @@ mod tests {
         let y = Array1::from_vec(vec![1.0, 2.0]);
         let data = DataSet::new();
         let f = Formula::new().with_terms("mu", vec![Term::Intercept]);
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::MissingFormula { param } => assert_eq!(param, "sigma"),
             other => panic!("expected MissingFormula, got {:?}", other),
@@ -157,7 +175,7 @@ mod tests {
                 }],
             )
             .with_terms("sigma", vec![Term::Intercept]);
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::MissingVariable { name } => assert_eq!(name, "x"),
             other => panic!("expected MissingVariable, got {:?}", other),
@@ -176,7 +194,7 @@ mod tests {
                 }],
             )
             .with_terms("sigma", vec![Term::Intercept]);
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::Input(s) => {
                 assert!(s.contains("2 observations") && s.contains("response has 3"))
@@ -197,7 +215,7 @@ mod tests {
                 }],
             )
             .with_terms("sigma", vec![Term::Intercept]);
-        let err = validate_inputs(&y, &data, &f, &Gaussian).unwrap_err();
+        let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::NonFiniteValues { name, count } => {
                 assert_eq!(name, "x");
@@ -222,7 +240,7 @@ mod tests {
                 ],
             )
             .with_terms("sigma", vec![Term::Intercept]);
-        validate_inputs(&y, &data, &f, &Gaussian).unwrap();
+        validate_inputs(&y, &data, &f, &Gaussian, None).unwrap();
     }
 
     // Property tests — proptest is non-wasm only (the dev-dep is gated likewise).
@@ -251,7 +269,7 @@ mod tests {
                 let y = Array1::from_vec(y_vec);
                 let data = DataSet::new();
                 let f = gaussian_formula();
-                let result = validate_inputs(&y, &data, &f, &Gaussian);
+                let result = validate_inputs(&y, &data, &f, &Gaussian, None);
 
                 if total_nonfinite == 0 {
                     prop_assert!(result.is_ok());

@@ -19,7 +19,7 @@ const FORMULA: &str = r#"{
 
 #[wasm_bindgen_test]
 fn fit_linear_gaussian() {
-    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian").unwrap();
+    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
     assert!(model.converged());
     let coefs = model.coefficients("mu").unwrap();
     assert_eq!(coefs.len(), 2);
@@ -27,7 +27,7 @@ fn fit_linear_gaussian() {
 
 #[wasm_bindgen_test]
 fn predict_returns_one_value_per_row() {
-    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian").unwrap();
+    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
 
     let new_data = r#"{"x": [6.0, 7.0, 8.0]}"#;
     let pred_json = model.predict(new_data).unwrap();
@@ -39,7 +39,7 @@ fn predict_returns_one_value_per_row() {
 
 #[wasm_bindgen_test]
 fn json_round_trip_preserves_coefficients() {
-    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian").unwrap();
+    let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
     let original_coefs = model.coefficients("mu").unwrap();
 
     let json = model.to_json().unwrap();
@@ -54,7 +54,7 @@ fn json_round_trip_preserves_coefficients() {
 
 #[wasm_bindgen_test]
 fn malformed_json_returns_error() {
-    let res = WasmGamlssModel::fit("not json", "{}", "{}", "Gaussian");
+    let res = WasmGamlssModel::fit("not json", "{}", "{}", "Gaussian", None);
     assert!(res.is_err());
 }
 
@@ -63,6 +63,6 @@ fn unknown_distribution_returns_error() {
     let y = "[1.0, 2.0]";
     let data = r#"{"x": [1.0, 2.0]}"#;
     let formula = r#"{"mu": [{"Intercept": null}], "sigma": [{"Intercept": null}]}"#;
-    let res = WasmGamlssModel::fit(y, data, formula, "Wishart");
+    let res = WasmGamlssModel::fit(y, data, formula, "Wishart", None);
     assert!(res.is_err());
 }
