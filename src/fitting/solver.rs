@@ -3,7 +3,10 @@
 //! Uses Cholesky decomposition for solving the PWLS system and L-BFGS (via argmin)
 //! for optimizing smoothing parameters (lambda) by minimizing the GCV score.
 
-use super::{Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix};
+use super::{
+    Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix,
+    SmoothingCriterion,
+};
 use crate::linalg;
 use argmin::core::Gradient;
 use argmin::core::{CostFunction, Error, Executor};
@@ -26,6 +29,14 @@ const REML_RANK_TOL_EPS: f64 = 1e-8;
 /// Wide enough that no real solution is constrained; narrow enough to keep
 /// L-BFGS from wandering into numerically pathological regions.
 const LOG_LAMBDA_CLAMP: f64 = 30.0;
+
+/// Decades (in natural-log λ) below the cold-start heuristic to seed the
+/// collapse-guarded restart. The cold start sits *past* the interior LAML
+/// optimum on the slope toward the flat high-λ shelf; subtracting this offset
+/// lands the restart safely below both the optimum and the shelf, so a
+/// gradient/fixed-point optimizer descends into the (unimodal) interior optimum
+/// instead of staying pinned to the penalty null space.
+const RESTART_LOG_OFFSET: f64 = 8.0;
 
 /// Max Fellner-Schall iterations before returning the current λ.
 const FS_MAX_ITERS: usize = 50;
@@ -690,6 +701,57 @@ pub(super) fn initial_log_lambda(
     }))
 }
 
+/// Low-λ seed for the collapse-guarded restart (see [`RESTART_LOG_OFFSET`]).
+///
+/// Derived from the scale-aware cold-start heuristic so it adapts to the basis /
+/// response scale, then shifted several decades down to sit below the high-λ
+/// collapse shelf.
+pub(super) fn restart_seed(
+    x_matrix: &ModelMatrix,
+    penalty_matrices: &[PenaltyMatrix],
+) -> Array1<f64> {
+    initial_log_lambda(x_matrix, penalty_matrices)
+        .mapv(|log_lambda| (log_lambda - RESTART_LOG_OFFSET).exp().max(MIN_LAMBDA))
+}
+
+/// Value of the objective the given criterion minimizes, evaluated at a fixed λ.
+///
+/// Used by the collapse-guarded restart in [`super::scoring::step`] to compare a
+/// restart's λ against the incumbent and keep the lower-objective fit — so the
+/// guard can never make a fit worse, and genuinely null-space-optimal data (a
+/// linear truth under an order-2 penalty) correctly *keeps* its collapsed fit
+/// because that fit has the better marginal likelihood.
+pub(super) fn lambda_cost(
+    criterion: SmoothingCriterion,
+    x_matrix: &ModelMatrix,
+    z: &Array1<f64>,
+    w: &Array1<f64>,
+    penalty_matrices: &[PenaltyMatrix],
+    lambdas: &Array1<f64>,
+) -> Result<f64, GamlssError> {
+    let log_lambdas = LogLambdas(lambdas.mapv(|l| l.max(MIN_LAMBDA).ln()));
+    let map_err = |e: Error| GamlssError::Optimization(e.to_string());
+    match criterion {
+        SmoothingCriterion::Gcv => GamlssCost {
+            x_matrix,
+            z,
+            w,
+            penalty_matrices,
+        }
+        .cost(&log_lambdas)
+        .map_err(map_err),
+        // REML and Fellner-Schall minimize the same LAML target (−V_r).
+        SmoothingCriterion::Reml | SmoothingCriterion::FellnerSchall => RemlCost {
+            x_matrix,
+            z,
+            w,
+            penalty_matrices,
+        }
+        .cost(&log_lambdas)
+        .map_err(map_err),
+    }
+}
+
 #[cfg(test)]
 mod reml_tests {
     use super::*;
@@ -937,5 +999,125 @@ mod reml_tests {
                 rel_err
             );
         }
+    }
+
+    /// DIAGNOSTIC (Part 1, Q2 of the bistability investigation — `#[ignore]`d).
+    ///
+    /// Reconstructs the exact μ-subproblem of `mu_smooth_recovers_nonlinear_mean_control`
+    /// and grids the REML/LAML objective `−V_r(λ)` over log λ. For a Gaussian with
+    /// the identity link the IRLS working response is `z = y` exactly and the
+    /// working weight is constant `w = 1/σ̂²` (σ̂ ≈ 0.2 here), so this *is* the
+    /// landscape the outer loop's λ optimizer sees at convergence.
+    ///
+    /// Prints, for each grid point: λ, edf, and −V_r. The decision gate: is the
+    /// collapsed region (edf → null-space ≈ 3, counting the unpenalized intercept)
+    /// a *spurious local* optimum (interior λ has strictly lower −V_r) or the
+    /// *global* optimum (REML genuinely prefers the line)?
+    #[test]
+    #[ignore = "diagnostic: prints the LAML-vs-logλ landscape for the bistable control case"]
+    fn diagnostic_laml_landscape_control_case() {
+        use crate::fitting::assembler::{assemble_model_matrices, resolve_terms};
+        use crate::terms::{Smooth, Term};
+        use crate::types::DataSet;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        use rand_distr::{Distribution, Normal};
+
+        // --- Reproduce the control-case data verbatim (seed 7, n = 8000). ---
+        let n = 8_000usize;
+        let mut rng = StdRng::seed_from_u64(7);
+        let true_curve = |x: f64| -0.7 + 0.8 * (2.0 * std::f64::consts::PI * x).sin();
+        let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
+        let normal = Normal::new(0.0, 0.2).unwrap();
+        let y_vals: Vec<f64> = x_vals
+            .iter()
+            .map(|&x| true_curve(x) + normal.sample(&mut rng))
+            .collect();
+
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::from_vec(x_vals.clone()));
+
+        // --- Assemble the real design + penalty (intercept + sum-to-zero P-spline). ---
+        let terms = resolve_terms(
+            &[
+                Term::Intercept,
+                Term::Smooth(Smooth::PSpline1D {
+                    col_name: "x".to_string(),
+                    n_splines: 15,
+                    degree: 3,
+                    penalty_order: 2,
+                }),
+            ],
+            &data,
+        )
+        .unwrap();
+        let (x_model, penalties, _total, layouts) =
+            assemble_model_matrices(&data, n, &terms).unwrap();
+
+        // Gaussian identity link: z = y exactly; w = 1/σ̂² constant (σ̂ ≈ 0.2 → w ≈ 25).
+        let z = Array1::from_vec(y_vals.clone());
+        let w = Array1::from_elem(n, 1.0 / (0.2 * 0.2));
+
+        let null_dim: usize = layouts
+            .iter()
+            .filter(|l| l.is_smooth)
+            .map(|l| l.null_dim)
+            .sum();
+        eprintln!(
+            "smooth null-space dim = {null_dim} (collapse ⇒ edf ≈ {} incl. intercept)",
+            null_dim + 1
+        );
+        eprintln!("{:>10}  {:>10}  {:>16}", "log λ", "edf", "-V_r (LAML)");
+
+        let cost = RemlCost {
+            x_matrix: &x_model,
+            z: &z,
+            w: &w,
+            penalty_matrices: &penalties,
+        };
+
+        let mut best = (f64::INFINITY, 0.0_f64, 0.0_f64); // (-V_r, log λ, edf)
+        let mut rows: Vec<(f64, f64, f64)> = Vec::new();
+        let mut log_lambda = -6.0_f64;
+        while log_lambda <= 34.0 + 1e-9 {
+            let lambdas = arr1(&[log_lambda.exp()]);
+            let (_b, _v, edf, _e) = fit_pwls(&x_model, &z, &w, &penalties, &lambdas).unwrap();
+            let neg_vr = cost.cost(&LogLambdas(arr1(&[log_lambda]))).unwrap();
+            eprintln!("{log_lambda:>10.3}  {edf:>10.3}  {neg_vr:>16.4}");
+            rows.push((log_lambda, edf, neg_vr));
+            if neg_vr < best.0 {
+                best = (neg_vr, log_lambda, edf);
+            }
+            log_lambda += 1.0;
+        }
+
+        eprintln!(
+            "\nGLOBAL min of -V_r on grid: log λ = {:.3}  (λ = {:.4e}),  edf = {:.3},  -V_r = {:.4}",
+            best.1,
+            best.1.exp(),
+            best.2,
+            best.0
+        );
+        let collapsed = rows.last().unwrap();
+        eprintln!(
+            "COLLAPSE end (log λ = {:.1}): edf = {:.3}, -V_r = {:.4}  →  {} the global optimum",
+            collapsed.0,
+            collapsed.1,
+            collapsed.2,
+            if (collapsed.2 - best.0).abs() < 1e-6 {
+                "IS"
+            } else {
+                "is NOT"
+            }
+        );
+        eprintln!(
+            "Interior vs collapse: global-min edf = {:.3} ⇒ {}",
+            best.2,
+            if best.2 > null_dim as f64 + 1.5 {
+                "REML prefers an INTERIOR (curved) λ — collapse is a SPURIOUS LOCAL optimum (fixable)"
+            } else {
+                "REML's global optimum IS near-collapse — NOT an optimizer bug"
+            }
+        );
     }
 }
