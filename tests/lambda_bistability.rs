@@ -16,6 +16,15 @@
 //! (REML / L-BFGS) collapses across repeated fits, and whether `Gcv` and the
 //! deterministic `FellnerSchall` land on the good interior λ instead.
 //!
+//! RESOLUTION (kept as a regression diagnostic): the tipping was driven entirely
+//! by multi-threaded OpenBLAS reduction-order nondeterminism. This repo now pins
+//! BLAS to a single thread for all `cargo` runs (`OPENBLAS_NUM_THREADS=1` in
+//! `.cargo/config.toml`), so these harnesses now report a 0/N collapse rate with
+//! zero corr spread, and the deterministic recovery assertions in
+//! `tests/scale_smooth_recovery.rs` gate the behavior in CI. These repeated-fit
+//! harnesses stay `#[ignore]`d (they are heavy) but remain runnable to confirm the
+//! spread stays collapsed if the BLAS-threading config ever changes.
+//!
 //! Run with: `cargo test --test lambda_bistability -- --ignored --nocapture`
 
 use glissando::{
