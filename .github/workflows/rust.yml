@@ -226,6 +226,9 @@ jobs:
     # Comment-only perf signal. Runs on main pushes (so we always have a fresh baseline)
     # and manual dispatch. Skipped on PRs to keep latency low — the noise floor on hosted
     # runners makes hard thresholds flaky, so this is a non-blocking advisory.
+    # Uses --noise-threshold 0.10 because the baseline and the current run land on
+    # different physical VMs; cross-VM bias routinely shows ±5–10% on these microbenchmarks,
+    # which is systematic (not sampling noise), so more iterations would not shrink it.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -254,4 +257,4 @@ jobs:
             criterion-${{ runner.os }}-
 
       - name: Run benches with baseline diff
-        run: cargo bench --bench derivatives -- --save-baseline current
+        run: cargo bench --bench derivatives -- --save-baseline current --noise-threshold 0.10
