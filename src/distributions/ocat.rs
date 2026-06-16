@@ -65,7 +65,11 @@ impl Ocat {
             2 => "delta_2",
             3 => "delta_3",
             4 => "delta_4",
-            _ => panic!("Ocat: threshold index {} out of range (max R=5)", k),
+            // Unreachable: `Ocat::new` enforces `n_categories ∈ 2..=5`, so callers
+            // only ever pass `k ∈ 1..=n_thresholds = 1..=4`.
+            _ => {
+                unreachable!("Ocat: threshold index {k} out of range (n_categories ≤ 5 invariant)")
+            }
         }
     }
 
@@ -135,7 +139,10 @@ impl Distribution for Ocat {
             3 => &["mu", "delta_1", "delta_2"],
             4 => &["mu", "delta_1", "delta_2", "delta_3"],
             5 => &["mu", "delta_1", "delta_2", "delta_3", "delta_4"],
-            n => panic!("Ocat: unsupported n_categories {n}; supported 2–5"),
+            // Unreachable: `Ocat::new` rejects any `n_categories` outside `2..=5`.
+            n => {
+                unreachable!("Ocat: unsupported n_categories {n} (n_categories ∈ 2..=5 invariant)")
+            }
         }
     }
 
