@@ -1272,6 +1272,16 @@ The tolerance is set at $10^{-4}$ (rather than the looser $10^{-3}$) because the
 - **REML** (default): preferred for stability; the Laplace-approximate marginal likelihood is asymptotically equivalent to true REML for the working PWLS model, and tends to undersmooth less than GCV at moderate sample sizes.
 - **FellnerSchall**: same target as REML but with a deterministic multiplicative update — no L-BFGS, no line search. Fast and well-behaved for well-conditioned problems; can stall if the numerator drifts to its floor.
 
+### 8.4 Collapse-Guarded Restart
+
+Across all three criteria the $\lambda$-objective ($-V_r$ or the GCV score) for a single P-spline is **unimodal** in $\log\lambda$, with a single interior optimum, but it flattens into a near-horizontal **shelf** at large $\lambda$ where the smooth has been driven entirely onto its penalty null space (effective degrees of freedom $\to$ the null dimension; for an order-2 penalty after centering, a straight line). On that shelf the gradient $\approx 0$ and, for Fellner–Schall, $\hat\beta^T S_j \hat\beta \to 0$ so the multiplicative ratio explodes upward — both optimizers can become **stuck** there. Because the floating-point reduction order of the dense linear algebra is not deterministic under OpenBLAS, a borderline step can occasionally tip onto the shelf, producing a rare, nondeterministic **collapse** of an otherwise-recoverable smooth.
+
+The selector guards against this in `src/fitting/scoring.rs::step`. After the warm-started optimization and PWLS solve, any smooth term whose EDF has fallen to within `EDF_COLLAPSE_SLACK` $=0.5$ of its null dimension is treated as *collapsed*; the optimizer is then re-run once from a deliberately small seed,
+$$
+\lambda_{\text{restart}} \;=\; \exp\!\bigl(\log\lambda_{\text{cold}} - \mathtt{RESTART\_LOG\_OFFSET}\bigr), \qquad \mathtt{RESTART\_LOG\_OFFSET}=8,
+$$
+where $\log\lambda_{\text{cold}}$ is the scale-aware trace-ratio cold start (`initial_log_lambda`). This seed sits well below both the interior optimum and the shelf, so a gradient/fixed-point step descends into the unimodal interior optimum. The incumbent and the restart are then compared by their **actual objective value** (`lambda_cost`), and the lower one is kept. Comparing objectives is what makes the guard safe in both directions: a genuinely null-space-optimal fit (e.g. a strictly linear truth under an order-2 penalty) has the *better* marginal likelihood at the collapsed $\lambda$, so its collapse is **preserved**; only a spuriously collapsed, signal-bearing smooth — where the interior fit has the better objective — is repaired. The guard fires only when a collapse is detected, so well-behaved fits are untouched. Source: `src/fitting/scoring.rs` (`step`), `src/fitting/solver.rs` (`restart_seed`, `lambda_cost`, `RESTART_LOG_OFFSET`).
+
 ---
 
 ## 9. Mean-Variance Relationships
