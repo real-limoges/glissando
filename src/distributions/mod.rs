@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 mod links;
-pub use links::{IdentityLink, Link, LogLink, LogitLink};
+pub use links::{FlooredLogLink, IdentityLink, Link, LogLink, LogitLink};
 // Re-export at crate-internal scope so submodules can `use super::MIN_POSITIVE`
 // after the move without breaking. MAX_ETA/MIN_ETA are link-internal today and
 // only re-exported here so any future submodule can opt in without a separate edit.

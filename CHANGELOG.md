@@ -32,8 +32,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_inputs`.
 - New Poisson cases for `predict_with_se` and `predict_samples` integration
   tests covering the non-identity-link path.
+- `FlooredLogLink` — a log link with a lower bound on the response-scale value
+  (`μ = max(exp(η), floor)`). Used for StudentT's ν with `floor = 2` so the
+  variance `σ²ν/(ν−2)` stays finite as the optimizer explores the heavy-tail
+  region.
+- Student-t parity is now validated against R **gamlss `TF()`** — the
+  like-for-like Rigby–Stasinopoulos oracle (same μ/σ/ν parameterization) — via
+  the new `benchmark/fit_gamlss.R`, wired into `orchestrate.py` /
+  `run_comparison.sh`. This gates μ, σ, ν, EDF, SE and the (unweighted)
+  log-likelihood; mgcv `scat()` is retained only as a loose μ-only cross-method
+  sanity check.
 
 ### Changed
+
+- StudentT initialization is now robust to heavy tails: `μ` seeds from the
+  sample median, `σ` from `1.4826·MAD(y)` (instead of mean / sample SD, which the
+  tails bias), and `ν` from a fixed seed of 5 (a sample-kurtosis seed is biased
+  for regression data and could tip the multi-smooth weighted fit into a
+  degenerate over-smoothed basin).
+- StudentT's `ν` now uses a floored log link (`ν ≥ 2`) instead of a plain log
+  link, guaranteeing finite variance; the floor does not bind when the true `ν`
+  is well above 2. The reported `nu` default link changes from `log` to
+  `floored-log`.
+- `tests/mgcv_reference.rs` validates StudentT against gamlss `TF()` with tight,
+  measured tolerances, replacing the previous mgcv `scat()` comparison whose
+  parameterization mismatch had forced a 40% `fitted_mu` tolerance and skipped
+  σ/ν/EDF/SE entirely.
 
 - **Breaking.** `GamlssModel.models` is now `IndexMap<String, FittedParameter>`
   instead of `HashMap<String, FittedParameter>`. Iteration over `models`,

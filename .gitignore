@@ -1,5 +1,7 @@
 /target
+.DS_Store
 benchmark/output/
+!benchmark/output/comparison_summary.json
 benchmark/target/
 .idea/
 CLAUDE.md
@@ -8,3 +10,4 @@ CLAUDE.md
 docs/*
 !docs/mathematics.md
 !docs/mathematics.pdf
+!docs/ROADMAP.html
