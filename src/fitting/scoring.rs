@@ -14,7 +14,8 @@
 //! respect to the input `models` map, which keeps it unit-testable in isolation.
 
 use super::solver::{
-    fit_pwls, run_optimization, run_optimization_fellner_schall, run_optimization_reml,
+    fit_pwls, lambda_cost, restart_seed, run_optimization, run_optimization_fellner_schall,
+    run_optimization_reml,
 };
 use super::{FittingParameter, SmoothingCriterion};
 use crate::distributions::Distribution;
@@ -140,55 +141,97 @@ pub(super) fn step<D: Distribution + ?Sized>(
             *w_out = prior_i * safe_w;
         });
 
-    // 4. Optimize λ via the configured criterion (GCV or REML).  Warm-start from
-    //    previous values; fast-path purely parametric models with no penalties.
-    let best_lambdas = if target.penalty_matrices.is_empty() {
-        Array1::zeros(0)
-    } else {
+    // 4–5. Optimize λ (warm-started from the previous step), solve PWLS, and
+    //      attribute per-term EDF. Purely parametric models (no penalties) take
+    //      the zero-λ fast path inside `run_opt`.
+    let penalties = &target.penalty_matrices;
+
+    // Run the configured criterion's λ optimizer from `init`.
+    let run_opt = |init: Option<&Array1<f64>>| -> Result<Array1<f64>, GamlssError> {
+        if penalties.is_empty() {
+            return Ok(Array1::zeros(0));
+        }
         match criterion {
-            SmoothingCriterion::Gcv => run_optimization(
-                &target.x_matrix,
-                &z,
-                &w,
-                &target.penalty_matrices,
-                Some(&target.lambdas),
-            )?,
-            SmoothingCriterion::Reml => run_optimization_reml(
-                &target.x_matrix,
-                &z,
-                &w,
-                &target.penalty_matrices,
-                Some(&target.lambdas),
-            )?,
-            SmoothingCriterion::FellnerSchall => run_optimization_fellner_schall(
-                &target.x_matrix,
-                &z,
-                &w,
-                &target.penalty_matrices,
-                Some(&target.lambdas),
-            )?,
+            SmoothingCriterion::Gcv => run_optimization(&target.x_matrix, &z, &w, penalties, init),
+            SmoothingCriterion::Reml => {
+                run_optimization_reml(&target.x_matrix, &z, &w, penalties, init)
+            }
+            SmoothingCriterion::FellnerSchall => {
+                run_optimization_fellner_schall(&target.x_matrix, &z, &w, penalties, init)
+            }
         }
     };
 
-    // 5. Penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z.
-    let (new_beta, cov_matrix, edf, edf_per_coeff) = fit_pwls(
-        &target.x_matrix,
-        &z,
-        &w,
-        &target.penalty_matrices,
-        &best_lambdas,
-    )?;
+    // Solve PWLS at `lambdas` and attribute EDF to each term by summing its
+    // contiguous block of the per-coefficient EDF diagonal (column order matches
+    // `term_layouts`).
+    let fit_and_terms = |lambdas: &Array1<f64>| -> Result<
+        (Coefficients, CovarianceMatrix, f64, Vec<f64>),
+        GamlssError,
+    > {
+        let (beta, cov, edf, edf_per_coeff) =
+            fit_pwls(&target.x_matrix, &z, &w, penalties, lambdas)?;
+        let mut term_edf = Vec::with_capacity(target.term_layouts.len());
+        let mut offset = 0usize;
+        for layout in &target.term_layouts {
+            let end = offset + layout.n_coeffs;
+            term_edf.push((offset..end).map(|k| edf_per_coeff[k]).sum());
+            offset = end;
+        }
+        Ok((beta, cov, edf, term_edf))
+    };
 
-    // Attribute EDF to each term by summing its contiguous block of the
-    // per-coefficient EDF diagonal. Term column order matches `term_layouts`.
-    let mut term_edf = Vec::with_capacity(target.term_layouts.len());
-    let mut offset = 0usize;
-    for layout in &target.term_layouts {
-        let end = offset + layout.n_coeffs;
-        let block: f64 = (offset..end).map(|k| edf_per_coeff[k]).sum();
-        term_edf.push(block);
-        offset = end;
-    }
+    // A smooth term whose EDF has decayed to its penalty null-space dimension has
+    // collapsed onto the unpenalized polynomial remainder (e.g. a straight line).
+    let is_collapsed = |term_edf: &[f64]| -> bool {
+        target
+            .term_layouts
+            .iter()
+            .zip(term_edf)
+            .any(|(l, &e)| l.is_smooth && e <= l.null_dim as f64 + super::EDF_COLLAPSE_SLACK)
+    };
+
+    let best_lambdas = run_opt(Some(&target.lambdas))?;
+    let (best_lambdas, new_beta, cov_matrix, edf, term_edf) = {
+        let (beta, cov, edf, term_edf) = fit_and_terms(&best_lambdas)?;
+
+        // Collapse-guarded restart. The LAML/GCV objective is unimodal in λ but
+        // carries a flat high-λ shelf where a smooth sits in its penalty null
+        // space; BLAS reduction-order noise can occasionally tip the optimizer
+        // onto that shelf (rare, nondeterministic). If the incumbent collapsed,
+        // re-optimize from a low-λ seed (below the shelf) and keep whichever λ
+        // has the better objective. Comparing objectives means a genuinely
+        // null-space-optimal fit (a linear truth under an order-2 penalty) is
+        // preserved — its collapse has the better marginal likelihood — while a
+        // spuriously collapsed signal-bearing fit is repaired.
+        if !penalties.is_empty() && is_collapsed(&term_edf) {
+            let restart_lambdas = run_opt(Some(&restart_seed(&target.x_matrix, penalties)))?;
+            let incumbent_cost = lambda_cost(
+                criterion,
+                &target.x_matrix,
+                &z,
+                &w,
+                penalties,
+                &best_lambdas,
+            )?;
+            let restart_cost = lambda_cost(
+                criterion,
+                &target.x_matrix,
+                &z,
+                &w,
+                penalties,
+                &restart_lambdas,
+            )?;
+            if restart_cost < incumbent_cost {
+                let (rb, rc, re, rte) = fit_and_terms(&restart_lambdas)?;
+                (restart_lambdas, rb, rc, re, rte)
+            } else {
+                (best_lambdas, beta, cov, edf, term_edf)
+            }
+        } else {
+            (best_lambdas, beta, cov, edf, term_edf)
+        }
+    };
 
     let new_eta = target.x_matrix.dot(&new_beta.0);
     let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
@@ -372,6 +415,63 @@ mod tests {
         assert!(update.lambdas[0].is_finite() && update.lambdas[0] > 0.0);
         assert!(update.edf > 0.0 && update.edf <= n_splines as f64);
         assert!(update.beta.0.iter().all(|b| b.is_finite()));
+    }
+
+    #[test]
+    fn collapse_guarded_restart_recovers_from_shelf_warm_start() {
+        // A signal-bearing sine on a P-spline, but warm-started with a huge λ that
+        // sits on the high-λ "collapse shelf" (smooth pinned to its null space).
+        // The collapse-guarded restart must detect the collapse, re-optimize from
+        // a low-λ seed, and recover a genuinely curved fit (edf well above the
+        // null-space dimension) with a far smaller λ.
+        use crate::splines::{create_basis_matrix, create_penalty_matrix};
+        use crate::types::PenaltyMatrix;
+
+        let n = 400;
+        let x = Array1::from_iter((0..n).map(|i| i as f64 / (n - 1) as f64));
+        let y = x.mapv(|v| (2.0 * std::f64::consts::PI * v).sin());
+
+        let n_splines = 12;
+        let basis = create_basis_matrix(&x, n_splines, 3);
+        let penalty = create_penalty_matrix(n_splines, 2);
+
+        let mu = FittingParameter {
+            terms: vec![Term::Intercept],
+            term_layouts: vec![TermLayout {
+                n_coeffs: n_splines,
+                null_dim: 2,
+                is_smooth: true,
+            }],
+            link: Box::new(IdentityLink),
+            x_matrix: ModelMatrix(basis),
+            penalty_matrices: vec![PenaltyMatrix(penalty)],
+            beta: Coefficients(Array1::zeros(n_splines)),
+            eta: Array1::from_elem(n, 0.0),
+            mu: Array1::from_elem(n, 0.0),
+            // Collapsed warm start: λ on the shelf.
+            lambdas: Array1::from_elem(1, 1e12),
+            covariance: None,
+            edf: 0.0,
+            term_edf: vec![0.0],
+        };
+        let sigma = intercept_only_log(0.0, n);
+
+        let mut models = IndexMap::new();
+        models.insert("mu".to_string(), mu);
+        models.insert("sigma".to_string(), sigma);
+
+        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Reml).unwrap();
+
+        assert!(
+            update.term_edf[0] > 3.0,
+            "guard should have recovered a curved fit, got smooth edf = {}",
+            update.term_edf[0]
+        );
+        assert!(
+            update.lambdas[0] < 1e6,
+            "guard should have moved λ off the shelf, got λ = {}",
+            update.lambdas[0]
+        );
     }
 
     #[test]

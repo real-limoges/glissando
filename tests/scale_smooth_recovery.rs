@@ -10,6 +10,14 @@
 //! `log σ`). A collapsed σ-smooth shows up two ways here — low correlation with
 //! the truth, and an effective degrees of freedom pinned near its null-space
 //! dimension — and either makes the test fail.
+//!
+//! These recovery fits used to collapse rarely and nondeterministically: the
+//! λ-objective is unimodal but has a flat high-λ shelf (smooth pinned to its
+//! null space) that OpenBLAS reduction-order noise could occasionally tip the
+//! optimizer onto. That is now repaired by the collapse-guarded restart in
+//! `fitting::scoring::step` (see `docs/mathematics.md` §8.4). The root-cause
+//! diagnostics live in `tests/lambda_bistability.rs` and
+//! `solver::reml_tests::diagnostic_laml_landscape_control_case` (both `#[ignore]`d).
 
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;

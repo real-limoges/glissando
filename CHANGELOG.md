@@ -86,6 +86,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature unification in workspace builds) instead of a cryptic
   `E0428: name backend defined multiple times`.
 
+### Fixed
+
+- Smoothing-parameter **bistability**: a P-spline smooth could rarely and
+  nondeterministically collapse onto its penalty null space (a straight line,
+  EDF → null dimension) instead of recovering the true curve. The
+  $\lambda$-objective is unimodal but has a flat high-$\lambda$ shelf where the
+  smooth sits in its null space; under OpenBLAS the nondeterministic
+  floating-point reduction order occasionally tipped the optimizer onto that
+  shelf, where the gradient vanishes (and Fellner-Schall's multiplicative ratio
+  explodes), trapping it. `fitting::scoring::step` now applies a
+  **collapse-guarded restart**: a collapsed smooth re-runs the optimizer from a
+  low-$\lambda$ seed (below the shelf) and keeps whichever $\lambda$ has the
+  better objective (`solver::restart_seed`, `solver::lambda_cost`). Comparing
+  objectives preserves a genuinely null-space-optimal fit (e.g. a linear truth
+  under an order-2 penalty) while repairing a spuriously collapsed one. The fix
+  is criterion-agnostic (REML/GCV/Fellner-Schall) and fires only on collapse, so
+  well-behaved fits are unchanged. Investigation notes: the objective being
+  unimodal means the collapse was never a competing optimum, and Fellner-Schall —
+  despite no line search — is *not* immune (it still consumes
+  reduction-order-dependent traces and has a one-way denominator-floor trap), so
+  the fix targets the mechanism rather than swapping the default criterion.
+
 ### Performance
 
 - IRLS step caches `μ = link⁻¹(η)` on `FittingParameter` so each Fisher-scoring

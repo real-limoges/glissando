@@ -1,4 +1,8 @@
-.PHONY: fmt clippy test build ci check-wasm build-wasm
+.PHONY: fmt clippy test build ci check-wasm build-wasm hooks
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "pre-push hook activated (.githooks/pre-push)"
 
 fmt:
 	cargo fmt
