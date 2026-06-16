@@ -45,6 +45,63 @@ export class WasmGamlssModel {
         return ret !== 0;
     }
     /**
+     * Returns the `p × p` posterior covariance matrix for `param`
+     * as a JSON array of rows.
+     * @param {string} param
+     * @returns {string}
+     */
+    covarianceMatrix(param) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(param, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_covarianceMatrix(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Returns the linear-predictor design matrix X for `data_json` and `param`
+     * as a JSON array of rows (`[[col0, col1, ...], ...]`).
+     *
+     * Equivalent to mgcv's `predict(type="lpmatrix")`.
+     * @param {string} data_json
+     * @param {string} param
+     * @returns {string}
+     */
+    designMatrix(data_json, param) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(param, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_designMatrix(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * @returns {string}
      */
     diagnosticsJson() {
@@ -66,23 +123,18 @@ export class WasmGamlssModel {
         }
     }
     /**
-     * Fit a GAMLSS model in the browser.
+     * Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
      *
-     * - `y_json`: Response variable as a JSON array, e.g. `[1.0, 2.0, 3.0]`
-     * - `data_json`: Predictor data as JSON object, e.g. `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`
-     * - `formula_json`: Formula mapping parameter names to terms, e.g.
-     *   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`.
-     *   For a natural cubic regression spline (`bs="cr"`):
-     *   `{"mu": [{"Smooth": {"CrSpline1D": {"col_name": "x", "k": 6, "pc": null, "knots": []}}}]}`
-     *   (leave `knots` empty — resolved from training data at fit time).
-     * - `distribution`: Distribution name (Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta)
+     * `weights_json` is an optional JSON array of per-observation prior weights,
+     * e.g. `"[0.5, 1.0, 1.5]"`.  Pass `null` / `undefined` for unweighted fitting.
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json
      * @param {string} distribution
+     * @param {string | null} [weights_json]
      * @returns {WasmGamlssModel}
      */
-    static fit(y_json, data_json, formula_json, distribution) {
+    static fit(y_json, data_json, formula_json, distribution, weights_json) {
         const ptr0 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -91,26 +143,24 @@ export class WasmGamlssModel {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(distribution, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len3 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmgamlssmodel_fit(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr4 = isLikeNone(weights_json) ? 0 : passStringToWasm0(weights_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len4 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmgamlssmodel_fit(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
         return WasmGamlssModel.__wrap(ret[0]);
     }
     /**
-     * Fit a GAMLSS model with custom configuration.
-     *
-     * `config_json` is a JSON object with optional fields:
-     * `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`.
-     * `criterion` accepts `"reml"` (default), `"gcv"`, or `"fellner_schall"`.
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json
      * @param {string} distribution
      * @param {string} config_json
+     * @param {string | null} [weights_json]
      * @returns {WasmGamlssModel}
      */
-    static fitWithConfig(y_json, data_json, formula_json, distribution, config_json) {
+    static fitWithConfig(y_json, data_json, formula_json, distribution, config_json, weights_json) {
         const ptr0 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -121,7 +171,9 @@ export class WasmGamlssModel {
         const len3 = WASM_VECTOR_LEN;
         const ptr4 = passStringToWasm0(config_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len4 = WASM_VECTOR_LEN;
-        const ret = wasm.wasmgamlssmodel_fitWithConfig(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        var ptr5 = isLikeNone(weights_json) ? 0 : passStringToWasm0(weights_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len5 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmgamlssmodel_fitWithConfig(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -185,17 +237,21 @@ export class WasmGamlssModel {
      *
      * Returns JSON: `{"mu": [[s1_v1, s1_v2, ...], [s2_v1, ...], ...], "sigma": [...]}`
      * where each inner array is one sample's predictions across all observations.
+     *
+     * Pass an integer `seed` for reproducible output; omit or pass `null`/`undefined`
+     * for non-deterministic sampling.
      * @param {string} data_json
      * @param {number} n_samples
+     * @param {bigint | null} [seed]
      * @returns {string}
      */
-    predictSamples(data_json, n_samples) {
+    predictSamples(data_json, n_samples, seed) {
         let deferred3_0;
         let deferred3_1;
         try {
             const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmgamlssmodel_predictSamples(this.__wbg_ptr, ptr0, len0, n_samples);
+            const ret = wasm.wasmgamlssmodel_predictSamples(this.__wbg_ptr, ptr0, len0, n_samples, !isLikeNone(seed), isLikeNone(seed) ? BigInt(0) : seed);
             var ptr2 = ret[0];
             var len2 = ret[1];
             if (ret[3]) {
@@ -220,6 +276,32 @@ export class WasmGamlssModel {
             const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmgamlssmodel_predictWithSe(this.__wbg_ptr, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Returns the term → coefficient column block map for `param` as a JSON
+     * object `{"term_name": [first, last], ...}`.
+     * @param {string} param
+     * @returns {string}
+     */
+    termIndexMap(param) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(param, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_termIndexMap(this.__wbg_ptr, ptr0, len0);
             var ptr2 = ret[0];
             var len2 = ret[1];
             if (ret[3]) {

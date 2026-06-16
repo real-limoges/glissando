@@ -137,7 +137,7 @@ where $\psi'(x)$ is the trigamma function.
 
 ### Numerical Considerations
 
-1. **Minimum $\nu$**: Require $\nu > 2$ to ensure finite variance
+1. **Minimum $\nu$**: $\nu > 2$ is enforced to ensure finite variance, via a *floored log link* on $\nu$ ($\eta = \log\nu$, $\nu = \max(e^\eta, 2)$). The optimizer can explore the heavy-tail region without the variance $\sigma^2\nu/(\nu-2)$ becoming undefined; the floor never binds when the true $\nu$ is well above 2. See `FlooredLogLink` in `src/distributions/links.rs`.
 2. **Minimum $\sigma$**: Enforce $\sigma \geq 10^{-6}$ to prevent division by zero
 3. **Weight clamping**: The denominator $\nu + z^2$ should be $\geq 10^{-10}$
 4. **Information positivity**: Ensure $I_{\log(\nu)} \geq 10^{-6}$
@@ -652,7 +652,7 @@ To prevent numerical issues, parameters are clamped to safe ranges:
 ### 3.2 Distribution-Specific Safeguards
 
 **Student-t**:
-- Require $\nu > 2$ to ensure finite variance
+- Enforce $\nu > 2$ (finite variance) via the floored log link on $\nu$ (§7)
 - Ensure $\nu + z^2 \geq 10^{-10}$ to prevent division issues in robustifying weight
 
 **Gamma**:
@@ -994,9 +994,17 @@ where $H = X(X^TWX + \lambda S)^{-1}X^TWX$ is the hat matrix.
 - **Function**: $g(\mu) = \log(\mu)$
 - **Inverse**: $g^{-1}(\eta) = \exp(\eta)$
 - **Domain**: $\mu > 0$
-- **Use**: Poisson rate, Gamma mean, scale parameters, degrees of freedom
+- **Use**: Poisson rate, Gamma mean, scale parameters ($\sigma$)
 - **Derivative**: $\frac{d\mu}{d\eta} = \mu$
 - **Numerical safeguard**: Clamp $\eta \in [-30, 30]$ to prevent overflow
+
+### Floored Log Link
+- **Function**: $g(\mu) = \log(\max(\mu, c))$
+- **Inverse**: $g^{-1}(\eta) = \max(\exp(\eta), c)$
+- **Domain**: $\mu \geq c$
+- **Use**: Student-t degrees of freedom $\nu$ with floor $c = 2$, keeping the variance $\sigma^2\nu/(\nu-2)$ finite as the optimizer explores the heavy-tail region
+- **Derivative**: $\frac{d\mu}{d\eta} = \mu$ above the floor (the floor binds only transiently and never when the true $\nu$ is well above 2)
+- **Numerical safeguard**: same $\eta \in [-30, 30]$ clamp as the log link, plus the lower floor $c$. See `FlooredLogLink` in `src/distributions/links.rs`.
 
 ### Logit Link
 - **Function**: $g(\mu) = \log\left(\frac{\mu}{1-\mu}\right)$
@@ -1325,17 +1333,19 @@ For continuous data:
 The RS algorithm requires starting values for all parameters. Default initialization:
 
 1. **$\mu$**:
-   - Gaussian/Student-t: $\bar{y}$ (sample mean)
+   - Gaussian: $\bar{y}$ (sample mean)
+   - Student-t: $\mathrm{median}(y)$ — a robust location seed. The sample mean is pulled by the heavy tails, biasing the first robustifying weights $w = (\nu+1)/(\nu+z^2)$.
    - Poisson/Gamma/NB: $\bar{y}$ (then apply log link)
    - Binomial: $\bar{y}/n$ (sample proportion)
    - Beta: $\bar{y}$ (sample mean, clamped to $(0.1, 0.9)$)
 
 2. **$\sigma$**:
-   - Gaussian/Student-t: $s_y$ (sample std dev)
+   - Gaussian: $s_y$ (sample std dev)
+   - Student-t: $1.4826 \cdot \mathrm{MAD}(y)$ — the MAD-to-$\sigma$ consistency factor for a normal core. A raw sample SD overestimates the scale under heavy tails. Floored at $10^{-4}$ (falling back to $1.0$).
    - Gamma: $\hat\sigma_0 = s_y / \bar{y}$ (sample CV), clamped to $[0.05, 10.0]$. $\sigma$ parameterizes the coefficient of variation, not the raw SD; a raw-SD start makes REML over-penalize the $\sigma$ smooth on the first RS iteration and warm-start into a full-collapse trap.
    - NB/Beta: 1.0
 
-3. **$\nu$** (Student-t): 5.0
+3. **$\nu$** (Student-t): $5.0$ — a fixed moderate seed, deliberately **not** a sample-kurtosis estimate. For a regression model the *marginal* kurtosis of $y$ reflects the spread of the mean structure rather than the noise tails, so inverting $\kappa = 6/(\nu-4)$ biases $\nu$; in the multi-smooth weighted case this biased seed tipped the optimizer into a degenerate over-smoothed basin. $5$ sits well clear of the $\nu > 2$ finite-variance boundary. Source: `StudentT::initial_value` in `src/distributions/student_t.rs`.
 
 4. **$\phi$** (Beta): 1.0
 

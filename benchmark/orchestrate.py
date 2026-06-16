@@ -288,7 +288,8 @@ SCENARIOS: list[Scenario] = [
     Scenario("poisson_smooth",           True,  True,  None,   gen_poisson_smooth),
     Scenario("gamma_linear",             False, True,  None,   gen_gamma_linear),
     Scenario("gamma_smooth",             True,  True,  None,   gen_gamma_smooth),
-    # Student-t: compared against mgcv scat() scaled-t family.
+    # Student-t: primary oracle is gamlss TF() (same RS algorithm); mgcv_capable=True
+    # keeps scat() as a loose mu-only cross-method sanity check.
     Scenario("studentt_linear",          False, True,  None,   gen_studentt_linear),
     Scenario("studentt_smooth",          True,  True,  None,   gen_studentt_smooth),
     Scenario("negative_binomial_linear", False, True,  None,   gen_negative_binomial_linear),
@@ -346,6 +347,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rust-binary", type=Path, default=None)
     parser.add_argument("--r-script", type=Path, default=None)
+    parser.add_argument(
+        "--gamlss-script", type=Path, default=None,
+        help="R/gamlss script (fit_gamlss.R); the correct like-for-like oracle for "
+             "StudentT scenarios (same RS algorithm + μ/σ/ν parameterization).",
+    )
     parser.add_argument("--generate-only", action="store_true")
     parser.add_argument(
         "--scenarios", nargs="*", default=None,
@@ -385,6 +391,7 @@ def main() -> None:
         data_path = args.output_dir / f"data_{scenario.name}.parquet"
         rust_result = None
         mgcv_result = None
+        gamlss_result = None
 
         if args.rust_binary and args.rust_binary.exists():
             output = args.output_dir / f"rust_{scenario.name}.json"
@@ -412,11 +419,33 @@ def main() -> None:
                 f"mgcv:{scenario.name}",
             )
 
+        # gamlss TF() is the correct like-for-like reference for StudentT: same RS
+        # algorithm and same (μ, σ, ν) parameterization, so it exposes σ/ν/EDF/SE
+        # that mgcv's scat() cannot. mgcv scat() is retained above as a loose,
+        # mu-only cross-method (independent-algorithm) sanity check.
+        if (
+            args.gamlss_script
+            and args.gamlss_script.exists()
+            and "studentt" in scenario.name
+        ):
+            output = args.output_dir / f"gamlss_{scenario.name}.json"
+            gamlss_result = run_subprocess(
+                [
+                    "Rscript", str(args.gamlss_script),
+                    "--data", str(data_path),
+                    "--scenario", scenario.name,
+                    "--output", str(output),
+                ],
+                output,
+                f"gamlss:{scenario.name}",
+            )
+
         summary_scenarios.append({
             "name": scenario.name,
             "smooth": scenario.smooth,
             "glissando": rust_result,
             "mgcv": mgcv_result,
+            "gamlss": gamlss_result,
         })
 
     summary = {
