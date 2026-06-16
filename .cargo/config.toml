@@ -1,2 +1,14 @@
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+# Pin BLAS to a single thread for every cargo invocation in this repo (test, bench,
+# CI, pre-push hook). Multi-threaded OpenBLAS reductions are order-nondeterministic,
+# which occasionally tips borderline penalized fits onto the high-λ collapse shelf and
+# makes the smooth-recovery tests (b2_weighted_studentt, mu_smooth_recovers_nonlinear_mean_control)
+# flaky. Single-threaded reductions are deterministic, so fits are reproducible and the
+# collapse-recovery tests can be gated in CI. `force = true` makes this hold regardless
+# of any OPENBLAS_NUM_THREADS already set in the developer's shell. This affects only
+# this crate's own cargo runs — it does not bake into the library, WASM, or Python wheel.
+[env]
+OPENBLAS_NUM_THREADS = { value = "1", force = true }
+OMP_NUM_THREADS = { value = "1", force = true }
