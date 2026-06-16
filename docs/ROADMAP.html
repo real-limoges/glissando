@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · roadmap to gamlss / mgcv parity</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>glissando <span class="sub">· feature-completeness roadmap</span></h1>
+  <p class="lede">Target: <b style="color:#fff">parity with R <code>gamlss</code> / <code>mgcv</code></b> as a GAMLSS engine. Presented two ways — <b style="color:#fff">Part 1</b> groups every gap into workstreams of similar work (good for assigning / batching); <b style="color:#fff">Part 2</b> is a single flat stack-ranking by importance (good for deciding what to do next). The same items appear in both; IDs like <span class="id">DIST-1</span> are shared so you can cross-reference.</p>
+  <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 8 distributions; 3 links; native + WASM + Python + JSON surfaces; AIC/BIC/EDF; Pearson + response residuals; posterior sampling. Nothing is published.</p>
+
+  <h2 class="part">Part 1 — Grouped by workstream</h2>
+
+  <h2>A · Distribution trait foundations</h2>
+  <div class="ns">
+    <p>The single highest-leverage area: the <code>Distribution</code> trait (<code>src/distributions/mod.rs:32</code>) exposes only <code>derivatives</code>, <code>loglik</code>, <code>variance</code>, <code>expected_value</code>, <code>initial_value</code>, <code>default_link</code>. It has <b>no <code>cdf</code>, <code>pdf</code>, or <code>quantile</code>/<code>ppf</code></b>. Adding these unlocks centiles, randomized quantile residuals, and <code>predictAll</code> — the defining outputs of GAMLSS.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">TRAIT-1</span></td><td>Add <code>cdf(y, params)</code>, <code>pdf(y, params)</code>, <code>quantile(p, params)</code> to the <code>Distribution</code> trait; implement for all 8 existing families.</td></tr>
+      <tr><td class="k"><span class="id">TRAIT-2</span></td><td>Add a <code>Link</code> derivative method (<code>mu_eta</code> / <code>g'(μ)</code>) to the <code>Link</code> trait (<code>src/distributions/links.rs:15</code>) so non-canonical per-parameter links become possible without each distribution hard-coding η-scale Fisher weights. Prerequisite for B and for several distributions.</td></tr>
+    </table>
+  </div>
+
+  <h2>B · Link functions</h2>
+  <div class="ns">
+    <p>Only Identity, Log, Logit exist (<code>src/distributions/links.rs</code>). Missing the standard set — depends on <span class="id">TRAIT-2</span> for clean integration.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">LINK-1</span></td><td>Probit (Φ⁻¹) — binary alternative to logit.</td></tr>
+      <tr><td class="k"><span class="id">LINK-2</span></td><td>Complementary log-log (cloglog) — binomial / discrete survival.</td></tr>
+      <tr><td class="k"><span class="id">LINK-3</span></td><td>Inverse / reciprocal (1/μ) — classical Gamma canonical link.</td></tr>
+      <tr><td class="k"><span class="id">LINK-4</span></td><td>Inverse-square (1/μ²) — Inverse Gaussian canonical link.</td></tr>
+      <tr><td class="k"><span class="id">LINK-5</span></td><td>Sqrt — Poisson variance-stabilizing link.</td></tr>
+      <tr><td class="k"><span class="id">LINK-6</span></td><td>Cauchit, log-log, and bounded "own" / shifted-logit variants.</td></tr>
+    </table>
+  </div>
+
+  <h2>C · Distribution families</h2>
+  <div class="ns">
+    <p>Implemented: Gaussian, Gamma, Poisson, Negative Binomial, Beta, Student-t, Binomial, Ocat (2–5 levels). The catalog below is what <code>gamlss.dist</code> ships, grouped by family type.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIST-1</span></td><td>Box-Cox / power family — <b>the signature GAMLSS distributions</b>: BCCG (Box-Cox Cole-Green), BCT (Box-Cox-t), BCPE (Box-Cox power exponential).</td></tr>
+      <tr><td class="k"><span class="id">DIST-2</span></td><td>Common continuous-positive: Inverse Gaussian (IG), Weibull, Lognormal (LOGNO), Exponential, Generalized Gamma (GG), Pareto.</td></tr>
+      <tr><td class="k"><span class="id">DIST-3</span></td><td>Skew / kurtotic continuous: Skew Normal (SN1/SN2), Skew-t (ST1–ST5), Sinh-Arcsinh (SHASH), Johnson SU (JSU), Power Exponential (PE), Generalized t (GT).</td></tr>
+      <tr><td class="k"><span class="id">DIST-4</span></td><td>Count families: Geometric, Logarithmic, Beta-Binomial, Double Poisson, Poisson-Inverse-Gaussian (PIG), Sichel, Delaporte.</td></tr>
+      <tr><td class="k"><span class="id">DIST-5</span></td><td>Zero-inflated / zero-adjusted: ZIP, ZINBI, Zero-Adjusted Gamma (ZAGA), Zero-Adjusted IG (ZAIG), Zero/One-Inflated Beta (BEINF/BEZI/BEOI).</td></tr>
+      <tr><td class="k"><span class="id">DIST-6</span></td><td>Ocat generalization beyond the 2–5 category cap (<code>src/distributions/ocat.rs</code> panics outside 2–5).</td></tr>
+    </table>
+  </div>
+
+  <h2>D · Structural / likelihood modeling</h2>
+  <div class="ns">
+    <p>The trait has no hooks for these; they need new machinery, not just new families.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">STRUCT-1</span></td><td>Censoring (left / right / interval) — survival-style response.</td></tr>
+      <tr><td class="k"><span class="id">STRUCT-2</span></td><td>Truncation (left / right / interval) bounds.</td></tr>
+      <tr><td class="k"><span class="id">STRUCT-3</span></td><td>Hurdle / two-part structure (generalizes zero-inflation cleanly).</td></tr>
+      <tr><td class="k"><span class="id">STRUCT-4</span></td><td>Finite mixture models (component machinery).</td></tr>
+    </table>
+  </div>
+
+  <h2>E · Smooth terms &amp; splines</h2>
+  <div class="ns">
+    <p><code>Smooth</code> enum (<code>src/terms.rs</code>) has PSpline1D, CrSpline1D, TensorProduct (2D only), RandomEffect (intercept only). Each new variant needs: enum case + <code>splines.rs</code> basis + <code>assembler.rs</code> block mapping.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">SMOOTH-1</span></td><td>Cyclic splines (mgcv <code>bs="cc"</code>) — seasonal / periodic.</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-2</span></td><td>Thin-plate regression splines (<code>bs="tp"</code>).</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-3</span></td><td>By-factor / varying-coefficient smooths (<code>s(x, by=f)</code>).</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-4</span></td><td>Random slopes (only random intercepts exist today).</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-5</span></td><td>Monotonic / shape-constrained (SCAM-style) splines.</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-6</span></td><td>Tensor products of dimension &gt;2 and interaction-only <code>ti()</code> tensors.</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-7</span></td><td>Markov random fields (<code>bs="mrf"</code>), adaptive (<code>bs="ad"</code>), factor-smooth interactions (<code>bs="fs"</code>), soap-film.</td></tr>
+    </table>
+  </div>
+
+  <h2>F · Fitting engine robustness</h2>
+  <div class="ns">
+    <p><code>fit_gamlss</code> (<code>src/fitting/mod.rs</code>) is RS-only with per-parameter coefficient-change convergence; stability comes from weight floors + step caps.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">FIT-1</span></td><td>Step-halving / line-search on the global deviance in the RS loop.</td></tr>
+      <tr><td class="k"><span class="id">FIT-2</span></td><td>Global-deviance outer convergence criterion (in addition to Δβ).</td></tr>
+      <tr><td class="k"><span class="id">FIT-3</span></td><td>CG (Cole-Green) algorithm for cross-parameter derivative coupling — gamlss's second fitting algorithm, for when RS mixes slowly.</td></tr>
+      <tr><td class="k"><span class="id">FIT-4</span></td><td>GAIC-based / grid ("magic"-style) λ selection as an alternative to the L-BFGS criteria.</td></tr>
+    </table>
+  </div>
+
+  <h2>G · Model selection &amp; inference</h2>
+  <div class="ns">
+    <p>Present: AIC, BIC, total / per-param / per-term EDF, collapse warnings (<code>src/fitting/diagnostics.rs</code>).</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">INFER-1</span></td><td>Randomized (normalized) quantile residuals — gamlss's <b>default</b> residual (needs <span class="id">TRAIT-1</span>).</td></tr>
+      <tr><td class="k"><span class="id">INFER-2</span></td><td>Centile / quantile prediction and full-distribution <code>predictAll</code> (needs <span class="id">TRAIT-1</span>) — <code>centiles()</code> analog.</td></tr>
+      <tr><td class="k"><span class="id">INFER-3</span></td><td>GAIC with arbitrary penalty <code>k</code>.</td></tr>
+      <tr><td class="k"><span class="id">INFER-4</span></td><td>Stepwise term selection (<code>stepGAIC</code> analog: forward / backward).</td></tr>
+      <tr><td class="k"><span class="id">INFER-5</span></td><td>Approximate p-values / significance tests for smooth terms (<code>summary.gam</code> Tr/Wald analog).</td></tr>
+      <tr><td class="k"><span class="id">INFER-6</span></td><td>Confidence intervals for fitted curves and coefficients.</td></tr>
+      <tr><td class="k"><span class="id">INFER-7</span></td><td>ANOVA / model-comparison facility.</td></tr>
+    </table>
+  </div>
+
+  <h2>H · Diagnostics &amp; plotting</h2>
+  <div class="ns">
+    <p>Present: Pearson + response residuals, Display summary.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIAG-1</span></td><td>Worm plots (the gamlss diagnostic) — needs <span class="id">INFER-1</span>.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-2</span></td><td>Q-Q plots and detrended Q-Q — needs <span class="id">INFER-1</span>.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-3</span></td><td>Deviance residuals.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-4</span></td><td>Goodness-of-fit statistics (Filliben correlation, Z/Q stats).</td></tr>
+      <tr><td class="k"><span class="id">DIAG-5</span></td><td>Term-effect plotting data (partial-effect curves + CI bands) — needs <span class="id">INFER-6</span>.</td></tr>
+    </table>
+  </div>
+
+  <h2>I · Data handling &amp; formula</h2>
+  <div class="ns">
+    <p><code>DataSet</code> is <code>HashMap&lt;String, Array1&lt;f64&gt;&gt;</code> (all f64); <code>Formula</code> is term lists.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DATA-1</span></td><td>Factor / categorical type with contrast / dummy encoding (today users pre-expand manually).</td></tr>
+      <tr><td class="k"><span class="id">DATA-2</span></td><td>Interaction terms (<code>x:z</code>, <code>x*z</code>).</td></tr>
+      <tr><td class="k"><span class="id">DATA-3</span></td><td>Offsets (no offset term or argument exists).</td></tr>
+      <tr><td class="k"><span class="id">DATA-4</span></td><td>Missing-data / NA handling (<code>validate_inputs</code> currently rejects non-finite; no <code>na.action</code> / imputation).</td></tr>
+      <tr><td class="k"><span class="id">DATA-5</span></td><td>String formula parser (<code>"y ~ s(x) + z"</code>) — major ergonomics lever; ties to <span class="id">API-1</span>.</td></tr>
+    </table>
+  </div>
+
+  <h2>J · API ergonomics</h2>
+  <div class="ns">
+    <p>Formula construction is raw enum struct-literals.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">API-1</span></td><td>Fluent builder / helper constructors (<code>s("x")</code>, <code>linear("z")</code>, <code>random("g")</code>) or string-formula DSL (overlaps <span class="id">DATA-5</span>).</td></tr>
+      <tr><td class="k"><span class="id">API-2</span></td><td>Named <code>model.summary()</code> returning a struct (today only via <code>Display</code>).</td></tr>
+    </table>
+  </div>
+
+  <h2>K · Bindings parity</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">BIND-1</span></td><td>WASM: regenerate stale <code>pkg/</code> (<code>.d.ts</code> missing <code>weights_json</code>, missing Ocat), expose <code>designMatrix</code> / <code>predictClassProbabilities</code> / covariance, add a typed JS wrapper + npm README / examples.</td></tr>
+      <tr><td class="k"><span class="id">BIND-2</span></td><td>Python: sklearn-compatible estimator (<code>BaseEstimator</code>/<code>RegressorMixin</code>, <code>X,y</code>, <code>get_params</code>/<code>score</code>), pandas <code>DataFrame</code> input, populate the empty <code>python/glissando/__init__.py</code>, ship <code>.pyi</code> stubs.</td></tr>
+      <tr><td class="k"><span class="id">BIND-3</span></td><td>Surface new statistical features (centiles, quantile residuals, term selection) across all four surfaces as they land.</td></tr>
+    </table>
+  </div>
+
+  <h2>L · Serialization</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">SER-1</span></td><td><code>to_json</code>/<code>from_json</code> cannot round-trip stateful distributions — <code>Binomial</code> (n_trials) and <code>Ocat</code> (n_categories) can't be rebuilt via <code>load</code> (<code>src/json.rs:206</code>). Serialize distribution params, not just the name.</td></tr>
+    </table>
+  </div>
+
+  <h2>M · Documentation</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DOC-1</span></td><td>Publish to docs.rs (requires a crates.io release) + crate-level guide.</td></tr>
+      <tr><td class="k"><span class="id">DOC-2</span></td><td>User guide / cookbook / tutorials beyond <code>docs/mathematics.md</code>.</td></tr>
+      <tr><td class="k"><span class="id">DOC-3</span></td><td>Per-distribution worked examples; WASM + Python example directories.</td></tr>
+      <tr><td class="k"><span class="id">DOC-4</span></td><td>mgcv / gamlss → glissando migration guide.</td></tr>
+    </table>
+  </div>
+
+  <h2>N · Testing &amp; quality</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">TEST-1</span></td><td>Property-based tests (proptest) for parsers / JSON facade / basis assembly.</td></tr>
+      <tr><td class="k"><span class="id">TEST-2</span></td><td>Fuzzing (cargo-fuzz) for the JSON facade and formula parser.</td></tr>
+      <tr><td class="k"><span class="id">TEST-3</span></td><td>Un-ignore / fixture-back <code>tests/mgcv_reference.rs</code> so it runs in CI; expand the mgcv comparison matrix as distributions land.</td></tr>
+      <tr><td class="k"><span class="id">TEST-4</span></td><td>Expand insta snapshot coverage (only 3 today).</td></tr>
+    </table>
+  </div>
+
+  <h2>O · Release &amp; distribution</h2>
+  <div class="ns">
+    <p>Nothing is published; CI builds wheels / wasm but never uploads.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">REL-1</span></td><td>crates.io publish workflow + semver tagging.</td></tr>
+      <tr><td class="k"><span class="id">REL-2</span></td><td>npm publish workflow for the WASM package.</td></tr>
+      <tr><td class="k"><span class="id">REL-3</span></td><td>PyPI publish via maturin / cibuildwheel — manylinux + macOS + Windows + aarch64, multi-Python matrix (today a single ubuntu wheel).</td></tr>
+      <tr><td class="k"><span class="id">REL-4</span></td><td>Release automation (tag → build → publish) and move off the feature branch.</td></tr>
+    </table>
+  </div>
+
+  <h2 class="part">Part 2 — Stack-ranked by importance (R gamlss parity)</h2>
+  <p class="lede">Ranked so that each item's prerequisites sit above it, and "what makes GAMLSS GAMLSS" (flexible distributions, centiles, quantile residuals) sits near the top.</p>
+  <ol class="steps">
+    <li><b><span class="id">TRAIT-1</span></b> — <code>cdf</code> / <code>pdf</code> / <code>quantile</code> on the <code>Distribution</code> trait.<div class="sub2"><em>Foundational; unlocks centiles, quantile residuals, predictAll.</em></div></li>
+    <li><b><span class="id">INFER-1</span></b> — Randomized quantile residuals (gamlss's default residual).</li>
+    <li><b><span class="id">INFER-2</span></b> — Centile / quantile prediction + <code>predictAll</code> (the signature GAMLSS output).</li>
+    <li><b><span class="id">DIST-1</span></b> — Box-Cox family (BCCG / BCT / BCPE), the distributions GAMLSS is known for.</li>
+    <li><b><span class="id">DIST-2</span></b> — Common continuous-positive families (IG, Weibull, Lognormal, Exponential, GG).</li>
+    <li><b><span class="id">DIST-5</span></b> — Zero-inflated / zero-adjusted families (ZIP, ZINBI, ZAGA, BEINF) — very common in real count / semicontinuous data.</li>
+    <li><b><span class="id">TRAIT-2</span></b> — <code>Link</code> derivative method (<code>mu_eta</code>). <em>Unblocks the link expansion.</em></li>
+    <li><b><span class="id">LINK-1..5</span></b> — Probit, cloglog, inverse, inverse-square, sqrt links.</li>
+    <li><b><span class="id">DIST-3</span></b> — Skew / kurtotic families (SN, ST, SHASH, JSU, PE).</li>
+    <li><b><span class="id">DIST-4</span></b> — Additional count families (Geometric, Beta-Binomial, PIG, Sichel, Delaporte, Logarithmic).</li>
+    <li><b><span class="id">DIAG-1</span> / <span class="id">DIAG-2</span></b> — Worm plots and Q-Q plots (the core gamlss diagnostics).</li>
+    <li><b><span class="id">INFER-3</span> / <span class="id">INFER-4</span></b> — GAIC(k) and stepwise term selection (<code>stepGAIC</code>).</li>
+    <li><b><span class="id">FIT-1</span> / <span class="id">FIT-2</span></b> — Step-halving + global-deviance convergence (robustness for the new heavy-tailed / skew families).</li>
+    <li><b><span class="id">INFER-5</span> / <span class="id">INFER-6</span> / <span class="id">INFER-7</span></b> — Smooth-term p-values, confidence intervals, ANOVA.</li>
+    <li><b><span class="id">DATA-1</span> / <span class="id">DATA-2</span> / <span class="id">DATA-3</span></b> — Factor / categorical encoding, interactions, offsets.</li>
+    <li><b><span class="id">STRUCT-1</span> / <span class="id">STRUCT-2</span></b> — Censoring and truncation.</li>
+    <li><b><span class="id">SMOOTH-1..4</span></b> — Cyclic, thin-plate, by-factor smooths, random slopes.</li>
+    <li><b><span class="id">DATA-5</span> / <span class="id">API-1</span> / <span class="id">API-2</span></b> — Formula parser, fluent builder, <code>summary()</code>.</li>
+    <li><b><span class="id">FIT-3</span> / <span class="id">FIT-4</span></b> — CG algorithm, GAIC / grid λ selection.</li>
+    <li><b><span class="id">STRUCT-3</span> / <span class="id">STRUCT-4</span></b> — Hurdle / mixture structure.</li>
+    <li><b><span class="id">DIST-6</span></b> — Ocat beyond 5 categories.</li>
+    <li><b><span class="id">DIAG-3</span> / <span class="id">DIAG-4</span> / <span class="id">DIAG-5</span></b> — Deviance residuals, GoF stats, partial-effect plots.</li>
+    <li><b><span class="id">SMOOTH-5..7</span></b> — Monotonic / SCAM, &gt;2D tensors, MRF / adaptive / factor-smooth.</li>
+    <li><b><span class="id">BIND-2</span></b> — Python sklearn / pandas ergonomics.</li>
+    <li><b><span class="id">BIND-1</span> / <span class="id">BIND-3</span></b> — WASM pkg refresh + cross-surface feature parity.</li>
+    <li><b><span class="id">SER-1</span></b> — Stateful-distribution serialization round-trip.</li>
+    <li><b><span class="id">DOC-1..4</span></b> — docs.rs, user guide, examples, migration guide.</li>
+    <li><b><span class="id">TEST-1..4</span></b> — proptest, fuzzing, un-ignore mgcv_reference, more snapshots.</li>
+    <li><b><span class="id">REL-1..4</span></b> — Publishing to crates.io / npm / PyPI + release automation.</li>
+  </ol>
+
+  <h2>Critical path</h2>
+  <div class="ns">
+    <p><span class="id">TRAIT-1</span> → (<span class="id">INFER-1</span>, <span class="id">INFER-2</span>) and <span class="id">TRAIT-2</span> → links. Almost everything statistically distinctive about GAMLSS depends on <span class="id">TRAIT-1</span> landing first, so it is <b>the single most important item</b> in the entire roadmap.</p>
+  </div>
+
+  <footer>glissando · feature-completeness roadmap · v0.1.0 · parity with R gamlss / mgcv</footer>
+</div>
+</body>
+</html>

@@ -6,7 +6,11 @@ Comparison framework for validating the Rust `glissando` implementation against 
 
 This benchmark compares glissando (Rust) against:
 - **R/mgcv**: For Gaussian, Poisson, Gamma, Negative Binomial, and Beta distributions
-- **R/gamlss**: For Student-t distribution and advanced GAMLSS features
+- **R/gamlss**: The like-for-like oracle for Student-t (`TF()`), since it implements the
+  same Rigby–Stasinopoulos algorithm and the same (μ, σ, ν) location-scale-df
+  parameterization glissando uses. mgcv's `scat()` is *also* run for Student-t as a loose,
+  μ-only cross-method sanity check, but it cannot validate σ/ν/EDF/SE because it folds
+  σ and ν into internal nuisance scalars rather than exposing them as modelled predictors.
 
 The suite generates synthetic data with known parameters, fits models in both implementations, and produces detailed comparison reports.
 

@@ -99,7 +99,7 @@ println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 | `Poisson` | mu | log | Count data |
 | `Binomial` | mu | logit | Binary/count with known trials |
 | `Gaussian` | mu, sigma | identity, log | Continuous data |
-| `StudentT` | mu, sigma, nu | identity, log, log | Heavy-tailed continuous |
+| `StudentT` | mu, sigma, nu | identity, log, floored-log (ν≥2) | Heavy-tailed continuous |
 | `Gamma` | mu, sigma | log, log | Positive continuous |
 | `NegativeBinomial` | mu, sigma | log, log | Overdispersed counts |
 | `Beta` | mu, phi | logit, log | Proportions (0, 1) |

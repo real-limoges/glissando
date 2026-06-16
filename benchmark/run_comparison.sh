@@ -35,10 +35,20 @@ fi
 echo "[2/4] Checking R dependencies..."
 if Rscript -e 'library(arrow); library(mgcv); library(jsonlite)' 2>/dev/null; then
     R_SCRIPT="${SCRIPT_DIR}/fit_mgcv.R"
-    echo "      R ready: ${R_SCRIPT}"
+    echo "      R/mgcv ready: ${R_SCRIPT}"
 else
-    echo "      Warning: R dependencies missing. Will skip R fitting."
+    echo "      Warning: R/mgcv dependencies missing. Will skip mgcv fitting."
     R_SCRIPT=""
+fi
+
+# gamlss is the like-for-like oracle for StudentT (same RS algorithm). It is
+# optional: without it, StudentT falls back to the loose mgcv scat() sanity check.
+if Rscript -e 'library(arrow); library(gamlss); library(jsonlite)' 2>/dev/null; then
+    GAMLSS_SCRIPT="${SCRIPT_DIR}/fit_gamlss.R"
+    echo "      R/gamlss ready: ${GAMLSS_SCRIPT}"
+else
+    echo "      Warning: R/gamlss missing. StudentT parity falls back to mgcv scat()."
+    GAMLSS_SCRIPT=""
 fi
 
 # Step 3: Generate test data
@@ -57,6 +67,10 @@ ARGS="--output-dir ${OUTPUT_DIR} --n-obs ${N_OBS} --seed ${SEED}"
 
 if [ -n "${R_SCRIPT}" ]; then
     ARGS="${ARGS} --r-script ${R_SCRIPT}"
+fi
+
+if [ -n "${GAMLSS_SCRIPT}" ]; then
+    ARGS="${ARGS} --gamlss-script ${GAMLSS_SCRIPT}"
 fi
 
 if [ -n "${RUST_BINARY}" ]; then

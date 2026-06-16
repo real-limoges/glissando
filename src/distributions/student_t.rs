@@ -1,18 +1,31 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    require, DerivativesResult, Distribution, FlooredLogLink, GamlssError, IdentityLink, Link,
+    LogLink, MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
 use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
 
+/// Lower bound on the degrees-of-freedom `ν`, enforced via [`FlooredLogLink`].
+/// Keeps `ν > 2` so the variance `σ²·ν/(ν−2)` stays finite while the optimizer
+/// explores the heavy-tail region. Never binds when the true `ν` is well above 2.
+const NU_FLOOR: f64 = 2.0;
+
+/// Starting value for `ν`. A fixed moderate seed is deliberately preferred over a
+/// sample-kurtosis estimate: for regression data the *marginal* kurtosis reflects the
+/// spread of the mean structure, not the noise tails, so a kurtosis inversion biases
+/// `ν` and (in the multi-smooth weighted case) can seed the optimizer into a degenerate
+/// over-smoothed basin. 5 is a standard heavy-tail default, well clear of the `ν > 2`
+/// finite-variance boundary.
+const NU_INIT: f64 = 5.0;
+
 /// Student's t distribution for heavy-tailed continuous data.
 ///
-/// Parameters: `μ` (location, identity), `σ` (scale, log), `ν` (degrees of freedom, log).
-/// As `ν → ∞` the distribution approaches Gaussian.
+/// Parameters: `μ` (location, identity), `σ` (scale, log), `ν` (degrees of freedom,
+/// floored log link with `ν ≥ 2`). As `ν → ∞` the distribution approaches Gaussian.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StudentT;
 
@@ -30,8 +43,38 @@ impl Distribution for StudentT {
     fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
         match param {
             "mu" => Ok(Box::new(IdentityLink)),
-            "sigma" | "nu" => Ok(Box::new(LogLink)),
+            "sigma" => Ok(Box::new(LogLink)),
+            "nu" => Ok(Box::new(FlooredLogLink { floor: NU_FLOOR })),
             other => Err(self.unknown_param(other)),
+        }
+    }
+
+    /// Robust IRLS seeds for heavy-tailed data. The trait default (sample mean,
+    /// sample SD) is non-robust: under heavy tails the mean is pulled by outliers and
+    /// the SD overestimates the scale `σ`. Instead:
+    /// - `μ` = median(y),
+    /// - `σ` = 1.4826·MAD(y) (the MAD-to-σ consistency factor for a normal core),
+    /// - `ν` = [`NU_INIT`] (a fixed moderate seed; see its doc for why a kurtosis
+    ///   estimate is avoided).
+    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        match param {
+            "mu" => median(y),
+            "sigma" => {
+                let s = 1.4826 * median_abs_deviation(y);
+                if s < 1e-4 {
+                    1.0
+                } else {
+                    s
+                }
+            }
+            "nu" => NU_INIT,
+            other => {
+                debug_assert!(
+                    matches!(other, "mu" | "sigma" | "nu"),
+                    "StudentT has no parameter '{other}'"
+                );
+                NU_INIT
+            }
         }
     }
 
@@ -131,6 +174,29 @@ impl Distribution for StudentT {
     }
 }
 
+/// Median of `y`. Returns 0.0 for an empty slice (`validate_inputs` rejects empty
+/// `y` on the public path, so this is only a defensive default).
+fn median(y: &Array1<f64>) -> f64 {
+    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let m = v.len() / 2;
+    if v.len().is_multiple_of(2) {
+        0.5 * (v[m - 1] + v[m])
+    } else {
+        v[m]
+    }
+}
+
+/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
+fn median_abs_deviation(y: &Array1<f64>) -> f64 {
+    let med = median(y);
+    let dev = y.mapv(|x| (x - med).abs());
+    median(&dev)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +265,40 @@ mod tests {
         let v = StudentT.variance(&p).unwrap();
         assert!(v[0].is_finite());
         assert!(v[0] > 0.0);
+    }
+
+    #[test]
+    fn initial_value_is_robust_to_outliers() {
+        // A clean core around 10 with a few gross outliers. The non-robust trait
+        // default (mean/SD) would be dragged toward the outliers; median/MAD resist.
+        let y = array![9.8, 10.1, 9.9, 10.2, 10.0, 9.7, 10.3, 9.95, 10.05, 1000.0, -800.0];
+        let mu0 = StudentT.initial_value("mu", &y);
+        assert!(
+            (mu0 - 10.0).abs() < 0.5,
+            "median seed should sit near the core (got {mu0})"
+        );
+        let sigma0 = StudentT.initial_value("sigma", &y);
+        assert!(
+            sigma0 > 0.0 && sigma0 < 2.0,
+            "MAD-based scale seed should reflect the core spread, not the outliers (got {sigma0})"
+        );
+        let nu0 = StudentT.initial_value("nu", &y);
+        assert_eq!(
+            nu0, NU_INIT,
+            "ν seed is a fixed moderate default, not derived from the (outlier-sensitive) kurtosis"
+        );
+    }
+
+    #[test]
+    fn nu_link_floors_below_two() {
+        // The floored log link must keep ν ≥ 2 regardless of how negative η drifts,
+        // so the variance σ²ν/(ν−2) stays finite during iteration.
+        let link = StudentT.default_link("nu").unwrap();
+        assert!(link.inv_link(-50.0) >= NU_FLOOR - 1e-12);
+        assert!(link.inv_link(-1.0) >= NU_FLOOR - 1e-12);
+        // Above the floor it behaves like a plain log link.
+        assert!((link.inv_link(2.0_f64.ln()) - 2.0).abs() < 1e-9);
+        assert!((link.inv_link(10.0_f64.ln()) - 10.0).abs() < 1e-9);
     }
 
     #[test]

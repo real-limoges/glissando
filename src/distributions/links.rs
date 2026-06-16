@@ -48,6 +48,27 @@ impl Link for LogLink {
     }
 }
 
+/// Log link with a lower bound applied after inversion: `μ = max(exp(η), floor)`.
+///
+/// Used for the Student-t degrees-of-freedom `ν`, floored at 2 so the variance
+/// `σ²·ν/(ν−2)` (and the mean) stay finite as the optimizer explores the heavy-tail
+/// region. The floor keeps `ν` out of the degenerate `ν ≤ 2` zone during iteration;
+/// on data whose true `ν` is well above 2 it never binds, so parity with an unfloored
+/// fit is preserved.
+#[derive(Debug, Clone, Copy)]
+pub struct FlooredLogLink {
+    pub floor: f64,
+}
+
+impl Link for FlooredLogLink {
+    fn link(&self, mu: f64) -> f64 {
+        mu.max(self.floor).ln().max(MIN_ETA)
+    }
+    fn inv_link(&self, eta: f64) -> f64 {
+        eta.min(MAX_ETA).exp().max(self.floor)
+    }
+}
+
 /// Logit link: `η = log(μ / (1 - μ))`. Used for `(0, 1)` probability parameters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogitLink;
