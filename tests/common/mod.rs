@@ -12,41 +12,39 @@ use rand_distr::{Distribution, Normal, Poisson};
 // `Formula::new() + add_terms(...)` boilerplate down to a single line.
 // ----------------------------------------------------------------------------
 
+// These thin wrappers delegate to the public DSL constructors (`Smooth::ps`,
+// `Term::linear`, …) so the test harness and the public API share one source of
+// truth — see `src/terms.rs`.
+
 /// Default cubic P-spline (degree 3, second-order penalty) on `col`.
 pub fn pspline(col: &str, n_splines: usize) -> Term {
-    Term::Smooth(Smooth::PSpline1D {
-        col_name: col.to_string(),
-        n_splines,
-        degree: 3,
-        penalty_order: 2,
-    })
+    Term::smooth(Smooth::ps(col).n_splines(n_splines))
 }
 
 /// P-spline with explicit degree and penalty order.
 pub fn pspline_with(col: &str, n_splines: usize, degree: usize, penalty_order: usize) -> Term {
-    Term::Smooth(Smooth::PSpline1D {
-        col_name: col.to_string(),
-        n_splines,
-        degree,
-        penalty_order,
-    })
+    Term::smooth(
+        Smooth::ps(col)
+            .n_splines(n_splines)
+            .degree(degree)
+            .penalty_order(penalty_order),
+    )
 }
 
 /// Linear effect on `col`.
 pub fn linear(col: &str) -> Term {
-    Term::Linear {
-        col_name: col.to_string(),
-    }
+    Term::linear(col)
 }
 
 /// Random-effect term on `col`.
 pub fn random(col: &str) -> Term {
-    Term::Smooth(Smooth::RandomEffect {
-        col_name: col.to_string(),
-    })
+    Term::smooth(Smooth::re(col))
 }
 
 /// Tensor product of two P-splines on `(col1, col2)`.
+///
+/// Built from the struct form directly: the public `Smooth::tensor` constructor
+/// uses equal default marginal sizes, whereas tests here need per-margin `n1`/`n2`.
 pub fn tensor(col1: &str, col2: &str, n1: usize, n2: usize) -> Term {
     Term::Smooth(Smooth::TensorProduct {
         col_name_1: col1.to_string(),
@@ -60,14 +58,9 @@ pub fn tensor(col1: &str, col2: &str, n1: usize, n2: usize) -> Term {
 }
 
 /// Natural cubic regression spline (`bs="cr"`) on `col` with `k` knots.
-/// Leave `pc` as `None` for sum-to-zero centering (the typical case).
+/// `pc` stays `None` for sum-to-zero centering (the typical case).
 pub fn cr_spline(col: &str, k: usize) -> Term {
-    Term::Smooth(Smooth::CrSpline1D {
-        col_name: col.to_string(),
-        k,
-        pc: None,
-        knots: vec![],
-    })
+    Term::smooth(Smooth::cr(col).k(k))
 }
 
 /// Formula with `Intercept` for every named parameter.
