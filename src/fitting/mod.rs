@@ -464,3 +464,60 @@ pub(crate) fn sample_from_cholesky(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{sample_from_cholesky, FitConfig, SmoothingCriterion};
+    use ndarray::{array, Array2};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn fit_config_default_matches_documented_values() {
+        let c = FitConfig::default();
+        assert_eq!(c.max_iterations, 200);
+        assert_eq!(c.tolerance, 1e-3);
+        assert_eq!(c.criterion, SmoothingCriterion::Reml);
+        assert_eq!(SmoothingCriterion::default(), SmoothingCriterion::Reml);
+    }
+
+    #[test]
+    fn sample_from_cholesky_zero_factor_returns_mean() {
+        // L = 0 ⇒ mean + 0·z = mean exactly, whatever the draws are.
+        let mean = array![1.0, -2.0, 3.5];
+        let l = Array2::<f64>::zeros((3, 3));
+        let mut rng = StdRng::seed_from_u64(7);
+        let samples = sample_from_cholesky(&mean, &l, 4, &mut rng);
+        assert_eq!(samples.len(), 4);
+        for s in &samples {
+            assert_eq!(s.len(), 3);
+            assert_eq!(*s, mean);
+        }
+    }
+
+    #[test]
+    fn sample_from_cholesky_is_reproducible_with_seed() {
+        let mean = array![0.0, 0.0];
+        let l = Array2::<f64>::eye(2);
+        let a = sample_from_cholesky(&mean, &l, 5, &mut StdRng::seed_from_u64(42));
+        let b = sample_from_cholesky(&mean, &l, 5, &mut StdRng::seed_from_u64(42));
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 5);
+        assert!(a.iter().all(|s| s.len() == 2));
+    }
+
+    #[test]
+    fn sample_from_cholesky_shifts_by_mean() {
+        // Identity factor ⇒ sample = mean + z. Same seed ⇒ same z, so the
+        // difference between a shifted-mean run and a zero-mean run is the shift.
+        let l = Array2::<f64>::eye(2);
+        let base = sample_from_cholesky(&array![0.0, 0.0], &l, 3, &mut StdRng::seed_from_u64(99));
+        let moved =
+            sample_from_cholesky(&array![10.0, -5.0], &l, 3, &mut StdRng::seed_from_u64(99));
+        for (z, m) in base.iter().zip(moved.iter()) {
+            let diff = m - z;
+            assert!((diff[0] - 10.0).abs() < 1e-9);
+            assert!((diff[1] + 5.0).abs() < 1e-9);
+        }
+    }
+}

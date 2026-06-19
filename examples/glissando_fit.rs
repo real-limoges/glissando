@@ -26,36 +26,18 @@ fn main() -> Result<(), GamlssError> {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x_vals));
 
-    // the formula
-    let mut formulas = Formula::new();
-
-    // Mu: Smooth P-Spline
-    formulas.add_terms(
-        "mu".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Smooth(Smooth::PSpline1D {
-                col_name: "x".to_string(),
-                n_splines: 20,
-                degree: 3,
-                penalty_order: 2,
-            }),
-        ],
-    );
-
-    // Sigma: Linear
-    formulas.add_terms(
-        "sigma".to_string(),
-        vec![
-            Term::Intercept,
-            Term::Linear {
-                col_name: "x".to_string(),
-            },
-        ],
-    );
-
-    // Nu: Constant
-    formulas.add_terms("nu".to_string(), vec![Term::Intercept]);
+    // The formula, built with the terse constructors. `Smooth::ps` carries sensible
+    // defaults (degree 3, 2nd-order penalty); builders like `.n_splines(20)` override.
+    //   mu    ~ intercept + P-spline(x)   (smooth mean)
+    //   sigma ~ intercept + x             (linear heteroskedasticity)
+    //   nu    ~ intercept                 (constant tail weight)
+    let formulas = Formula::new()
+        .with_terms(
+            "mu",
+            vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))],
+        )
+        .with_terms("sigma", vec![Term::Intercept, Term::linear("x")])
+        .with_terms("nu", vec![Term::Intercept]);
 
     // Fit
     println!("Fitting GAMLSS model...");

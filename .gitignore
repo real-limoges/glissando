@@ -13,3 +13,7 @@ docs/*
 !docs/mathematics.md
 !docs/mathematics.pdf
 !docs/ROADMAP.html
+
+# Accidental root-level npm scaffolding — the published npm package is pkg/.
+/package.json
+/package-lock.json
