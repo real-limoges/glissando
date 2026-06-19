@@ -307,7 +307,10 @@ mod tests {
                 assert_eq!(col_name, "d");
                 assert_eq!(k, Smooth::DEFAULT_CR_K);
                 assert_eq!(pc, None);
-                assert!(knots.is_empty(), "knots resolve at fit time, not construction");
+                assert!(
+                    knots.is_empty(),
+                    "knots resolve at fit time, not construction"
+                );
             }
             other => panic!("expected CrSpline1D, got {other:?}"),
         }
