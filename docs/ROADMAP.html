@@ -37,6 +37,16 @@
         border:1px solid var(--line); border-radius:4px;
         padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
         white-space:nowrap; }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .cooking { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+             padding:.5rem 1.1rem; margin-bottom:.7rem; }
+  .cooking table { width:100%; border-collapse:collapse; }
+  .cooking td { padding:.5rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .cooking tr:last-child td { border-bottom:none; }
+  .cooking td.g { white-space:nowrap; width:1%; padding-right:1.1rem; font-weight:600; }
+  h2.cook { color:var(--key); }
   .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
           padding:.5rem 1.1rem; }
   .loop table { width:100%; border-collapse:collapse; }
@@ -72,6 +82,27 @@
   <h1>glissando <span class="sub">· feature-completeness roadmap</span></h1>
   <p class="lede">Target: <b style="color:#fff">parity with R <code>gamlss</code> / <code>mgcv</code></b> as a GAMLSS engine. Presented two ways — <b style="color:#fff">Part 1</b> groups every gap into workstreams of similar work (good for assigning / batching); <b style="color:#fff">Part 2</b> is a single flat stack-ranking by importance (good for deciding what to do next). The same items appear in both; IDs like <span class="id">DIST-1</span> are shared so you can cross-reference.</p>
   <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 8 distributions; 3 links; native + WASM + Python + JSON surfaces; AIC/BIC/EDF; Pearson + response residuals; posterior sampling. Nothing is published.</p>
+
+  <h2 class="part cook">🍳 Cooking now — implementation guides drafted</h2>
+  <div class="ns">
+    <p>Design-level implementation guides exist for the items below: <b>math derived + code sketched against the current source</b>, not yet merged. They sit beside this roadmap in <code>docs/</code>. The two <span class="id">TRAIT-1</span>-dependent chains share the first guide; model selection and fitting robustness are independent of it.</p>
+  </div>
+  <div class="cooking">
+    <table>
+      <tr>
+        <td class="g"><a href="implementation-guide-trait-infer.html">trait + infer →</a></td>
+        <td><span class="id">TRAIT-1</span> <span class="id">INFER-1</span> <span class="id">INFER-2</span> <span class="id">TRAIT-2</span> — distributional <code>cdf</code>/<code>pdf</code>/<code>quantile</code>, randomized quantile residuals, centiles / <code>predictAll</code>, and the <code>mu_eta</code> link derivative.</td>
+      </tr>
+      <tr>
+        <td class="g"><a href="implementation-guide-model-selection.html">model selection →</a></td>
+        <td><span class="id">INFER-3</span> <span class="id">INFER-4</span> <span class="id">INFER-7</span> — GAIC(<code>k</code>), stepwise term selection (<code>stepGAIC</code>), and ANOVA / likelihood-ratio model comparison.</td>
+      </tr>
+      <tr>
+        <td class="g"><a href="implementation-guide-fitting-robustness.html">fitting robustness →</a></td>
+        <td><span class="id">FIT-1</span> <span class="id">FIT-2</span> — step-halving / line-search on the global deviance, and global-deviance outer convergence in the RS loop.</td>
+      </tr>
+    </table>
+  </div>
 
   <h2 class="part">Part 1 — Grouped by workstream</h2>
 

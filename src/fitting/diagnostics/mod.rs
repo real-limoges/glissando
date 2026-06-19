@@ -5,14 +5,16 @@
 //! [`Distribution`] trait. This module composes those primitives — it never
 //! hand-dispatches on the family name.
 
+mod residuals;
+
+pub use residuals::*;
+
 use super::FittedParameter;
 use crate::distributions::Distribution;
 use crate::GamlssError;
 use indexmap::IndexMap;
 use ndarray::Array1;
 use std::collections::HashMap;
-
-const MIN_POSITIVE: f64 = 1e-10;
 
 /// Aggregated model diagnostics including residuals, EDF, and information criteria.
 #[derive(Debug, Clone)]
@@ -28,22 +30,6 @@ pub struct ModelDiagnostics {
     pub bic: f64,
     pub log_likelihood: f64,
     pub n_obs: usize,
-}
-
-/// Computes Pearson residuals via the family's marginal moments:
-/// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.
-///
-/// Variance is floored at `MIN_POSITIVE = 1e-10` before the square-root to
-/// keep residuals finite when the fitted variance is degenerate.
-pub fn pearson_residuals<D: Distribution + ?Sized>(
-    family: &D,
-    y: &Array1<f64>,
-    params: &HashMap<&str, &Array1<f64>>,
-) -> Result<Array1<f64>, GamlssError> {
-    let e = family.expected_value(params)?;
-    let v = family.variance(params)?;
-    let sd = v.mapv(|vi| vi.max(MIN_POSITIVE).sqrt());
-    Ok((y - &e) / &sd)
 }
 
 /// Computes Akaike Information Criterion: `−2·loglik + 2·EDF`.
@@ -69,10 +55,6 @@ pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
 
 pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
     fitted_params.values().map(|p| p.edf).sum()
-}
-
-pub fn response_residuals(y: &Array1<f64>, expected: &Array1<f64>) -> Array1<f64> {
-    y - expected
 }
 
 /// Snapshot of fitted parameters on the response scale, in the shape the
@@ -113,7 +95,6 @@ pub(crate) fn compute<D: Distribution + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::Gaussian;
     use crate::terms::Term;
     use crate::types::{Coefficients, CovarianceMatrix};
     use ndarray::{array, Array2};
@@ -141,16 +122,6 @@ mod tests {
         let aic = compute_aic(ll, edf);
         let bic = compute_bic(ll, edf, 100);
         assert!(bic > aic);
-    }
-
-    // --- response_residuals ---
-
-    #[test]
-    fn response_residuals_subtracts() {
-        let y = array![3.0, 5.0, 7.0];
-        let e = array![1.0, 2.0, 4.0];
-        let r = response_residuals(&y, &e);
-        assert_eq!(r, array![2.0, 3.0, 3.0]);
     }
 
     // --- total_edf ---
@@ -181,31 +152,5 @@ mod tests {
     fn total_edf_empty_returns_zero() {
         let params: IndexMap<String, FittedParameter> = IndexMap::new();
         assert_eq!(total_edf(&params), 0.0);
-    }
-
-    // --- pearson_residuals composes E[Y] and Var(Y) ---
-
-    #[test]
-    fn pearson_residuals_gaussian_via_trait() {
-        // For Gaussian, E[Y]=mu, Var(Y)=sigma^2, so Pearson = (y-mu)/sigma.
-        let y = array![1.0, 2.0, 3.0];
-        let mu = array![1.5, 2.0, 2.5];
-        let sigma = array![0.5, 0.5, 0.5];
-        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
-        let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
-        assert!((r[0] - (-1.0)).abs() < 1e-10);
-        assert!((r[1] - 0.0).abs() < 1e-10);
-        assert!((r[2] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn pearson_residuals_handles_zero_variance_gracefully() {
-        // sigma -> 0 would divide by zero; MIN_POSITIVE clamp must keep residuals finite.
-        let y = array![0.0];
-        let mu = array![0.0];
-        let sigma = array![0.0];
-        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
-        let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
-        assert!(r.iter().all(|v| v.is_finite()));
     }
 }
