@@ -84,7 +84,7 @@ impl Distribution for StudentT {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Student-t log-likelihood, location-scale parameterization. Full derivation
-        // in docs/mathematics.md.
+        // in docs/math/mathematics.md.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
