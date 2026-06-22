@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build docs/mathematics.pdf from docs/mathematics.md via pandoc + xelatex.
+# Build docs/math/mathematics.pdf from docs/math/mathematics.md via pandoc + xelatex.
 # xelatex is used (not pdflatex) so UTF-8 math glyphs (∈, ⊗, ψ, etc.) render
 # without explicit symbol macros.
 set -euo pipefail

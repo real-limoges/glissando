@@ -127,7 +127,7 @@ impl<'a> Gradient for GamlssCost<'a> {
     /// Computes the gradient of GCV with respect to log(lambda) for quasi-Newton optimization.
     ///
     /// The key insight is that beta depends on lambda through the penalized normal equations.
-    /// See docs/mathematics.md for the full derivation of dRSS/dlambda and dEDF/dlambda.
+    /// See docs/math/mathematics.md for the full derivation of dRSS/dlambda and dEDF/dlambda.
     fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
         let lambdas = param.mapv(f64::exp);
         let n_penalties = lambdas.len();

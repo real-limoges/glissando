@@ -2,7 +2,7 @@
 
 This document provides detailed mathematical derivations for the GAMLSS implementation in `glissando`. It covers distribution-specific derivatives, special functions, numerical algorithms, and convergence theory.
 
-> Generated PDF: run `bash docs/build-math-pdf.sh` to produce `docs/mathematics.pdf` (a numbered, hyperlinked, table-of-contents'd PDF). The PDF build uses pandoc + xelatex; see the script header for details.
+> Generated PDF: run `bash docs/math/build-math-pdf.sh` to produce `docs/math/mathematics.pdf` (a numbered, hyperlinked, table-of-contents'd PDF). The PDF build uses pandoc + xelatex; see the script header for details.
 
 ---
 
