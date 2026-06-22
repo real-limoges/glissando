@@ -10,9 +10,13 @@ CLAUDE.md
 *.pyc
 __pycache__/
 docs/*
-!docs/mathematics.md
-!docs/mathematics.pdf
-!docs/ROADMAP.html
+!docs/math/
+!docs/math/mathematics.md
+!docs/math/mathematics.pdf
+!docs/math/build-math-pdf.sh
+!docs/planning/
+docs/planning/feature-brainstorm.md
+!docs/planning/ROADMAP.html
 
 # Accidental root-level npm scaffolding — the published npm package is pkg/.
 /package.json
