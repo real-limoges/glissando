@@ -41,7 +41,7 @@ impl Distribution for Gaussian {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
         //   μ (identity link):  u = (y−μ)/σ²,                w = 1/σ².
         //   σ (log link, η = log σ):  u = ((y−μ)² − σ²)/σ²,  w = 2.
-        // Full derivation in docs/mathematics.md.
+        // Full derivation in docs/math/mathematics.md.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
