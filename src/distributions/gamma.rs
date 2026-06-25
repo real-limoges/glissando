@@ -5,7 +5,8 @@ use super::{
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
-use statrs::function::gamma::ln_gamma;
+use statrs::distribution::{ContinuousCDF, Gamma as SGamma};
+use statrs::function::gamma::{gamma_lr, ln_gamma};
 use std::collections::HashMap;
 
 /// Gamma distribution for positive continuous data.
@@ -113,6 +114,43 @@ impl Distribution for Gamma {
         Ok(par_zip_map(mu, sigma, |m, s| m * m * s * s))
     }
 
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // shape α = 1/σ², scale s = μσ²; F(y) = P(α, y/s) = gamma_lr(α, y/s).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            if yi <= 0.0 {
+                return 0.0; // support is y > 0
+            }
+            let s = si.max(MIN_POSITIVE);
+            let shape = 1.0 / (s * s);
+            let scale = mui.max(MIN_POSITIVE) * s * s;
+            gamma_lr(shape, yi / scale)
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // statrs Gamma is (shape, rate); rate = 1/scale = 1/(μσ²).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
+            let s = si.max(MIN_POSITIVE);
+            let shape = 1.0 / (s * s);
+            let rate = 1.0 / (mui.max(MIN_POSITIVE) * s * s);
+            SGamma::new(shape, rate)
+                .expect("valid Gamma params")
+                .inverse_cdf(pi.clamp(1e-12, 1.0 - 1e-12))
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Gamma"
     }
@@ -122,6 +160,7 @@ impl Distribution for Gamma {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
@@ -167,5 +206,29 @@ mod tests {
         ];
         check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_quantile_roundtrip_gamma() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![0.5, 0.4, 0.3, 0.6]),
+        ];
+        check_cdf_quantile_roundtrip(&Gamma, &y, &owned, 1e-6);
+        check_cdf_pdf_consistency(&Gamma, &y, &owned, 1e-4, 1e-3);
+    }
+
+    #[test]
+    fn cdf_monotone_gamma_and_zero_below_support() {
+        let grid = Array1::from_iter((0..60).map(|i| i as f64 * 0.2));
+        let owned = [("mu", array![3.0]), ("sigma", array![0.5])];
+        check_cdf_monotone_in_unit(&Gamma, &grid, &owned);
+        // Both boundary points (y = 0 and y < 0) sit outside the y > 0 support.
+        let boundary_params = [("mu", array![3.0, 3.0]), ("sigma", array![0.5, 0.5])];
+        let p = params_view(&boundary_params);
+        let at_boundary = Gamma.cdf(&array![0.0, -1.0], &p).unwrap();
+        assert_eq!(at_boundary[0], 0.0);
+        assert_eq!(at_boundary[1], 0.0);
     }
 }

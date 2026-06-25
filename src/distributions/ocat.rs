@@ -368,6 +368,59 @@ impl Distribution for Ocat {
             })
             .collect())
     }
+
+    fn is_discrete(&self) -> bool {
+        true
+    }
+
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // Right-continuous step CDF at the level ⌊y⌋. Proportional-odds model:
+        // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R — the same
+        // cumulative the per-category mass in `loglik_pointwise` differences.
+        let eta_mu = require(self, params, "mu")?;
+        let n_thresh = self.n_thresholds();
+        let r_max = self.n_categories;
+        (0..y.len())
+            .map(|i| {
+                let level = y[i].floor();
+                if level < 1.0 {
+                    return Ok(0.0);
+                }
+                if level >= r_max as f64 {
+                    return Ok(1.0);
+                }
+                let thresholds = Self::compute_thresholds_at(params, n_thresh, i)?;
+                Ok(Self::logistic(thresholds[level as usize - 1] - eta_mu[i]))
+            })
+            .collect()
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // Smallest level r ∈ {1, …, R} whose cumulative prob ≥ p.
+        let eta_mu = require(self, params, "mu")?;
+        let n_thresh = self.n_thresholds();
+        let r_max = self.n_categories;
+        (0..p.len())
+            .map(|i| {
+                let thresholds = Self::compute_thresholds_at(params, n_thresh, i)?;
+                let pi = p[i].clamp(0.0, 1.0);
+                for r in 1..r_max {
+                    if Self::logistic(thresholds[r - 1] - eta_mu[i]) >= pi {
+                        return Ok(r as f64);
+                    }
+                }
+                Ok(r_max as f64)
+            })
+            .collect()
+    }
 }
 
 // ============================================================================
@@ -378,7 +431,8 @@ impl Distribution for Ocat {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use approx::assert_relative_eq;
     use ndarray::array;
@@ -497,5 +551,43 @@ mod tests {
             ll[0],
             expected
         );
+    }
+
+    #[test]
+    fn cdf_matches_pmf_ocat() {
+        // cdf(k) − cdf(k−1) must equal the per-category mass exp(loglik).
+        let ocat = Ocat::new(4);
+        let ks = array![1.0, 2.0, 3.0, 4.0];
+        let owned = make_params_r4(array![0.2, 0.2, 0.2, 0.2], -0.5, 1.0, 1.0);
+        check_discrete_cdf_matches_pmf(&ocat, &ks, &owned, 1e-9);
+    }
+
+    #[test]
+    fn cdf_monotone_and_endpoints_ocat() {
+        let ocat = Ocat::new(4);
+        // One parameter row per level on the grid (thresholds are per-observation).
+        let levels = array![0.0, 1.0, 2.0, 3.0, 4.0];
+        let owned = make_params_r4(array![0.3, 0.3, 0.3, 0.3, 0.3], -0.5, 1.0, 1.0);
+        let p = params_view(&owned);
+        let f = ocat.cdf(&levels, &p).unwrap();
+        assert_eq!(f[0], 0.0); // below the lowest level
+        assert_eq!(f[4], 1.0); // at the top level
+        for w in f.windows(2) {
+            assert!(w[1] >= w[0] - 1e-12, "cdf not monotone: {:?}", w);
+        }
+    }
+
+    #[test]
+    fn quantile_returns_valid_levels_ocat() {
+        let ocat = Ocat::new(4);
+        let owned = make_params_r4(array![0.0], -0.5, 1.0, 1.0);
+        let p = params_view(&owned);
+        for &prob in &[0.01, 0.3, 0.6, 0.99] {
+            let q = ocat.quantile(&array![prob], &p).unwrap()[0];
+            assert!((1.0..=4.0).contains(&q), "level {q} out of 1..=4");
+            // The returned level's CDF must reach p (smallest such level).
+            let f_q = ocat.cdf(&array![q], &p).unwrap()[0];
+            assert!(f_q >= prob - 1e-12, "F(q)={f_q} < p={prob}");
+        }
     }
 }

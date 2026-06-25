@@ -315,6 +315,173 @@ pub fn diagnostics(model: &GamlssModel) -> Result<String, GamlssError> {
     serde_json::to_string(&model.diagnostics).map_err(json_err)
 }
 
+// --- Distributional inference (INFER-1 / INFER-2) ---
+
+/// Randomized normalized quantile residuals against the response `y` the model
+/// was fit on, serialized as a JSON array. `seed` makes the discrete-family
+/// randomization reproducible (ignored for continuous families).
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed `y` JSON or a `cdf` failure.
+pub fn quantile_residuals(
+    model: &GamlssModel,
+    family: &dyn Distribution,
+    y_json: &str,
+    seed: Option<u64>,
+) -> Result<String, GamlssError> {
+    let y = parse_response(y_json)?;
+    let residuals = model.quantile_residuals(family, &y, seed)?;
+    serde_json::to_string(&residuals.to_vec()).map_err(json_err)
+}
+
+/// Response-scale centile curves for `new_data`, serialized as
+/// `{"C<pct>": [values], ...}` (deterministic key order). `percentiles_json` is
+/// a JSON array of centile levels in percent, e.g. `[2, 10, 50, 90, 98]`.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed JSON or any prediction/quantile failure.
+pub fn centiles(
+    model: &GamlssModel,
+    family: &dyn Distribution,
+    data_json: &str,
+    percentiles_json: &str,
+) -> Result<String, GamlssError> {
+    let new_data = parse_data(data_json)?;
+    let percentiles: Vec<f64> = serde_json::from_str(percentiles_json).map_err(json_err)?;
+    let curves = model.centiles(&new_data, family, &percentiles)?;
+    let output: BTreeMap<&str, Vec<f64>> = curves
+        .iter()
+        .map(|(key, values)| (key.as_str(), values.to_vec()))
+        .collect();
+    serde_json::to_string(&output).map_err(json_err)
+}
+
+/// Per-observation quantile prediction: `p_json` is a JSON array of per-row
+/// centile levels in `(0,1)`. Returns a JSON array of predicted responses.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed JSON or any prediction/quantile failure.
+pub fn quantile_prediction(
+    model: &GamlssModel,
+    family: &dyn Distribution,
+    data_json: &str,
+    p_json: &str,
+) -> Result<String, GamlssError> {
+    let new_data = parse_data(data_json)?;
+    let p = parse_response(p_json)?;
+    let predicted = model.quantile_prediction(&new_data, family, &p)?;
+    serde_json::to_string(&predicted.to_vec()).map_err(json_err)
+}
+
+// --- Model selection & comparison (INFER-3 / INFER-7 / INFER-4) ---
+
+/// Generalized AIC at penalty `k`, serialized as `{"gaic": value}`. Evaluate
+/// against the same response `y` the model was fit on.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed `y` JSON or log-likelihood failure.
+pub fn gaic(
+    model: &GamlssModel,
+    family: &dyn Distribution,
+    y_json: &str,
+    k: f64,
+) -> Result<String, GamlssError> {
+    let y = parse_response(y_json)?;
+    let value = model.gaic(family, &y, k)?;
+    let out: BTreeMap<&str, f64> = BTreeMap::from([("gaic", value)]);
+    serde_json::to_string(&out).map_err(json_err)
+}
+
+/// Information-criterion comparison table over labelled models, serialized as a
+/// JSON array of `{label, edf, global_deviance, gaic}` rows in input order.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed `y` JSON or log-likelihood failure.
+pub fn ic_table(
+    models: &[(&str, &GamlssModel)],
+    family: &dyn Distribution,
+    y_json: &str,
+    k: f64,
+) -> Result<String, GamlssError> {
+    let y = parse_response(y_json)?;
+    let rows = crate::fitting::selection::ic_table(models, family, &y, k)?;
+    serde_json::to_string(&rows).map_err(json_err)
+}
+
+/// Likelihood-ratio test of `small` nested in `big`, serialized as
+/// `{lr_stat, df, p_value}`.
+///
+/// # Errors
+/// Returns [`GamlssError::Input`] for a mis-ordered/non-nested pair, or for
+/// malformed `y` JSON.
+pub fn lr_test(
+    small: &GamlssModel,
+    big: &GamlssModel,
+    family: &dyn Distribution,
+    y_json: &str,
+) -> Result<String, GamlssError> {
+    let y = parse_response(y_json)?;
+    let result = crate::fitting::selection::lr_test(small, big, family, &y)?;
+    serde_json::to_string(&result).map_err(json_err)
+}
+
+/// Run stepwise term selection from `start_formula_json` over `scope_json`, and
+/// return a single JSON object `{trace, formula, model}` where `model` is the
+/// selected model in the same wire form [`load`] accepts (distribution + model).
+///
+/// `direction` is `"forward"`, `"backward"`, or `"both"`; `scope_json` is a list
+/// of `{"param": "...", "candidates": [<term>, ...]}`.
+///
+/// # Errors
+/// Returns [`GamlssError`] for malformed inputs, an unknown distribution, or a
+/// fitting failure at the starting formula.
+#[allow(clippy::too_many_arguments)]
+pub fn step_gaic(
+    y_json: &str,
+    data_json: &str,
+    distribution: &str,
+    start_formula_json: &str,
+    scope_json: &str,
+    k: f64,
+    direction: &str,
+    config_json: Option<&str>,
+) -> Result<String, GamlssError> {
+    use crate::fitting::selection::{step_gaic as run_step_gaic, Direction, StepScope};
+
+    let y = parse_response(y_json)?;
+    let data = parse_data(data_json)?;
+    let start = parse_formula(start_formula_json)?;
+    let family = from_name(distribution)?;
+    let scope: Vec<StepScope> = serde_json::from_str(scope_json).map_err(json_err)?;
+    let dir = match direction.to_ascii_lowercase().as_str() {
+        "forward" => Direction::Forward,
+        "backward" => Direction::Backward,
+        "both" => Direction::Both,
+        other => {
+            return Err(GamlssError::Input(format!(
+                "Unknown direction '{}', expected 'forward', 'backward', or 'both'",
+                other
+            )))
+        }
+    };
+    let config = match config_json {
+        Some(c) => parse_config(c)?,
+        None => FitConfig::default(),
+    };
+
+    let result = run_step_gaic(&data, &y, family.as_ref(), start, &scope, k, dir, config)?;
+
+    // Embed the selected model as a nested object in the same shape `load` reads.
+    let model_wire: serde_json::Value =
+        serde_json::from_str(&result.model.to_json(family.as_ref())?).map_err(json_err)?;
+    let out = serde_json::json!({
+        "trace": result.trace,
+        "formula": result.formula,
+        "model": model_wire,
+    });
+    serde_json::to_string(&out).map_err(json_err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

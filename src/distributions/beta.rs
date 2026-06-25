@@ -6,6 +6,8 @@ use super::{
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
+use statrs::distribution::{Beta as SBeta, ContinuousCDF};
+use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
 
@@ -120,6 +122,44 @@ impl Distribution for Beta {
         }))
     }
 
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // (μ, φ) parameterization: α = μφ, β = (1−μ)φ; F(y) = I_y(α, β) = beta_reg(α, β, y).
+        let mu = require(self, params, "mu")?;
+        let phi = require(self, params, "phi")?;
+        Ok(par_zip3_map(y, mu, phi, |yi, mui, phii| {
+            let yc = yi.clamp(0.0, 1.0);
+            if yc <= 0.0 {
+                return 0.0;
+            }
+            if yc >= 1.0 {
+                return 1.0;
+            }
+            let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            let p = phii.max(MIN_POSITIVE);
+            beta_reg(m * p, (1.0 - m) * p, yc)
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let phi = require(self, params, "phi")?;
+        Ok(par_zip3_map(p, mu, phi, |pi, mui, phii| {
+            let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            let ph = phii.max(MIN_POSITIVE);
+            SBeta::new(m * ph, (1.0 - m) * ph)
+                .expect("valid Beta params")
+                .inverse_cdf(pi.clamp(1e-12, 1.0 - 1e-12))
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Beta"
     }
@@ -129,6 +169,7 @@ impl Distribution for Beta {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
@@ -173,5 +214,29 @@ mod tests {
         ];
         check_score_via_finite_diff(&Beta, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Beta, &y, &owned, "phi", 1e-5);
+    }
+
+    #[test]
+    fn cdf_quantile_roundtrip_beta() {
+        let y = array![0.1, 0.35, 0.5, 0.7, 0.9];
+        let owned = [
+            ("mu", array![0.2, 0.4, 0.5, 0.6, 0.8]),
+            ("phi", array![10.0, 12.0, 8.0, 15.0, 6.0]),
+        ];
+        check_cdf_quantile_roundtrip(&Beta, &y, &owned, 1e-6);
+        check_cdf_pdf_consistency(&Beta, &y, &owned, 1e-4, 1e-3);
+    }
+
+    #[test]
+    fn cdf_monotone_beta_and_unit_endpoints() {
+        let grid = Array1::from_iter((1..40).map(|i| i as f64 / 40.0));
+        let owned = [("mu", array![0.45]), ("phi", array![9.0])];
+        check_cdf_monotone_in_unit(&Beta, &grid, &owned);
+        // F(0) = 0 and F(1) = 1 at the unit-interval endpoints.
+        let endpoint_params = [("mu", array![0.45, 0.45]), ("phi", array![9.0, 9.0])];
+        let p = params_view(&endpoint_params);
+        let at_endpoints = Beta.cdf(&array![0.0, 1.0], &p).unwrap();
+        assert_eq!(at_endpoints[0], 0.0);
+        assert_eq!(at_endpoints[1], 1.0);
     }
 }

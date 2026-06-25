@@ -15,6 +15,7 @@ use crate::distributions::{
     Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
 };
 use crate::ffi::FamilyType;
+use crate::fitting::selection::{self, Direction, StepScope};
 use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
 use crate::{DataSet, Formula, GamlssModel};
@@ -93,6 +94,67 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
         formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
     }
     Ok(formula)
+}
+
+/// Parse a `{param: [term, ...]}` dict into the candidate scope for stepwise
+/// selection — each value uses the same term encoding as a formula.
+fn py_dict_to_scope(scope: &Bound<'_, PyDict>) -> PyResult<Vec<StepScope>> {
+    let mut out = Vec::with_capacity(scope.len());
+    for (param, cands) in scope.iter() {
+        let param_name: String = param.extract()?;
+        let term_list: &Bound<pyo3::types::PyList> = cands.cast()?;
+        out.push(StepScope {
+            param: param_name,
+            candidates: py_parse::parse_terms(term_list)?,
+        });
+    }
+    Ok(out)
+}
+
+/// Build a [`FitConfig`] from an optional Python config dict (same keys as
+/// `GamlssModel.fit_with_config`). Missing keys keep their defaults.
+fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
+    let mut fit_config = FitConfig::default();
+    if let Some(v) = config.get_item("max_iterations")? {
+        fit_config.max_iterations = v.extract()?;
+    }
+    if let Some(v) = config.get_item("tolerance")? {
+        fit_config.tolerance = v.extract()?;
+    }
+    if let Some(v) = config.get_item("criterion")? {
+        let s: String = v.extract()?;
+        fit_config.criterion = match s.to_ascii_lowercase().as_str() {
+            "gcv" => SmoothingCriterion::Gcv,
+            "reml" => SmoothingCriterion::Reml,
+            "fellner_schall" => SmoothingCriterion::FellnerSchall,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
+                    other
+                )))
+            }
+        };
+    }
+    if let Some(v) = config.get_item("step_halving")? {
+        fit_config.step_halving = v.extract()?;
+    }
+    if let Some(v) = config.get_item("gd_tolerance")? {
+        fit_config.gd_tolerance = v.extract()?;
+    }
+    Ok(fit_config)
+}
+
+/// Parse the `direction` string for stepwise selection.
+fn parse_direction(direction: &str) -> PyResult<Direction> {
+    match direction.to_ascii_lowercase().as_str() {
+        "forward" => Ok(Direction::Forward),
+        "backward" => Ok(Direction::Backward),
+        "both" => Ok(Direction::Both),
+        other => Err(PyValueError::new_err(format!(
+            "Unknown direction '{}', expected 'forward', 'backward', or 'both'",
+            other
+        ))),
+    }
 }
 
 fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
@@ -222,6 +284,8 @@ impl PyGamlssModel {
     ///         `max_iterations` (int)
     ///         `tolerance` (float)
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
+    ///         `step_halving` (bool; default True) — monotone-descent line search
+    ///         `gd_tolerance` (float; default 1e-3) — global-deviance convergence tol
     #[staticmethod]
     #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(
@@ -238,27 +302,7 @@ impl PyGamlssModel {
         let rust_formula = py_dict_to_formula(formula)?;
         let family_type = extract_family(family)?;
 
-        let mut fit_config = FitConfig::default();
-        if let Some(v) = config.get_item("max_iterations")? {
-            fit_config.max_iterations = v.extract()?;
-        }
-        if let Some(v) = config.get_item("tolerance")? {
-            fit_config.tolerance = v.extract()?;
-        }
-        if let Some(v) = config.get_item("criterion")? {
-            let s: String = v.extract()?;
-            fit_config.criterion = match s.to_ascii_lowercase().as_str() {
-                "gcv" => SmoothingCriterion::Gcv,
-                "reml" => SmoothingCriterion::Reml,
-                "fellner_schall" => SmoothingCriterion::FellnerSchall,
-                other => {
-                    return Err(PyValueError::new_err(format!(
-                        "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
-                        other
-                    )))
-                }
-            };
-        }
+        let fit_config = parse_fit_config(config)?;
 
         let model = GamlssModel::fit_with_config(
             &dataset,
@@ -443,6 +487,222 @@ impl PyGamlssModel {
             .predict_class_probabilities(&dataset, ocat)
             .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
         Ok(probs.to_pyarray(py))
+    }
+
+    /// Randomized normalized quantile residuals (gamlss's default residual), as a
+    /// numpy array. Standard normal if the model is correct, regardless of family.
+    ///
+    /// `seed` makes the discrete-family randomization reproducible (ignored for
+    /// continuous families). Evaluate against the response `y` the model was fit on.
+    #[pyo3(signature = (y, seed=None))]
+    fn quantile_residuals<'py>(
+        &self,
+        py: Python<'py>,
+        y: PyReadonlyArray1<f64>,
+        seed: Option<u64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let y_array = y.as_array().to_owned();
+        let residuals = self
+            .inner
+            .quantile_residuals(self.family.as_distribution(), &y_array, seed)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(residuals.to_pyarray(py))
+    }
+
+    /// Response-scale centile curves for `new_data`. Returns `{"C<pct>": array}`.
+    ///
+    /// `percentiles` are centile levels in percent (gamlss defaults:
+    /// 0.4, 2, 10, 25, 50, 75, 90, 98, 99.6).
+    fn centiles(
+        &self,
+        py: Python<'_>,
+        new_data: &Bound<PyDict>,
+        percentiles: Vec<f64>,
+    ) -> PyResult<Py<PyDict>> {
+        let dataset = py_dict_to_dataset(new_data)?;
+        let curves = self
+            .inner
+            .centiles(&dataset, self.family.as_distribution(), &percentiles)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let py_dict = PyDict::new(py);
+        for (key, values) in curves {
+            py_dict.set_item(key, values.to_pyarray(py))?;
+        }
+        Ok(py_dict.into())
+    }
+
+    /// Per-observation quantile prediction: `p[i]` is the centile level for row
+    /// `i`, in `(0, 1)`. Returns a numpy array of predicted responses.
+    fn quantile_prediction<'py>(
+        &self,
+        py: Python<'py>,
+        new_data: &Bound<PyDict>,
+        p: PyReadonlyArray1<f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let dataset = py_dict_to_dataset(new_data)?;
+        let p_array = p.as_array().to_owned();
+        let predicted = self
+            .inner
+            .quantile_prediction(&dataset, self.family.as_distribution(), &p_array)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(predicted.to_pyarray(py))
+    }
+
+    /// Generalized AIC at penalty `k`: `−2·loglik + k·EDF`.
+    ///
+    /// `k = 2` is AIC, `k = log(n)` is BIC. Evaluate against the same response
+    /// `y` the model was fit on.
+    fn gaic(&self, y: PyReadonlyArray1<f64>, k: f64) -> PyResult<f64> {
+        let y_array = y.as_array().to_owned();
+        self.inner
+            .gaic(self.family.as_distribution(), &y_array, k)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Likelihood-ratio test treating `self` as the nested (small) model and
+    /// `bigger` as the alternative (big) model. Returns a dict
+    /// `{"lr_stat", "df", "p_value"}`.
+    ///
+    /// Raises `ValueError` if the pair is mis-ordered or non-nested
+    /// (`edf_big ≤ edf_small`). Both models must share this model's family.
+    fn lr_test(
+        &self,
+        py: Python<'_>,
+        bigger: &PyGamlssModel,
+        y: PyReadonlyArray1<f64>,
+    ) -> PyResult<Py<PyDict>> {
+        let y_array = y.as_array().to_owned();
+        let result = selection::lr_test(
+            &self.inner,
+            &bigger.inner,
+            self.family.as_distribution(),
+            &y_array,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let d = PyDict::new(py);
+        d.set_item("lr_stat", result.lr_stat)?;
+        d.set_item("df", result.df)?;
+        d.set_item("p_value", result.p_value)?;
+        Ok(d.into())
+    }
+
+    /// Information-criterion comparison table over `(label, model)` pairs, ranked
+    /// in input order. Returns a list of dicts
+    /// `{"label", "edf", "global_deviance", "gaic"}`.
+    ///
+    /// All models must be fit to the same response `y`; the family is taken from
+    /// the first model. Raises `ValueError` if `models` is empty.
+    #[staticmethod]
+    fn ic_table(
+        py: Python<'_>,
+        models: Vec<(String, Py<PyGamlssModel>)>,
+        y: PyReadonlyArray1<f64>,
+        k: f64,
+    ) -> PyResult<Py<PyList>> {
+        if models.is_empty() {
+            return Err(PyValueError::new_err(
+                "ic_table requires at least one model",
+            ));
+        }
+        let y_array = y.as_array().to_owned();
+        // Borrow every model for the duration of the call.
+        let borrowed: Vec<(String, PyRef<PyGamlssModel>)> = models
+            .iter()
+            .map(|(label, m)| Ok((label.clone(), m.borrow(py))))
+            .collect::<PyResult<_>>()?;
+        let family = borrowed[0].1.family.as_distribution();
+        let pairs: Vec<(&str, &GamlssModel)> = borrowed
+            .iter()
+            .map(|(label, m)| (label.as_str(), &m.inner))
+            .collect();
+        let rows = selection::ic_table(&pairs, family, &y_array, k)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let list = PyList::empty(py);
+        for r in &rows {
+            let d = PyDict::new(py);
+            d.set_item("label", &r.label)?;
+            d.set_item("edf", r.edf)?;
+            d.set_item("global_deviance", r.global_deviance)?;
+            d.set_item("gaic", r.gaic)?;
+            list.append(d)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Greedy stepwise term selection by GAIC(`k`) — the `stepGAIC` analog.
+    ///
+    /// Parameters
+    /// ----------
+    /// data, y, family : same as `fit`
+    /// start : dict
+    ///     Starting formula (e.g. intercept-only).
+    /// scope : dict
+    ///     `{param: [term, ...]}` of terms eligible to add/drop, same term
+    ///     encoding as a formula.
+    /// k : float
+    ///     GAIC penalty (`2` ≡ AIC, `log(n)` ≡ BIC).
+    /// direction : str
+    ///     `"forward"`, `"backward"`, or `"both"` (default `"both"`).
+    /// config : dict, optional
+    ///     Same keys as `fit_with_config`.
+    ///
+    /// Returns
+    /// -------
+    /// dict
+    ///     `{"model": GamlssModel, "trace": [{"move", "gaic", "edf"}, ...]}`.
+    #[staticmethod]
+    #[pyo3(signature = (data, y, family, start, scope, k, direction="both", config=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn step_gaic(
+        py: Python<'_>,
+        data: &Bound<PyDict>,
+        y: PyReadonlyArray1<f64>,
+        family: &Bound<PyAny>,
+        start: &Bound<PyDict>,
+        scope: &Bound<PyDict>,
+        k: f64,
+        direction: &str,
+        config: Option<&Bound<PyDict>>,
+    ) -> PyResult<Py<PyDict>> {
+        let dataset = py_dict_to_dataset(data)?;
+        let y_array = y.as_array().to_owned();
+        let family_type = extract_family(family)?;
+        let start_formula = py_dict_to_formula(start)?;
+        let scope_vec = py_dict_to_scope(scope)?;
+        let dir = parse_direction(direction)?;
+        let fit_config = match config {
+            Some(c) => parse_fit_config(c)?,
+            None => FitConfig::default(),
+        };
+
+        let result = selection::step_gaic(
+            &dataset,
+            &y_array,
+            family_type.as_distribution(),
+            start_formula,
+            &scope_vec,
+            k,
+            dir,
+            fit_config,
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let trace = PyList::empty(py);
+        for r in &result.trace {
+            let d = PyDict::new(py);
+            d.set_item("move", &r.move_)?;
+            d.set_item("gaic", r.gaic)?;
+            d.set_item("edf", r.edf)?;
+            trace.append(d)?;
+        }
+        let model = PyGamlssModel {
+            inner: result.model,
+            family: family_type,
+        };
+        let out = PyDict::new(py);
+        out.set_item("model", Py::new(py, model)?)?;
+        out.set_item("trace", trace)?;
+        Ok(out.into())
     }
 }
 

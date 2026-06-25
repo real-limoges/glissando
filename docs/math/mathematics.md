@@ -6,9 +6,9 @@ This document provides detailed mathematical derivations for the GAMLSS implemen
 
 ---
 
-## 1. Distribution Derivatives
+## 1. Distribution Derivatives and Distributional Functions
 
-This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm.
+This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm. §1.10 then derives the cumulative distribution, density, and quantile (the CDF/PDF/quantile trio) that these same families expose for residuals, centiles, and predictive intervals.
 
 **Key quantities**:
 - **Score** $u = \frac{\partial \ell}{\partial \eta}$: Direction of steepest ascent for the log-likelihood
@@ -576,6 +576,71 @@ z_\sigma = \log(\sigma) + u_\sigma/w_\sigma = [-0.693, -0.693, -0.693] + [-0.48,
 $$
 
 The PWLS solver then regresses $z_\sigma$ on the design matrix for $\sigma$ with weights $w_\sigma$ to update $\sigma$.
+
+---
+
+### 1.10 Cumulative Distributions, Densities, and Quantiles
+
+Beyond the score/Fisher quantities that drive fitting, each family exposes the **distributional trio** — the cumulative distribution $F$, the density/mass $f$, and the quantile (inverse CDF) $Q$. These are what every statistically distinctive GAMLSS output needs (quantile residuals in §11.3, centile curves, predictive intervals).
+
+#### Definitions
+
+$$
+F(y \mid \theta) = P(Y \le y \mid \theta), \qquad
+f(y \mid \theta) = \begin{cases} \dfrac{\partial F}{\partial y} & \text{continuous} \\[4pt] F(y) - F(y^-) & \text{discrete} \end{cases}, \qquad
+Q(p \mid \theta) = \inf\{\, y : F(y \mid \theta) \ge p \,\}.
+$$
+
+The density is obtained for free from the pointwise log-likelihood of §1.1–§1.8:
+$$
+f(y \mid \theta) = \exp\bigl(\ell_{\text{pointwise}}(y \mid \theta)\bigr),
+$$
+which is exact because every family's $\ell_{\text{pointwise}}$ returns a **normalized** log-density (continuous) or log-mass (discrete). Discrete families set an `is_discrete` flag; their $F$ is the right-continuous step function evaluated at $\lfloor y \rfloor$.
+
+#### Why the trio matters: the probability integral transform
+
+If $Y$ is continuous with CDF $F$, then
+$$
+U = F(Y \mid \theta) \sim \text{Uniform}(0,1) \quad\Longrightarrow\quad r = \Phi^{-1}(U) \sim N(0,1).
+$$
+So $r_i = \Phi^{-1}(F(y_i \mid \hat\theta_i))$ is standard normal whenever the fitted model is correct, **regardless of the family** — the foundation of the randomized quantile residuals of §11.3.
+
+#### Per-family CDF and quantile
+
+Each family maps its gamlss (mean/dispersion) parameters to the standard arguments of one special function. All special functions are in `statrs`: the error function $\mathrm{erf}$; the regularized lower / upper incomplete gamma $P(a,x) = \gamma(a,x)/\Gamma(a)$ and $Q(a,x) = 1 - P(a,x)$; and the regularized incomplete beta $I_x(a,b) = B(x;a,b)/B(a,b)$.
+
+| Family | gamlss params | standard params | $F(y \mid \theta)$ | $Q(p \mid \theta)$ |
+| --- | --- | --- | --- | --- |
+| Gaussian | $\mu,\sigma$ | loc $\mu$, sd $\sigma$ | $\tfrac12\bigl[1 + \mathrm{erf}\bigl(\tfrac{y-\mu}{\sigma\sqrt2}\bigr)\bigr]$ | $\mu + \sigma\sqrt2\,\mathrm{erf}^{-1}(2p-1)$ |
+| Gamma | $\mu,\sigma$ | shape $\alpha=1/\sigma^2$, scale $s=\mu\sigma^2$ | $P(\alpha,\,y/s)$ | $\text{Gamma}(\alpha,1/s)^{-1}(p)$ |
+| Student-t | $\mu,\sigma,\nu$ | std $t$ on $z=(y-\mu)/\sigma$ | $T_\nu(z)$ | $\mu + \sigma\,T_\nu^{-1}(p)$ |
+| Beta | $\mu,\phi$ | $a=\mu\phi,\; b=(1-\mu)\phi$ | $I_y(a,b)$ | $\text{Beta}(a,b)^{-1}(p)$ |
+| Poisson *(disc.)* | $\mu$ | rate $\mu$ | $Q(\lfloor y\rfloor + 1,\, \mu)$ | search (below) |
+| Neg. binomial *(disc.)* | $\mu,\sigma$ | size $r=1/\sigma$, prob $q=r/(r+\mu)$ | $I_q(r,\, \lfloor y\rfloor + 1)$ | search |
+| Binomial *(disc.)* | $n$ (state), $\mu$ | $n$ trials, prob $\mu$ | $I_{1-\mu}(n-\lfloor y\rfloor,\, \lfloor y\rfloor + 1)$ | search |
+| Ocat *(disc.)* | $\mu,\delta$ thresholds | cumulative-logit | $\mathrm{logistic}(\theta_{\lfloor y\rfloor} - \mu)$, $=1$ at $y \ge R$ | smallest level $r$ with $F(r) \ge p$ |
+
+Note Beta uses the **precision** parameterization $(\mu,\phi)$ consistent with §1.6 and the glossary, so $a=\mu\phi$ and $b=(1-\mu)\phi$ (not a $(\mu,\sigma)$ form).
+
+#### Discrete CDFs via incomplete special functions
+
+The discrete CDFs avoid a summation loop through a special-function identity. For the Poisson (representative of the discrete cases),
+$$
+F(m \mid \mu) = \sum_{k=0}^{m} e^{-\mu}\frac{\mu^k}{k!} = Q(m+1, \mu) = \frac{\Gamma(m+1, \mu)}{\Gamma(m+1)}, \qquad m = \lfloor y \rfloor,
+$$
+i.e. the regularized **upper** incomplete gamma at an integer first argument equals the Poisson CDF. The negative-binomial and binomial CDFs are the regularized incomplete beta evaluations in the table; Ocat is the proportional-odds cumulative-logit $P(Y \le r) = \mathrm{logistic}(\theta_r - \mu)$ (the same $F_k$ used in §1.8).
+
+#### Discrete quantile search
+
+For the discrete families, $Q$ is the smallest integer $k$ with $F(k) \ge p$, found by a doubling-bracket then bisection (the shared `discrete_quantile` helper):
+$$
+\text{double } hi \text{ until } F(hi) \ge p, \quad \text{then bisect } [lo, hi] \text{ to the smallest } k \text{ with } F(k) \ge p,
+$$
+which is $O(\log k)$ even for large means. The right-continuous convention — evaluating the discrete CDF at $\lfloor y \rfloor$ — gives the identity
+$$
+F(k) - F(k-1) = f(k) \quad \text{(pmf at integer support)},
+$$
+which the randomized quantile residuals of §11.3 rely on to de-lump each atom.
 
 ---
 
@@ -1436,14 +1501,19 @@ $$
 
 ### 11.3 Residuals
 
-**Quantile (randomized quantile) residuals**:
+**Quantile (randomized quantile) residuals** (Dunn & Smyth 1996). For a **continuous** response:
 $$
 r_i = \Phi^{-1}(F(y_i | \hat{\theta}_i))
 $$
 
-where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF.
+where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF. If the model is correct, $r_i \sim N(0,1)$ by the probability integral transform (§1.10).
 
-If the model is correct, $r_i \sim N(0,1)$.
+For a **discrete** response, $F$ jumps, so $F(Y)$ is not uniform; the *randomized* PIT spreads each atom across its jump interval. With $v_i \sim \text{Uniform}(0,1)$:
+$$
+a_i = F(y_i - 1 \mid \hat\theta_i), \quad b_i = F(y_i \mid \hat\theta_i), \quad u_i = a_i + v_i\,(b_i - a_i), \quad r_i = \Phi^{-1}(u_i).
+$$
+
+The fitted CDF $F$, quantile $Q$, and the `is_discrete` flag that selects the branch are provided by the distributional trio of §1.10; the right-continuity identity $F(k) - F(k-1) = f(k)$ is what makes $u_i$ uniform on the jump interval.
 
 **Deviance residuals**:
 $$
@@ -1506,6 +1576,8 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Ordered categorical derivatives (§1.8) | `src/distributions/ocat.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
+| CDF / PDF / quantile / `is_discrete` trait methods (§1.10) | `src/distributions/mod.rs` + per-family files |
+| `discrete_quantile` bracket+bisection (§1.10) | `src/distributions/mod.rs` (`discrete_quantile`) |
 | B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
 | Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs` (`sum_to_zero_basis`) |
 | Difference penalty matrix (§5) | `src/splines.rs` (`create_penalty_matrix`) |
@@ -1546,6 +1618,12 @@ Symbols used throughout this document.
 | $\delta_k$ | $k$-th threshold increment parameter fed to the RS loop: $\theta_1 = \delta_1$ (identity link), $\theta_k = \theta_{k-1} + e^{\delta_k}$ for $k \ge 2$ (log link) |
 | $F_k, f_k$ | Cumulative-logit CDF and logistic density at threshold $\theta_k$: $F_k = \mathrm{logistic}(\theta_k - \mu)$, $f_k = F_k(1-F_k)$ |
 | $\pi_r$ | Category probability in `Ocat`: $\pi_r = F_r - F_{r-1}$, $F_0=0$, $F_R=1$ |
+| $F(y\mid\theta)$ | Cumulative distribution $P(Y\le y\mid\theta)$; right-continuous step at $\lfloor y\rfloor$ for discrete families (§1.10) |
+| $f(y\mid\theta)$ | Density (continuous) or mass (discrete) $=\exp(\ell_{\text{pointwise}})$ (§1.10) |
+| $Q(p\mid\theta)$ | Quantile / inverse CDF: $\inf\{y:F(y\mid\theta)\ge p\}$ (§1.10) |
+| $P(a,x),\, Q(a,x)$ | Regularized lower / upper incomplete gamma $\gamma(a,x)/\Gamma(a)$, $1-P(a,x)$ |
+| $I_x(a,b)$ | Regularized incomplete beta $B(x;a,b)/B(a,b)$ |
+| $\Phi, \Phi^{-1}$ | Standard normal CDF and its inverse (quantile) |
 | $\mathrm{prior}_i$ | Per-observation prior / observation weight (§4.5); defaults to 1 |
 | $\mathrm{safe\_w}_i$ | Floored Fisher weight: $\max(w_i, \mathrm{MIN\_WEIGHT})$ |
 | $g, g^{-1}$ | Link function and its inverse |
@@ -1598,3 +1676,5 @@ Symbols used throughout this document.
 11. Piegl, L., & Tiller, W. (1997). *The NURBS Book* (2nd ed.). Springer. — Algorithm A2.2: de Boor–Cox recurrence for stable B-spline evaluation; the canonical reference for the `left`/`right` array structure used in `evaluate_basis_functions_into`.
 
 12. McCullagh, P. (1980). Regression models for ordinal data. *Journal of the Royal Statistical Society: Series B*, 42(2), 109-142. — Proportional-odds / cumulative-logit model; foundational reference for the `Ocat` distribution (§1.8).
+
+13. Dunn, P. K., & Smyth, G. K. (1996). Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, 5(3), 236-244. — Randomized probability integral transform for discrete responses (§1.10, §11.3).

@@ -91,6 +91,17 @@ where
         .map_collect(|&x, &y, &z| f(x, y, z))
 }
 
+/// Standard-normal quantile `Φ⁻¹(p)` via the inverse error function.
+///
+/// `p` is clamped to `[1e-12, 1−1e-12]` so the result stays finite at the
+/// extremes. Shared by [`Gaussian::quantile`](crate::distributions::Gaussian)
+/// and the randomized quantile residuals (INFER-1), so both use one definition.
+#[inline]
+pub(crate) fn std_normal_quantile(p: f64) -> f64 {
+    use statrs::function::erf::erf_inv;
+    std::f64::consts::SQRT_2 * erf_inv(2.0 * p.clamp(1e-12, 1.0 - 1e-12) - 1.0)
+}
+
 /// Digamma function: psi(x) = d/dx log(Gamma(x)).
 /// Delegates to statrs. For arrays, use [`digamma_batch`] instead.
 #[inline]

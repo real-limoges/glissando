@@ -82,6 +82,43 @@ pub trait Distribution: Debug + Send + Sync {
         Ok(self.loglik_pointwise(y, params)?.sum())
     }
 
+    /// Whether the response is discrete (counts / categories) rather than
+    /// continuous. Drives the randomized branch of quantile residuals (INFER-1),
+    /// which needs both `F(y)` and `F(y−1)` to de-lump each atom. Default: continuous.
+    fn is_discrete(&self) -> bool {
+        false
+    }
+
+    /// Density (continuous) or mass (discrete) `f(y_i | params_i)`.
+    ///
+    /// Default: `exp(loglik_pointwise)`, correct for every family whose
+    /// `loglik_pointwise` returns a true (normalized) log-density/-mass.
+    fn pdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        Ok(self.loglik_pointwise(y, params)?.mapv(f64::exp))
+    }
+
+    /// Cumulative distribution `F(y_i | params_i) = P(Y ≤ y_i)`, vectorized over rows.
+    ///
+    /// For discrete families this is the right-continuous step CDF evaluated at
+    /// `⌊y⌋`, so that `cdf(k) − cdf(k−1) = pdf(k)` at integer support points.
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError>;
+
+    /// Inverse CDF / quantile: smallest `y` with `F(y) ≥ p_i`, element-wise over
+    /// `p ∈ (0, 1)`. Returns response-scale values.
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError>;
+
     /// Stable distribution name (e.g. `"Gaussian"`); used in error messages and
     /// for the WASM `from_name` lookup.
     fn name(&self) -> &'static str;
@@ -128,6 +165,34 @@ pub(crate) fn require<'a, D: Distribution + ?Sized>(
         .get(name)
         .copied()
         .ok_or_else(|| dist.unknown_param(name))
+}
+
+/// Smallest non-negative integer `k` (returned as `f64`) with `cdf_at(k) ≥ p`,
+/// for a monotone discrete CDF. Doubling bracket then bisection keeps it
+/// `O(log k)` even for large means. Shared by the discrete families' `quantile`.
+pub(crate) fn discrete_quantile(p: f64, cdf_at: impl Fn(u64) -> f64) -> f64 {
+    if p <= cdf_at(0) {
+        return 0.0;
+    }
+    let (mut lo, mut hi) = (0u64, 1u64);
+    while cdf_at(hi) < p {
+        lo = hi;
+        hi = hi.saturating_mul(2);
+        // Guard against an unreachable target (p ~ 1 with a capped CDF): once `hi`
+        // stops growing we have bracketed as far as the integer range allows.
+        if hi == lo {
+            return hi as f64;
+        }
+    }
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if cdf_at(mid) < p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi as f64
 }
 
 // ============================================================================
@@ -270,6 +335,116 @@ pub(crate) mod test_helpers {
                 analytic_u[i],
                 numeric_u
             );
+        }
+    }
+
+    /// Continuous round-trip: `Q(F(y)) ≈ y` element-wise.
+    pub fn check_cdf_quantile_roundtrip<D: Distribution + ?Sized>(
+        d: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        tol: f64,
+    ) {
+        let p = params_view(owned);
+        let u = d.cdf(y, &p).unwrap();
+        let back = d.quantile(&u, &p).unwrap();
+        for i in 0..y.len() {
+            assert!(
+                (back[i] - y[i]).abs() < tol,
+                "{} obs {}: Q(F(y))={:.6e} y={:.6e} (F={:.6e})",
+                d.name(),
+                i,
+                back[i],
+                y[i],
+                u[i]
+            );
+        }
+    }
+
+    /// Continuous CDF↔pdf consistency: central difference `dF/dy ≈ pdf(y)`.
+    pub fn check_cdf_pdf_consistency<D: Distribution + ?Sized>(
+        d: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        h: f64,
+        tol: f64,
+    ) {
+        let p = params_view(owned);
+        let pdf = d.pdf(y, &p).unwrap();
+        let f_plus = d.cdf(&(y + h), &p).unwrap();
+        let f_minus = d.cdf(&(y - h), &p).unwrap();
+        for i in 0..y.len() {
+            let numeric = (f_plus[i] - f_minus[i]) / (2.0 * h);
+            let scale = pdf[i].abs().max(1.0);
+            assert!(
+                (numeric - pdf[i]).abs() / scale < tol,
+                "{} obs {}: dF/dy={:.6e} pdf={:.6e}",
+                d.name(),
+                i,
+                numeric,
+                pdf[i]
+            );
+        }
+    }
+
+    /// Discrete consistency at integer support: `cdf(k) − cdf(k−1) ≈ pdf(k)`.
+    pub fn check_discrete_cdf_matches_pmf<D: Distribution + ?Sized>(
+        d: &D,
+        ks: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        tol: f64,
+    ) {
+        let p = params_view(owned);
+        let pmf = d.pdf(ks, &p).unwrap();
+        let hi = d.cdf(ks, &p).unwrap();
+        let lo = d.cdf(&(ks - 1.0), &p).unwrap();
+        for i in 0..ks.len() {
+            let jump = hi[i] - lo[i];
+            assert!(
+                (jump - pmf[i]).abs() < tol,
+                "{} obs {} (k={}): cdf(k)−cdf(k−1)={:.6e} pmf={:.6e}",
+                d.name(),
+                i,
+                ks[i],
+                jump,
+                pmf[i]
+            );
+        }
+    }
+
+    /// CDF range/monotonicity: `cdf ∈ [0,1]` and non-decreasing in `y` over the
+    /// supplied (ascending, single-observation) grid, plus tail anchors.
+    pub fn check_cdf_monotone_in_unit<D: Distribution + ?Sized>(
+        d: &D,
+        grid: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+    ) {
+        let n = grid.len();
+        // Broadcast the single-row params across the grid.
+        let broadcast: Vec<(&'static str, Array1<f64>)> = owned
+            .iter()
+            .map(|(k, v)| (*k, Array1::from_elem(n, v[0])))
+            .collect();
+        let p = params_view(&broadcast);
+        let f = d.cdf(grid, &p).unwrap();
+        for i in 0..n {
+            assert!(
+                (-1e-9..=1.0 + 1e-9).contains(&f[i]),
+                "{} obs {}: cdf={} out of [0,1]",
+                d.name(),
+                i,
+                f[i]
+            );
+            if i > 0 {
+                assert!(
+                    f[i] >= f[i - 1] - 1e-9,
+                    "{} cdf not monotone at {}: {} < {}",
+                    d.name(),
+                    i,
+                    f[i],
+                    f[i - 1]
+                );
+            }
         }
     }
 }
