@@ -17,7 +17,7 @@ use super::solver::{
     fit_pwls, lambda_cost, restart_seed, run_optimization, run_optimization_fellner_schall,
     run_optimization_reml,
 };
-use super::{FittingParameter, SmoothingCriterion};
+use super::{global_deviance, global_deviance_with, FittingParameter, SmoothingCriterion};
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
@@ -31,6 +31,10 @@ const MIN_WEIGHT: f64 = 1e-6;
 /// Cap on the per-element Fisher-scoring step `u/w` (in η units), guarding against
 /// huge updates from extreme score / small Fisher info combinations.
 const MAX_STEP: f64 = 20.0;
+
+/// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
+/// step is accepted regardless so the loop always makes progress.
+pub(super) const MIN_STEP_ALPHA: f64 = 1.0 / 1024.0;
 
 /// New state plus per-step diagnostics produced by [`step`].
 #[derive(Debug)]
@@ -54,6 +58,62 @@ pub(super) struct Update {
     pub weight_floor_hits: usize,
     /// Observations whose `u/w` step was clipped at `±MAX_STEP`.
     pub step_cap_hits: usize,
+}
+
+/// A (possibly damped) block update accepted by [`step_halving`].
+#[derive(Debug)]
+pub(super) struct Halved {
+    pub beta: Coefficients,
+    pub eta: Array1<f64>,
+    pub mu: Array1<f64>,
+    /// Number of halvings applied (`0` = the full Fisher step was accepted).
+    pub hits: usize,
+}
+
+/// Backtrack a proposed block update on the global deviance, holding the other
+/// parameters fixed (FIT-1).
+///
+/// The Fisher-scoring direction `d_k = β_new − β_old` is an ascent direction for
+/// the penalized log-likelihood, hence a descent direction for the global
+/// deviance restricted to block `k`. Starting at the full step `α = 1` and
+/// halving until the deviance does not increase is therefore guaranteed to
+/// terminate, and turns each cycle into a monotone descent — taming the overshoot
+/// that diverges on heavy-tailed / skew families.
+///
+/// Returns the accepted step; `hits` is the number of halvings (`0` = full step).
+pub(super) fn step_halving<D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
+    models: &IndexMap<String, FittingParameter>,
+    param: &str,
+    proposed: &Update,
+    min_alpha: f64,
+) -> Result<Halved, GamlssError> {
+    let model = &models[param];
+    let gd0 = global_deviance(family, y, prior_weights, models)?; // GD at α = 0
+    let dir = &proposed.beta.0 - &model.beta.0; // d_k
+    let (x, link) = (&model.x_matrix.0, &model.link);
+
+    let (mut alpha, mut hits) = (1.0_f64, 0usize);
+    loop {
+        let beta_a = &model.beta.0 + &(alpha * &dir);
+        let eta_a = x.dot(&beta_a);
+        let mu_a = eta_a.mapv(|e| link.inv_link(e));
+        let gd_a = global_deviance_with(family, y, prior_weights, models, param, &mu_a)?;
+
+        // Accept on no-increase (small slack absorbs round-off), or at the floor.
+        if gd_a <= gd0 + 1e-8 || alpha <= min_alpha {
+            return Ok(Halved {
+                beta: Coefficients(beta_a),
+                eta: eta_a,
+                mu: mu_a,
+                hits,
+            });
+        }
+        alpha *= 0.5;
+        hits += 1;
+    }
 }
 
 /// Run one Fisher-scoring step on `target_param`, given the current state of every
@@ -493,5 +553,104 @@ mod tests {
         .unwrap_err();
         // family.derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
         assert!(format!("{}", err).contains("zeta"));
+    }
+
+    /// Minimal `Update` carrying an arbitrary proposed β; `step_halving` only reads
+    /// `proposed.beta`, recomputing η/μ from the trial α itself.
+    fn proposed_update(beta_val: f64) -> Update {
+        Update {
+            beta: Coefficients(array![beta_val]),
+            eta: array![beta_val],
+            mu: array![beta_val],
+            lambdas: Array1::<f64>::zeros(0),
+            covariance: CovarianceMatrix(Array2::zeros((1, 1))),
+            edf: 0.0,
+            term_edf: vec![0.0],
+            max_diff: 0.0,
+            eta_change: 0.0,
+            lambda_change: 0.0,
+            weight_floor_hits: 0,
+            step_cap_hits: 0,
+        }
+    }
+
+    #[test]
+    fn global_deviance_matches_minus_two_loglik() {
+        // Gaussian intercept-only, μ = 0, σ = 1 ⇒ GD = Σ (y² + ln(2π)).
+        let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
+        let n = y.len();
+        let mut models = IndexMap::new();
+        models.insert("mu".to_string(), intercept_only(0.0, n));
+        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+
+        let gd = global_deviance(&Gaussian, &y, None, &models).unwrap();
+        let expected: f64 = y
+            .iter()
+            .map(|&yi| yi * yi + (2.0 * std::f64::consts::PI).ln())
+            .sum();
+        assert!((gd - expected).abs() < 1e-9, "gd {gd} vs {expected}");
+    }
+
+    #[test]
+    fn global_deviance_with_overrides_one_block() {
+        // Swapping in the committed μ reproduces the plain global deviance.
+        let y = array![1.0, 2.0, 3.0];
+        let n = y.len();
+        let mut models = IndexMap::new();
+        models.insert("mu".to_string(), intercept_only(0.0, n));
+        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+
+        let plain = global_deviance(&Gaussian, &y, None, &models).unwrap();
+        let same =
+            global_deviance_with(&Gaussian, &y, None, &models, "mu", &models["mu"].mu).unwrap();
+        assert!((plain - same).abs() < 1e-12);
+    }
+
+    #[test]
+    fn step_halving_accepts_full_step_when_deviance_decreases() {
+        // Moving μ from 0 toward ȳ = 3 strictly lowers the deviance, so the full
+        // step (α = 1) is accepted with no halvings.
+        let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
+        let n = y.len();
+        let mut models = IndexMap::new();
+        models.insert("mu".to_string(), intercept_only(0.0, n));
+        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+
+        let proposed = proposed_update(3.0);
+        let halved =
+            step_halving(&Gaussian, &y, None, &models, "mu", &proposed, MIN_STEP_ALPHA).unwrap();
+        assert_eq!(halved.hits, 0, "well-behaved step should not halve");
+        assert!((halved.beta.0[0] - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn step_halving_damps_an_overshooting_step() {
+        // ȳ = 3; a proposed μ = 10 overshoots so far the deviance *increases*
+        // (Σ(y−10)² = 255 > Σy² = 55). Halving once lands on μ = 5
+        // (Σ(y−5)² = 30 < 55), a strict decrease — so hits ≥ 1 and the accepted
+        // deviance is below the starting deviance.
+        let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
+        let n = y.len();
+        let mut models = IndexMap::new();
+        models.insert("mu".to_string(), intercept_only(0.0, n));
+        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+
+        let gd0 = global_deviance(&Gaussian, &y, None, &models).unwrap();
+        let proposed = proposed_update(10.0);
+        let halved =
+            step_halving(&Gaussian, &y, None, &models, "mu", &proposed, MIN_STEP_ALPHA).unwrap();
+
+        assert!(halved.hits >= 1, "overshooting step must be halved");
+        assert!(
+            halved.beta.0[0] < 10.0 && halved.beta.0[0] > 0.0,
+            "accepted β should be a damped fraction of the full step, got {}",
+            halved.beta.0[0]
+        );
+        let gd_accepted =
+            global_deviance_with(&Gaussian, &y, None, &models, "mu", &halved.mu).unwrap();
+        assert!(
+            gd_accepted <= gd0 + 1e-8,
+            "accepted deviance {gd_accepted} should not exceed start {gd0}"
+        );
     }
 }

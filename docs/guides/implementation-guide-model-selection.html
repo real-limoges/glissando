@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · implementation guide — INFER-3 / INFER-4 / INFER-7 (model selection)</title>
+<style>
+/* ============================================================================
+   house.css (Tokyonight) embedded inline so this page renders from file://.
+   ============================================================================ */
+:root {
+  --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+  --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+  --good:#9ece6a; --warn:#f7768e;
+  --codebg:#15161e;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:2rem 1.25rem 4rem;
+  background:var(--bg); color:var(--fg);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+}
+.wrap { max-width:820px; margin:0 auto; }
+h1 { font-size:1.7rem; line-height:1.25; margin:0 0 .6rem; color:#fff; font-weight:700; }
+h1 .sub { color:var(--accent); font-weight:600; }
+h2 {
+  font-size:1.28rem; color:var(--accent2); font-weight:650;
+  margin:2.4rem 0 .9rem; padding-bottom:.3rem; border-bottom:1px solid var(--line);
+}
+h3 { font-size:1.06rem; color:var(--accent); font-weight:650; margin:1.8rem 0 .6rem; }
+h4 { font-size:.95rem;  color:var(--fg);     font-weight:700; margin:1.4rem 0 .5rem; }
+h5, h6 { font-size:.9rem; color:var(--dim); font-weight:700; text-transform:uppercase;
+         letter-spacing:.06em; margin:1.2rem 0 .4rem; }
+p { margin:.7rem 0; }
+.lede { color:var(--dim); margin:0 0 2rem; }
+a { color:var(--accent);
+    text-decoration:underline; text-decoration-color:rgba(122,162,247,.45);
+    text-underline-offset:2px; }
+a:hover { text-decoration-color:var(--accent); }
+code {
+  background:#1f2335; color:#a9b1d6;
+  border:1px solid var(--line);
+  padding:.02rem .34rem; border-radius:4px;
+  font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+kbd {
+  display:inline-block; background:var(--codebg); color:var(--key);
+  border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+  padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  white-space:nowrap;
+}
+pre {
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:.9rem 1.1rem; margin:1rem 0; overflow-x:auto; line-height:1.5;
+}
+pre code {
+  background:none; border:none; color:var(--fg); padding:0; border-radius:0;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+blockquote {
+  margin:1rem 0; padding:.4rem 1rem; color:var(--dim);
+  border-left:3px solid var(--accent); background:rgba(122,162,247,.06);
+  border-radius:0 6px 6px 0;
+}
+blockquote p { margin:.4rem 0; }
+ul, ol { margin:.7rem 0; padding-left:1.5rem; }
+li { margin:.3rem 0; }
+li > ul, li > ol { margin:.3rem 0; }
+table { width:100%; border-collapse:collapse; margin:1.1rem 0; font-size:.94rem; }
+th, td {
+  text-align:left; padding:.5rem .7rem; border:1px solid var(--line);
+  vertical-align:top;
+}
+th { background:var(--panel); color:#fff; font-weight:650; }
+tr:nth-child(even) td { background:rgba(36,40,59,.45); }
+hr { border:none; border-top:1px solid var(--line); margin:2rem 0; }
+strong, b { color:#fff; }
+em { color:var(--fg); }
+footer { color:var(--dim); font-size:.78rem; margin-top:3rem; padding-top:1rem;
+         border-top:1px solid var(--line); text-align:center; }
+
+/* ---- roadmap-ID chip (matches ROADMAP.html) + small helpers --------------- */
+.id { display:inline-block; background:var(--codebg); color:var(--good);
+      border:1px solid var(--line); border-radius:4px;
+      padding:.02rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+      white-space:nowrap; }
+.dep { color:var(--dim); font-size:.9rem; }
+.note { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:.8rem 1.1rem; margin:1rem 0; }
+.note p:first-child { margin-top:0; }
+.note p:last-child { margin-bottom:0; }
+.warn { border-left:3px solid var(--warn); background:rgba(247,118,142,.06); }
+.math { background:var(--codebg); border:1px solid var(--line); border-radius:8px;
+        padding:.6rem .95rem; margin:.9rem 0; overflow-x:auto;
+        font:13.5px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--fg); }
+.math .v { color:var(--key); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>glissando <span class="sub">· implementation guide</span></h1>
+<p class="lede">Model selection &amp; comparison — <span class="id">INFER-3</span>,
+<span class="id">INFER-4</span>, <span class="id">INFER-7</span>. Three items that share one
+mechanism (compare fitted models by an information criterion or a deviance difference) over one
+substrate (the <code>−2·loglik</code> and total-EDF already in <code>src/fitting/diagnostics.rs</code>),
+with the theory derived and the code sketched against the current source. IDs cross-reference
+<code>docs/ROADMAP.html</code>.</p>
+
+<div class="note">
+<p>One foundation, two consumers:</p>
+<pre><code>INFER-3  (GAIC with arbitrary penalty k)   ← the primitive
+   ├──► INFER-4  (stepwise term selection / stepGAIC)   selects by GAIC(k)
+   └──► INFER-7  (ANOVA / model comparison)             ranks + LR-tests by deviance</code></pre>
+<p>Recommended order: <b>INFER-3 first</b> (a few lines; unblocks the other two), then INFER-4 and
+INFER-7 in either order.</p>
+</div>
+
+<h3>Substrate already in the crate</h3>
+<ul>
+<li><code>compute_aic(ll, edf) = −2·ll + 2·edf</code>, <code>compute_bic(ll, edf, n) = −2·ll + log(n)·edf</code>
+(<code>src/fitting/diagnostics.rs</code>).</li>
+<li><code>total_edf(models) -&gt; f64</code> — fitted effective degrees of freedom, summed over parameters.</li>
+<li><code>family.loglik(y, &params)</code> on the <code>Distribution</code> trait — the model log-likelihood.</li>
+<li><code>ModelDiagnostics { total_edf, aic, bic, log_likelihood, n_obs, .. }</code> from
+<code>GamlssModel::diagnostics(family, y)</code>.</li>
+</ul>
+<p>The fitting entry points the selection loop drives:
+<code>GamlssModel::fit(data, y, &formula, family)</code> and
+<code>fit_with_config(data, y, weights, &formula, family, config)</code>, where a <code>Formula</code>
+is a <code>HashMap&lt;String, Vec&lt;Term&gt;&gt;</code> built with <code>.with_terms(param, terms)</code> /
+<code>.add_terms(param, terms)</code>, and each <code>Term</code> (<code>Intercept</code> /
+<code>Linear{col_name}</code> / <code>Smooth(..)</code>) reports a stable <code>term_name()</code>.</p>
+
+<hr>
+
+<h2><span class="id">INFER-3</span> — GAIC with arbitrary penalty <code>k</code></h2>
+<p class="dep"><b>File:</b> <code>src/fitting/diagnostics.rs</code> (primitive) +
+<code>GamlssModel</code> method in <code>src/lib.rs</code>.</p>
+
+<h3>Why a penalized log-likelihood</h3>
+<p>Maximized log-likelihood always rises as terms are added, so it cannot choose a model — it must
+be penalized for complexity. The <b>global deviance</b> and its generalized information criterion are</p>
+<div class="math">
+GD = −2·ℓ̂   (gamlss "global deviance"; no saturated-model subtraction)
+GAIC(<span class="v">k</span>) = GD + <span class="v">k</span>·df = −2·ℓ̂ + <span class="v">k</span>·df
+</div>
+<p>The two classical choices come from different first principles:</p>
+<ul>
+<li><b>AIC</b> (<code>k = 2</code>): an estimate of the expected Kullback–Leibler divergence between
+the fitted and true densities; the <code>2·df</code> term corrects the optimism of the in-sample
+log-likelihood (Akaike). Targets <em>predictive</em> accuracy.</li>
+<li><b>BIC / SBC</b> (<code>k = log n</code>): the Laplace approximation to <code>−2·log</code> of the
+Bayesian marginal likelihood; the <code>log(n)·df</code> term is the Occam factor. Targets the
+<em>true</em> model and is consistent. Penalizes complexity harder than AIC once <code>n ≥ 8</code>.</li>
+</ul>
+<div class="math">
+common k:&nbsp; 2 (AIC) · log n (BIC) · 3.84 ≈ χ²<sub>1,0.95</sub> · 2·log log n (Hannan–Quinn-ish)
+</div>
+<p>Crucially, <b><code>df</code> is the <em>effective</em> degrees of freedom</b>, not the raw
+coefficient count: for a penalized smooth it is <code>tr(F)</code>, the trace of the smoother /
+hat operator, which is fractional. glissando already computes and stores it as
+<code>total_edf</code> — so GAIC drops in directly.</p>
+
+<h3>Code</h3>
+<p>Add the primitive and re-express AIC/BIC through it so there is a single definition every
+downstream score inherits:</p>
+<pre><code>// src/fitting/diagnostics.rs
+
+/// Generalized AIC: `−2·loglik + k·edf`. `k = 2` is AIC, `k = log(n)` is BIC.
+pub fn compute_gaic(log_likelihood: f64, total_edf: f64, k: f64) -&gt; f64 {
+    -2.0 * log_likelihood + k * total_edf
+}
+
+pub fn compute_aic(ll: f64, edf: f64) -&gt; f64          { compute_gaic(ll, edf, 2.0) }
+pub fn compute_bic(ll: f64, edf: f64, n: usize) -&gt; f64 { compute_gaic(ll, edf, (n as f64).ln()) }</code></pre>
+<pre><code>// src/lib.rs — on GamlssModel
+
+/// Generalized AIC at penalty `k`. `k = 2` ≡ `diagnostics(..).aic`;
+/// `k = (n as f64).ln()` ≡ `.bic`. Use the response `y` the model was fit on.
+pub fn gaic&lt;D: Distribution + ?Sized&gt;(
+    &self, family: &D, y: &Array1&lt;f64&gt;, k: f64,
+) -&gt; Result&lt;f64, GamlssError&gt; {
+    let params: HashMap&lt;&str, &Array1&lt;f64&gt;&gt; =
+        self.models.iter().map(|(p, f)| (p.as_str(), &f.fitted_values)).collect();
+    let ll = family.loglik(y, &params)?;
+    let edf = fitting::diagnostics::total_edf(&self.models);
+    Ok(fitting::diagnostics::compute_gaic(ll, edf, k))
+}</code></pre>
+
+<div class="note">
+<p>Keep the single-source refactor in this item — it guarantees AIC, BIC, and every
+<code>stepGAIC</code>/ANOVA score stay consistent, and the existing AIC/BIC doctests in
+<code>diagnostics.rs</code> already pin it.</p>
+</div>
+
+<h3>Tests</h3>
+<ul>
+<li><code>gaic(.., 2.0)</code> equals <code>diagnostics.aic</code>; <code>gaic(.., (n).ln())</code> equals <code>.bic</code>.</li>
+<li>Monotone in <code>k</code>: larger <code>k</code> ⇒ larger GAIC for the same fit (<code>edf &gt; 0</code>).</li>
+<li>Two fits, equal log-likelihood: the lower-EDF one has the lower GAIC at every <code>k &gt; 0</code>.</li>
+</ul>
+
+<hr>
+
+<h2><span class="id">INFER-4</span> — Stepwise term selection (<code>stepGAIC</code> analog)</h2>
+<p class="dep"><b>File:</b> new module <code>src/fitting/selection.rs</code> + a convenience method on
+<code>GamlssModel</code>. <b>Depends on</b> <span class="id">INFER-3</span>.</p>
+
+<h3>The search</h3>
+<p>Stepwise selection is greedy local search over a discrete neighbourhood of models. Let the
+neighbourhood <code>N(M)</code> be all models reachable from <code>M</code> by adding or dropping one
+term. At each step evaluate the move score and take the best improving one:</p>
+<div class="math">
+Δ(M → M′) = GAIC<sub>k</sub>(M′) − GAIC<sub>k</sub>(M)
+M ← argmin<sub>M′ ∈ N(M)</sub> GAIC<sub>k</sub>(M′)   while   min Δ &lt; −ε
+</div>
+<p>For a single added term with <code>Δdf</code> extra effective df, the move is accepted iff it
+lowers the deviance by more than the penalty it costs:</p>
+<div class="math">
+accept  ⟺  GD(M) − GD(M′) &gt; <span class="v">k</span>·Δdf   ( = the deviance drop must beat k per df )
+</div>
+<p>The <code>k</code> is the selection knob: <code>k=2</code> (AIC) is permissive, <code>k=log n</code>
+(BIC) is parsimonious. The search is pure orchestration over <code>fit_with_config</code> + the
+INFER-3 score — no new numerics.</p>
+
+<h3>Shapes</h3>
+<pre><code>// src/fitting/selection.rs
+
+/// Which moves the search may make, per distribution parameter.
+pub struct StepScope {
+    pub param: String,            // "mu", "sigma", …
+    pub candidates: Vec&lt;Term&gt;,     // Linear / Smooth terms eligible to add or drop
+}
+
+#[derive(Clone, Copy)]
+pub enum Direction { Forward, Backward, Both }
+
+pub struct StepRecord { pub move_: String, pub gaic: f64, pub edf: f64 }   // one accepted step
+
+pub struct StepResult {
+    pub model: GamlssModel,
+    pub formula: Formula,
+    pub trace: Vec&lt;StepRecord&gt;,   // the accepted path, in order
+}
+
+pub fn step_gaic&lt;D: Distribution + ?Sized&gt;(
+    data: &DataSet, y: &Array1&lt;f64&gt;, family: &D,
+    start: Formula, scope: &[StepScope],
+    k: f64, direction: Direction, config: FitConfig,
+) -&gt; Result&lt;StepResult, GamlssError&gt;;</code></pre>
+
+<h3>Implementation</h3>
+<pre><code>// formula mutation helpers — identity by Term::term_name()
+fn has_term(f: &Formula, param: &str, t: &Term) -&gt; bool {
+    f.0.get(param).map_or(false, |ts| ts.iter().any(|x| x.term_name() == t.term_name()))
+}
+fn with_added(mut f: Formula, param: &str, t: &Term) -&gt; Formula {
+    let mut ts = f.0.get(param).cloned().unwrap_or_default();
+    ts.push(t.clone());
+    f.with_terms(param, ts)                      // rebuilds the param's Vec&lt;Term&gt;
+}
+fn with_dropped(mut f: Formula, param: &str, t: &Term) -&gt; Formula {
+    let ts = f.0.get(param).cloned().unwrap_or_default()
+        .into_iter().filter(|x| x.term_name() != t.term_name()).collect();
+    f.with_terms(param, ts)
+}
+
+pub fn step_gaic&lt;D: Distribution + ?Sized&gt;(
+    data: &DataSet, y: &Array1&lt;f64&gt;, family: &D,
+    start: Formula, scope: &[StepScope],
+    k: f64, direction: Direction, config: FitConfig,
+) -&gt; Result&lt;StepResult, GamlssError&gt; {
+    const EPS: f64 = 1e-6;                                   // guard against churn on ties
+    let mut current = start;
+    let mut model = GamlssModel::fit_with_config(data, y, None, &current, family, config.clone())?;
+    let mut best_gaic = model.gaic(family, y, k)?;
+    let mut trace = Vec::new();
+
+    loop {
+        // 1. enumerate candidate moves in a DETERMINISTIC order (reproducibility).
+        let mut moves: Vec&lt;(String, &Term, bool)&gt; = Vec::new();   // (param, term, is_add)
+        for s in scope {
+            for t in &s.candidates {
+                let present = has_term(&current, &s.param, t);
+                match direction {
+                    Direction::Forward  if !present =&gt; moves.push((s.param.clone(), t, true)),
+                    Direction::Backward if  present =&gt; moves.push((s.param.clone(), t, false)),
+                    Direction::Both =&gt; moves.push((s.param.clone(), t, !present)),
+                    _ =&gt; {}
+                }
+            }
+        }
+
+        // 2. score every move; a fit that errors (non-convergence, singular) is SKIPPED.
+        let mut best: Option&lt;(f64, f64, String, Formula)&gt; = None;
+        for (param, t, is_add) in moves {
+            let trial = if is_add { with_added(current.clone(), &param, t) }
+                        else       { with_dropped(current.clone(), &param, t) };
+            let fit = match GamlssModel::fit_with_config(data, y, None, &trial, family, config.clone()) {
+                Ok(m) =&gt; m, Err(_) =&gt; continue,
+            };
+            let (g, e) = (fit.gaic(family, y, k)?, fitting::diagnostics::total_edf(&fit.models));
+            let label = format!("{} {} on {}", if is_add {"+"} else {"−"}, t.term_name(), param);
+            if best.as_ref().map_or(true, |(bg, ..)| g &lt; *bg) {
+                best = Some((g, e, label, trial));
+                // keep the fitted model too in practice — elided here for brevity
+            }
+        }
+
+        // 3. accept the best improving move, else stop at the local optimum.
+        match best {
+            Some((g, e, label, trial)) if g &lt; best_gaic - EPS =&gt; {
+                best_gaic = g;
+                current = trial;
+                model = GamlssModel::fit_with_config(data, y, None, &current, family, config.clone())?;
+                trace.push(StepRecord { move_: label, gaic: g, edf: e });
+            }
+            _ =&gt; break,
+        }
+    }
+    Ok(StepResult { model, formula: current, trace })
+}</code></pre>
+
+<div class="note warn">
+<p><b>Cost &amp; scope discipline.</b> Each step is <code>O(#candidate moves)</code> full refits and the
+search runs <code>O(#accepted steps)</code> of those — keep it <b>greedy and single-term</b> (no
+look-ahead, no interaction synthesis), matching gamlss's <code>stepGAIC</code>. Cache the fitted model
+from step 2 instead of refitting the winner in step 3 (the sketch refits for brevity). Document that
+the result is a <em>local</em> optimum, and that <code>trace</code> records the path so callers can
+audit it.</p>
+</div>
+
+<h3>Tests</h3>
+<ul>
+<li><b>Recovery:</b> simulate <code>y ~ x1</code> with noise columns <code>x2, x3</code>; forward
+<code>step_gaic</code> selects <code>x1</code> and rejects the noise at a sensible <code>k</code>.</li>
+<li><b>Backward</b> from the full model drops the noise columns to the same selection.</li>
+<li><b>Determinism:</b> identical inputs ⇒ identical <code>trace</code> (relies on the fixed move ordering).</li>
+<li><b>Monotone trace:</b> each accepted step strictly lowers <code>GAIC(k)</code>.</li>
+</ul>
+
+<hr>
+
+<h2><span class="id">INFER-7</span> — ANOVA / model comparison</h2>
+<p class="dep"><b>File:</b> <code>src/fitting/selection.rs</code> (or a sibling
+<code>comparison.rs</code>). Shares the deviance/EDF primitives with <span class="id">INFER-3</span>.</p>
+
+<p>Two facilities under one roof, matching <code>anova()</code> for gamlss/mgcv objects.</p>
+
+<h3>1 · Information-criterion table (non-nested OK)</h3>
+<p>Tabulate a set of models by EDF, global deviance, and <code>GAIC(k)</code> — a ranking, no test.
+Works for any models fit to the same response, nested or not (this is how you compare different
+<em>families</em> or non-nested term sets).</p>
+<pre><code>pub struct IcRow { pub label: String, pub edf: f64, pub global_deviance: f64, pub gaic: f64 }
+
+pub fn ic_table&lt;D: Distribution + ?Sized&gt;(
+    models: &[(&str, &GamlssModel)], family: &D, y: &Array1&lt;f64&gt;, k: f64,
+) -&gt; Result&lt;Vec&lt;IcRow&gt;, GamlssError&gt; {
+    models.iter().map(|(label, m)| {
+        let params: HashMap&lt;&str, &Array1&lt;f64&gt;&gt; =
+            m.models.iter().map(|(p, f)| (p.as_str(), &f.fitted_values)).collect();
+        let ll  = family.loglik(y, &params)?;
+        let edf = fitting::diagnostics::total_edf(&m.models);
+        Ok(IcRow {
+            label: (*label).to_string(),
+            edf,
+            global_deviance: -2.0 * ll,
+            gaic: fitting::diagnostics::compute_gaic(ll, edf, k),
+        })
+    }).collect()
+}</code></pre>
+
+<h3>2 · Likelihood-ratio test (nested models)</h3>
+<p>For a small model <code>M0</code> nested in a big model <code>M1</code>, <b>Wilks' theorem</b> gives
+the asymptotic null distribution of the deviance difference:</p>
+<div class="math">
+LR = 2·(ℓ̂<sub>1</sub> − ℓ̂<sub>0</sub>) = GD<sub>0</sub> − GD<sub>1</sub>  &nbsp;<span class="v">→</span><sub>d</sub>&nbsp; χ²<sub>ν</sub>   under M0,&nbsp; ν = df<sub>1</sub> − df<sub>0</sub>
+p = P(χ²<sub>ν</sub> &gt; LR) = 1 − F<sub>χ²,ν</sub>(LR) = Q(ν/2, LR/2)
+</div>
+<p>The χ² survival function reuses the regularized upper incomplete gamma already in the crate —
+<code>gamma_ur(ν/2, LR/2)</code> — so no new dependency, and it dovetails with the incomplete-gamma
+identity used for the Poisson/Gamma CDFs in the TRAIT-1 guide. (Equivalently
+<code>1.0 − statrs::distribution::ChiSquared::new(ν)?.cdf(LR)</code>.)</p>
+<pre><code>use statrs::function::gamma::gamma_ur;
+
+pub struct LrTest { pub lr_stat: f64, pub df: f64, pub p_value: f64 }
+
+pub fn lr_test&lt;D: Distribution + ?Sized&gt;(
+    small: &GamlssModel, big: &GamlssModel, family: &D, y: &Array1&lt;f64&gt;,
+) -&gt; Result&lt;LrTest, GamlssError&gt; {
+    let ll = |m: &GamlssModel| -&gt; Result&lt;f64, GamlssError&gt; {
+        let p: HashMap&lt;&str, &Array1&lt;f64&gt;&gt; =
+            m.models.iter().map(|(k, f)| (k.as_str(), &f.fitted_values)).collect();
+        family.loglik(y, &p)
+    };
+    let (ll0, ll1) = (ll(small)?, ll(big)?);
+    let (e0, e1) = (fitting::diagnostics::total_edf(&small.models),
+                    fitting::diagnostics::total_edf(&big.models));
+    let (lr, df) = (2.0 * (ll1 - ll0), e1 - e0);
+
+    // nesting guard: big must be the larger, better-fitting model.
+    if df &lt;= 0.0 || lr &lt; -1e-6 {
+        return Err(GamlssError::Input(
+            "lr_test expects `small` nested in `big` (edf_big &gt; edf_small, loglik_big ≥ loglik_small)".into()));
+    }
+    let p_value = gamma_ur(df / 2.0, lr.max(0.0) / 2.0);          // P(χ²_df &gt; LR)
+    Ok(LrTest { lr_stat: lr, df, p_value })
+}</code></pre>
+
+<div class="note warn">
+<p><b>Honest caveat — fractional EDF.</b> Penalized smooths have non-integer effective df, so
+<code>ν = df₁ − df₀</code> is generally fractional and the χ² reference is <em>approximate</em>
+(exactly the caveat <code>anova.gam</code> / <code>summary.gam</code> carry in mgcv; it ties to
+<span class="id">INFER-5</span>). The continuous-ν χ² above (via <code>gamma_ur</code>) handles fractional
+df gracefully. Document the approximation, and rely on the nesting guard so a mis-ordered or
+non-nested pair returns <code>GamlssError::Input</code> rather than a meaningless negative statistic.</p>
+</div>
+
+<h3>Tests</h3>
+<ul>
+<li><b>IC table</b> orders a clearly-better and clearly-worse fit correctly by both
+<code>global_deviance</code> and <code>gaic</code>.</li>
+<li><b>LRT null calibration:</b> adding a pure-noise column to a correct model gives small LR and a
+roughly uniform p-value across simulated datasets.</li>
+<li><b>LRT power:</b> adding a genuinely predictive term gives large LR and a tiny p-value.</li>
+<li><b>Known-value:</b> for unpenalized (integer-df) nested linear models, <code>lr_stat</code> and
+<code>p_value</code> match R's <code>anova(m0, m1, test="Chisq")</code> within tolerance.</li>
+<li><b>Nesting guard:</b> a non-nested or mis-ordered pair returns <code>GamlssError::Input</code>.</li>
+</ul>
+
+<hr>
+
+<h2>Cross-cutting: surfacing across bindings (<span class="id">BIND-3</span>)</h2>
+<ul>
+<li><b>Python</b> (<code>src/python.rs</code>): expose <code>gaic(k)</code>, <code>step_gaic(...)</code>
+(selected model + list-of-dicts trace), and <code>anova(...)</code> (IC table / LRT as dicts) next to
+the existing <code>diagnostics</code>-style methods.</li>
+<li><b>JSON facade</b> (<code>src/json.rs</code>): add <code>gaic</code> / <code>anova</code> helpers
+with a <code>BTreeMap</code> wire form (deterministic, matching <code>serialize_predictions</code>).</li>
+<li><b>WASM</b> (<code>src/wasm.rs</code>): shims over the <code>json</code> facade; then
+<b>regenerate <code>pkg/</code></b> (<code>wasm-pack build --no-default-features --features wasm</code>),
+since the public surface changed (<span class="id">BIND-1</span>).</li>
+</ul>
+
+<h2>Suggested PR slicing</h2>
+<ol>
+<li><b><span class="id">INFER-3</span></b> — <code>compute_gaic</code> + <code>GamlssModel::gaic</code>;
+re-express AIC/BIC through it. Tiny; unblocks the rest.</li>
+<li><b><span class="id">INFER-7</span></b> — <code>ic_table</code> + <code>lr_test</code> with the χ²
+p-value and nesting guard. Independent of INFER-4.</li>
+<li><b><span class="id">INFER-4</span></b> — <code>selection.rs</code> with <code>step_gaic</code>; the
+largest item, builds on INFER-3's score.</li>
+<li><b><span class="id">BIND-3</span> follow-up</b> — surface all three across Python/JSON/WASM and
+regenerate <code>pkg/</code>.</li>
+</ol>
+
+<footer>glissando · implementation guide · INFER-3 / INFER-4 / INFER-7 · cross-references docs/ROADMAP.html</footer>
+
+</div>
+</body>
+</html>

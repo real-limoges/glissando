@@ -222,6 +222,8 @@ impl PyGamlssModel {
     ///         `max_iterations` (int)
     ///         `tolerance` (float)
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
+    ///         `step_halving` (bool; default True) — monotone-descent line search
+    ///         `gd_tolerance` (float; default 1e-3) — global-deviance convergence tol
     #[staticmethod]
     #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(
@@ -258,6 +260,12 @@ impl PyGamlssModel {
                     )))
                 }
             };
+        }
+        if let Some(v) = config.get_item("step_halving")? {
+            fit_config.step_halving = v.extract()?;
+        }
+        if let Some(v) = config.get_item("gd_tolerance")? {
+            fit_config.gd_tolerance = v.extract()?;
         }
 
         let model = GamlssModel::fit_with_config(
