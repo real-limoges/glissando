@@ -617,8 +617,16 @@ mod tests {
         models.insert("sigma".to_string(), intercept_only_log(0.0, n));
 
         let proposed = proposed_update(3.0);
-        let halved =
-            step_halving(&Gaussian, &y, None, &models, "mu", &proposed, MIN_STEP_ALPHA).unwrap();
+        let halved = step_halving(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            "mu",
+            &proposed,
+            MIN_STEP_ALPHA,
+        )
+        .unwrap();
         assert_eq!(halved.hits, 0, "well-behaved step should not halve");
         assert!((halved.beta.0[0] - 3.0).abs() < 1e-12);
     }
@@ -637,8 +645,16 @@ mod tests {
 
         let gd0 = global_deviance(&Gaussian, &y, None, &models).unwrap();
         let proposed = proposed_update(10.0);
-        let halved =
-            step_halving(&Gaussian, &y, None, &models, "mu", &proposed, MIN_STEP_ALPHA).unwrap();
+        let halved = step_halving(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            "mu",
+            &proposed,
+            MIN_STEP_ALPHA,
+        )
+        .unwrap();
 
         assert!(halved.hits >= 1, "overshooting step must be halved");
         assert!(
