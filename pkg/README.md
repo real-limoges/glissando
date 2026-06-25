@@ -76,7 +76,7 @@ data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
@@ -133,20 +133,27 @@ Term::Intercept
 A linear effect for a single predictor.
 
 ```rust
-Term::Linear { col_name: "x".to_string() }
+Term::linear("x")   // shorthand for Term::Linear { col_name: "x".into() }
 ```
 
 ### P-Spline (1D Smooth)
 
-A penalized B-spline smooth for nonlinear effects.
+A penalized B-spline smooth for nonlinear effects. `Smooth::ps` carries sensible
+defaults (`n_splines = 10`, `degree = 3`, `penalty_order = 2`); chain builders to override.
 
 ```rust
-Term::Smooth(Smooth::PSpline1D {
-    col_name: "x".to_string(),
-    n_splines: 10,      // Number of basis functions
-    degree: 3,          // Spline degree (3 = cubic)
-    penalty_order: 2,   // Penalty on 2nd derivatives
-})
+Term::smooth(Smooth::ps("x"))                       // all defaults
+Term::smooth(Smooth::ps("x").n_splines(20))         // override one default
+```
+
+### CR-Spline (1D Smooth)
+
+A natural cubic regression spline (mgcv `bs = "cr"`); knots resolve from the data at fit time.
+
+```rust
+Term::smooth(Smooth::cr("x"))            // default k = 6
+Term::smooth(Smooth::cr("x").k(10))      // more knots
+Term::smooth(Smooth::cr("x").pc(0.0))    // pin f(0) = 0
 ```
 
 ### Tensor Product (2D Smooth)
@@ -154,15 +161,7 @@ Term::Smooth(Smooth::PSpline1D {
 Interaction smooth for two predictors.
 
 ```rust
-Term::Smooth(Smooth::TensorProduct {
-    col_name_1: "x1".to_string(),
-    n_splines_1: 5,
-    penalty_order_1: 2,
-    col_name_2: "x2".to_string(),
-    n_splines_2: 5,
-    penalty_order_2: 2,
-    degree: 3,
-})
+Term::smooth(Smooth::tensor("x1", "x2"))
 ```
 
 ### Random Effect
@@ -170,9 +169,7 @@ Term::Smooth(Smooth::TensorProduct {
 Group-level random intercepts.
 
 ```rust
-Term::Smooth(Smooth::RandomEffect {
-    col_name: "group".to_string(),
-})
+Term::smooth(Smooth::re("group"))
 ```
 
 ## Configuration
@@ -271,11 +268,11 @@ Model where both mean and variance depend on x:
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ])
     .with_terms("sigma", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ]);
 
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
@@ -286,12 +283,7 @@ let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```rust
 let formula = Formula::new()
     .with_terms("mu", vec![
-        Term::Smooth(Smooth::PSpline1D {
-            col_name: "x".to_string(),
-            n_splines: 15,
-            degree: 3,
-            penalty_order: 2,
-        }),
+        Term::smooth(Smooth::ps("x").n_splines(15)),
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
@@ -306,7 +298,7 @@ use glissando::distributions::Poisson;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "predictor".to_string() },
+        Term::linear("predictor"),
     ]);
 
 let model = GamlssModel::fit(&data, &counts, &formula, &Poisson::new())?;
@@ -320,7 +312,7 @@ use glissando::distributions::Binomial;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ]);
 
 // Fixed number of trials
@@ -339,7 +331,7 @@ use glissando::distributions::StudentT;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ])
     .with_terms("sigma", vec![Term::Intercept])
     .with_terms("nu", vec![Term::Intercept]);
@@ -353,10 +345,8 @@ let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new())?;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
-        Term::Smooth(Smooth::RandomEffect {
-            col_name: "subject_id".to_string(),
-        }),
+        Term::linear("x"),
+        Term::smooth(Smooth::re("subject_id")),
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
@@ -371,7 +361,7 @@ use glissando::distributions::NegativeBinomial;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 
@@ -386,7 +376,7 @@ use glissando::distributions::Beta;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "x".to_string() },
+        Term::linear("x"),
     ])
     .with_terms("phi", vec![Term::Intercept]);
 
@@ -401,7 +391,7 @@ use glissando::distributions::Gamma;
 let formula = Formula::new()
     .with_terms("mu", vec![
         Term::Intercept,
-        Term::Linear { col_name: "age".to_string() },
+        Term::linear("age"),
     ])
     .with_terms("sigma", vec![Term::Intercept]);
 

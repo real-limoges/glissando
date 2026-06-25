@@ -170,4 +170,76 @@ impl WasmGamlssModel {
     pub fn diagnostics_json(&self) -> Result<String, JsError> {
         json::diagnostics(&self.model).map_err(to_js_err)
     }
+
+    /// Randomized normalized quantile residuals against the response `y` the
+    /// model was fit on, as a JSON array. `seed` makes the discrete-family
+    /// randomization reproducible; pass `null`/`undefined` for an unseeded draw.
+    #[wasm_bindgen(js_name = "quantileResiduals")]
+    pub fn quantile_residuals(&self, y_json: &str, seed: Option<u64>) -> Result<String, JsError> {
+        json::quantile_residuals(&self.model, self.family.as_ref(), y_json, seed).map_err(to_js_err)
+    }
+
+    /// Response-scale centile curves for `data_json`, as `{"C<pct>": [..], ...}`.
+    /// `percentiles_json` is a JSON array of centile levels in percent.
+    pub fn centiles(&self, data_json: &str, percentiles_json: &str) -> Result<String, JsError> {
+        json::centiles(
+            &self.model,
+            self.family.as_ref(),
+            data_json,
+            percentiles_json,
+        )
+        .map_err(to_js_err)
+    }
+
+    /// Per-observation quantile prediction; `p_json` is a JSON array of per-row
+    /// centile levels in `(0,1)`. Returns a JSON array of predicted responses.
+    #[wasm_bindgen(js_name = "quantilePrediction")]
+    pub fn quantile_prediction(&self, data_json: &str, p_json: &str) -> Result<String, JsError> {
+        json::quantile_prediction(&self.model, self.family.as_ref(), data_json, p_json)
+            .map_err(to_js_err)
+    }
+
+    /// Generalized AIC at penalty `k` against the response `y` this model was fit
+    /// on. Returns `{"gaic": value}`. `k = 2` ≡ AIC, `k = ln(n)` ≡ BIC.
+    pub fn gaic(&self, y_json: &str, k: f64) -> Result<String, JsError> {
+        json::gaic(&self.model, self.family.as_ref(), y_json, k).map_err(to_js_err)
+    }
+
+    /// Likelihood-ratio test treating `self` as the nested (small) model and the
+    /// model serialized in `bigger_model_json` as the alternative (big) model.
+    /// Returns `{lr_stat, df, p_value}`. Errors if the pair is mis-ordered.
+    #[wasm_bindgen(js_name = "lrTest")]
+    pub fn lr_test(&self, bigger_model_json: &str, y_json: &str) -> Result<String, JsError> {
+        let (big, _) = json::load(bigger_model_json).map_err(to_js_err)?;
+        json::lr_test(&self.model, &big, self.family.as_ref(), y_json).map_err(to_js_err)
+    }
+
+    /// Stepwise term selection by GAIC(`k`). Returns `{trace, formula, model}`
+    /// where `model` is in the same wire form `fromJson` accepts. `scope_json` is
+    /// a list of `{"param": "...", "candidates": [<term>, ...]}`; `direction` is
+    /// `"forward"`, `"backward"`, or `"both"`.
+    #[wasm_bindgen(js_name = "stepGaic")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_gaic(
+        y_json: &str,
+        data_json: &str,
+        distribution: &str,
+        start_formula_json: &str,
+        scope_json: &str,
+        k: f64,
+        direction: &str,
+        config_json: Option<String>,
+    ) -> Result<String, JsError> {
+        json::step_gaic(
+            y_json,
+            data_json,
+            distribution,
+            start_formula_json,
+            scope_json,
+            k,
+            direction,
+            config_json.as_deref(),
+        )
+        .map_err(to_js_err)
+    }
 }

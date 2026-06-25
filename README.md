@@ -9,6 +9,9 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 - **Multiple distribution parameters**: Model mean, variance, and shape parameters simultaneously
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
 - **Automatic smoothing**: Smoothing parameters selected via REML (default), GCV, or Fellner-Schall
+- **Distributional outputs**: `cdf` / `pdf` / `quantile` per family, randomized quantile residuals, and centile / quantile prediction (the signature GAMLSS deliverables)
+- **Model selection**: GAIC at any penalty `k`, stepwise term selection (`step_gaic`), and ANOVA / likelihood-ratio comparison (`ic_table`, `lr_test`)
+- **Robust fitting**: step-halving line search and global-deviance convergence in the RS loop
 - **Dual backends**: OpenBLAS (default, max performance) or pure Rust via nalgebra (no system deps)
 - **WASM support**: Fit models and predict directly in the browser via wasm-bindgen
 - **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse
@@ -236,6 +239,14 @@ println!("Standard errors on eta scale: {:?}", mu_result.se_eta);
 // Posterior samples for uncertainty quantification
 let samples = model.predict_samples(&new_data, &family, 1000)?;
 let mu_samples = &samples["mu"];  // Vec<Array1<f64>> with 1000 samples
+
+// Centile curves (response scale) — percentiles in percent
+let centiles = model.centiles(&new_data, &family, &[2.0, 10.0, 50.0, 90.0, 98.0])?;
+let median = &centiles["C50"];  // one column per requested centile, keyed "C<pct>"
+
+// Per-observation quantile prediction (row-varying level), for prediction intervals
+let p = Array1::from_elem(median.len(), 0.95);
+let upper_95 = model.quantile_prediction(&new_data, &family, &p)?;
 ```
 
 ## Model Diagnostics
@@ -257,6 +268,41 @@ let bic = compute_bic(ll, edf, y.len());
 ```
 
 Distribution-specific residual and log-likelihood functions are available for all supported distributions (e.g., `pearson_residuals_poisson`, `loglik_gamma`, etc.).
+
+**Randomized quantile residuals** (gamlss's default residual) map any family to N(0, 1) when the
+model is correct, so one Q-Q / worm plot works across distributions. The discrete-family
+construction is randomized; pass a seed for reproducibility:
+
+```rust
+let family = Gaussian::new();
+// seed = Some(s) makes discrete-family residuals reproducible; ignored for continuous families
+let resid = model.quantile_residuals(&family, &y, Some(42))?;
+```
+
+## Model Selection
+
+Compare and select models by an information criterion or a deviance test:
+
+```rust
+use glissando::selection::{ic_table, lr_test, step_gaic, Direction, StepScope};
+
+let family = Gaussian::new();
+
+// GAIC at any penalty: k = 2 is AIC, k = ln(n) is BIC
+let aic = model.gaic(&family, &y, 2.0)?;
+
+// Information-criterion table ranking several fitted models (nested or not)
+let rows = ic_table(&[("null", &m0), ("with_x", &m1)], &family, &y, 2.0)?;
+
+// Likelihood-ratio test of a nested pair (small ⊂ big)
+let lrt = lr_test(&m0, &m1, &family, &y)?;       // { lr_stat, df, p_value }
+
+// Greedy stepwise term selection by GAIC(k)
+let scope = vec![StepScope { param: "mu".into(), candidates: vec![/* Linear / Smooth terms */] }];
+let result = step_gaic(&data, &y, &family, start_formula, &scope,
+                       (y.len() as f64).ln(), Direction::Both, FitConfig::default())?;
+let selected = result.model;   // result.trace records the accepted moves
+```
 
 ## Examples
 
@@ -598,6 +644,18 @@ mu_samples = samples["mu"]   # list of np.ndarray of length n_obs
 # Per-parameter accessors
 mu_coefs = model.coefficients("mu")        # np.ndarray
 mu_fits  = model.fitted_values("mu")       # np.ndarray
+
+# Distributional outputs
+resid    = model.quantile_residuals(y, seed=42)        # randomized quantile residuals
+curves   = model.centiles(data, [10.0, 50.0, 90.0])    # {"C10": …, "C50": …, "C90": …}
+q95      = model.quantile_prediction(data, np.full(len(y), 0.95))
+
+# Model selection
+aic   = model.gaic(y, 2.0)                              # k = 2 → AIC, ln(n) → BIC
+table = GamlssModel.ic_table([("null", m0), ("x", m1)], y, 2.0)   # list of dicts
+lrt   = m0.lr_test(m1, y)                               # {"lr_stat", "df", "p_value"}
+out   = GamlssModel.step_gaic(data, y, Gaussian(), start, scope, np.log(len(y)),
+                              "forward")                 # {"model": GamlssModel, "trace": [...]}
 ```
 
 Supported distribution classes mirror the WASM surface — `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, and `Binomial(n_trials)` (Binomial is Python-only because it carries `n_trials` state that can't be reconstructed from a name alone).

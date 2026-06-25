@@ -187,6 +187,81 @@ impl Generator {
         data.insert_column("x", Array1::from_vec(x));
         (Array1::from_vec(y), data)
     }
+
+    /// Gaussian response driven by `x1` only, with two pure-noise predictors
+    /// `x2`, `x3`: `y ~ N(a + b·x1, σ)`. Used by model-selection tests where the
+    /// search must keep `x1` and reject the noise columns. All three predictors
+    /// are drawn iid Uniform(0, 1) so they are mutually uncorrelated.
+    pub fn gaussian_with_noise_columns(
+        &mut self,
+        n: usize,
+        slope: f64,
+        intercept: f64,
+        sigma: f64,
+    ) -> (Array1<f64>, DataSet) {
+        let mut x1 = Vec::with_capacity(n);
+        let mut x2 = Vec::with_capacity(n);
+        let mut x3 = Vec::with_capacity(n);
+        let mut y = Vec::with_capacity(n);
+        for _ in 0..n {
+            let v1: f64 = self.rng.random();
+            let v2: f64 = self.rng.random();
+            let v3: f64 = self.rng.random();
+            let mu = intercept + slope * v1;
+            y.push(Normal::new(mu, sigma).unwrap().sample(&mut self.rng));
+            x1.push(v1);
+            x2.push(v2);
+            x3.push(v3);
+        }
+        let mut data = DataSet::new();
+        data.insert_column("x1", Array1::from_vec(x1));
+        data.insert_column("x2", Array1::from_vec(x2));
+        data.insert_column("x3", Array1::from_vec(x3));
+        (Array1::from_vec(y), data)
+    }
+
+    /// Gaussian with a genuinely nonlinear (sinusoidal) mean: `y ~ N(sin(x), σ)`
+    /// on `x ∈ [0, 2π]`. A P-spline on `x` has solidly fractional effective df
+    /// here — the smooth cannot collapse to a straight line, unlike a linear-mean
+    /// dataset — which is what the fractional-df model-comparison tests need.
+    pub fn sinusoidal_gaussian(&mut self, n: usize, sigma: f64) -> (Array1<f64>, DataSet) {
+        let x: Vec<f64> = (0..n)
+            .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)
+            .collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&xi| Normal::new(xi.sin(), sigma).unwrap().sample(&mut self.rng))
+            .collect();
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::from_vec(x));
+        (Array1::from_vec(y), data)
+    }
+
+    /// Poisson counts driven by `x1` only, with a pure-noise predictor `x2`:
+    /// `y ~ Poisson(exp(a + b·x1))`. Used by discrete model-selection tests.
+    /// Both predictors are iid Uniform(0, 1), so `x2` carries no signal.
+    pub fn poisson_with_noise_columns(
+        &mut self,
+        n: usize,
+        slope: f64,
+        intercept: f64,
+    ) -> (Array1<f64>, DataSet) {
+        let mut x1 = Vec::with_capacity(n);
+        let mut x2 = Vec::with_capacity(n);
+        let mut y = Vec::with_capacity(n);
+        for _ in 0..n {
+            let v1: f64 = self.rng.random();
+            let v2: f64 = self.rng.random();
+            let mu = (intercept + slope * v1).exp();
+            y.push(Poisson::new(mu).unwrap().sample(&mut self.rng));
+            x1.push(v1);
+            x2.push(v2);
+        }
+        let mut data = DataSet::new();
+        data.insert_column("x1", Array1::from_vec(x1));
+        data.insert_column("x2", Array1::from_vec(x2));
+        (Array1::from_vec(y), data)
+    }
 }
 
 /// Sample one observation from `NB(mu, sigma)` via a Gamma-Poisson mixture, where

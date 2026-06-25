@@ -23,6 +23,17 @@ pub struct GamlssModel {
     pub diagnostics: FitDiagnostics,
 }
 
+/// Borrow an owned parameter map (as returned by [`GamlssModel::predict`]) into
+/// the `&str → &Array1` view the [`Distribution`] trait methods expect. The
+/// counterpart to [`diagnostics::fitted_params_view`](crate::diagnostics) for the
+/// post-prediction case, where the parameters are already owned arrays.
+fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Array1<f64>> {
+    params
+        .iter()
+        .map(|(name, values)| (name.as_str(), values))
+        .collect()
+}
+
 impl GamlssModel {
     /// Fits a GAMLSS model with default configuration.
     ///
@@ -379,6 +390,107 @@ impl GamlssModel {
         y: &Array1<f64>,
     ) -> Result<ModelDiagnostics, GamlssError> {
         crate::fitting::diagnostics::compute(&self.models, family, y)
+    }
+
+    /// Generalized AIC at penalty `k`: `−2·loglik + k·EDF`.
+    ///
+    /// `k = 2` equals `diagnostics(family, y).aic`; `k = (n as f64).ln()` equals
+    /// `.bic`. This is the score the stepwise / ANOVA comparisons rank by; see
+    /// [`fitting::diagnostics::compute_gaic`](crate::diagnostics::compute_gaic).
+    /// Evaluate against the same response `y` the model was fit on.
+    ///
+    /// # Errors
+    ///
+    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    ///   present in `self.models`
+    /// - [`GamlssError::Input`] — family's log-density evaluation rejects the
+    ///   parameter values (e.g. invalid support)
+    pub fn gaic<D: Distribution + ?Sized>(
+        &self,
+        family: &D,
+        y: &Array1<f64>,
+        k: f64,
+    ) -> Result<f64, GamlssError> {
+        let params = fitting::diagnostics::fitted_params_view(&self.models);
+        let log_likelihood = family.loglik(y, &params)?;
+        let edf = fitting::diagnostics::total_edf(&self.models);
+        Ok(fitting::diagnostics::compute_gaic(log_likelihood, edf, k))
+    }
+
+    /// Randomized normalized quantile residuals (gamlss's default residual).
+    ///
+    /// If the model is correct these are standard normal regardless of the
+    /// family — the basis for a single Q-Q/worm plot across distributions. For
+    /// discrete families the construction is randomized; pass `seed = Some(s)`
+    /// for reproducible residuals (`seed` is ignored for continuous families).
+    /// Evaluate against the same response `y` the model was fit on. See
+    /// [`fitting::diagnostics::quantile_residuals`](crate::diagnostics::quantile_residuals).
+    ///
+    /// # Errors
+    ///
+    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    ///   present in `self.models`
+    /// - [`GamlssError::Input`] — family's `cdf` rejects the parameter values
+    pub fn quantile_residuals<D: Distribution + ?Sized>(
+        &self,
+        family: &D,
+        y: &Array1<f64>,
+        seed: Option<u64>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let params = fitting::diagnostics::fitted_params_view(&self.models);
+        fitting::diagnostics::quantile_residuals(family, y, &params, seed)
+    }
+
+    /// Response-scale centile curves for `new_data` — the signature GAMLSS
+    /// deliverable (growth charts, reference ranges).
+    ///
+    /// A centile at level `α` is `C_α(x) = Q(α | θ̂(x))`: predict every
+    /// distribution parameter at `x`, then invert the fitted CDF. Because `σ`,
+    /// `ν`, `τ` vary with `x`, the curves fan and bend, capturing changing
+    /// spread, skew, and kurtosis. `percentiles` are in **percent** (gamlss
+    /// defaults: 0.4, 2, 10, 25, 50, 75, 90, 98, 99.6); each is clamped to a
+    /// valid probability. Returns one column per centile, keyed `"C<pct>"`.
+    ///
+    /// # Errors
+    ///
+    /// - [`GamlssError::Input`] — `new_data` has no columns
+    /// - any error from prediction or the family's `quantile`
+    pub fn centiles<D: Distribution + ?Sized>(
+        &self,
+        new_data: &DataSet,
+        family: &D,
+        percentiles: &[f64],
+    ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
+        let fitted_params = self.predict(new_data, family)?; // θ̂(x): every parameter
+        let params = borrow_param_view(&fitted_params);
+        let n_obs = new_data
+            .n_obs()
+            .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
+
+        let mut centiles = HashMap::new();
+        for &pct in percentiles {
+            let level = (pct / 100.0).clamp(1e-9, 1.0 - 1e-9);
+            let p = Array1::from_elem(n_obs, level);
+            centiles.insert(format!("C{pct}"), family.quantile(&p, &params)?);
+        }
+        Ok(centiles)
+    }
+
+    /// Per-observation quantile prediction: `p[i]` is the centile level for row
+    /// `i`. Use for predictive intervals where the level varies by observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GamlssError`] from prediction or the family's `quantile`.
+    pub fn quantile_prediction<D: Distribution + ?Sized>(
+        &self,
+        new_data: &DataSet,
+        family: &D,
+        p: &Array1<f64>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let fitted_params = self.predict(new_data, family)?;
+        let params = borrow_param_view(&fitted_params);
+        family.quantile(p, &params)
     }
 
     /// Sample from the posterior distribution of coefficients for a given parameter.

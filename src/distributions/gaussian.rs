@@ -4,9 +4,11 @@ use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE,
 };
-use crate::math::par_zip3_map;
+use crate::math::{par_zip3_map, std_normal_quantile};
 use ndarray::Array1;
+use statrs::function::erf::erf;
 use std::collections::HashMap;
+use std::f64::consts::SQRT_2;
 
 /// Gaussian (Normal) distribution.
 ///
@@ -81,6 +83,32 @@ impl Distribution for Gaussian {
         Ok(sigma.mapv(|s| s * s))
     }
 
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let z = (yi - mui) / si.max(MIN_POSITIVE);
+            0.5 * (1.0 + erf(z / SQRT_2))
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        // Q(p) = μ + σ·Φ⁻¹(p); Φ⁻¹ is shared with the quantile residuals (INFER-1).
+        Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
+            mui + si * std_normal_quantile(pi)
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Gaussian"
     }
@@ -90,6 +118,7 @@ impl Distribution for Gaussian {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
@@ -172,8 +201,47 @@ mod tests {
         check_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-5);
     }
 
+    #[test]
+    fn cdf_quantile_roundtrip_gaussian() {
+        let y = array![-2.0, -0.3, 0.0, 1.7, 4.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, -1.0, 2.0, 3.0]),
+            ("sigma", array![1.0, 1.5, 0.8, 2.0, 1.2]),
+        ];
+        check_cdf_quantile_roundtrip(&Gaussian, &y, &owned, 1e-7);
+        check_cdf_pdf_consistency(&Gaussian, &y, &owned, 1e-4, 1e-4);
+    }
+
+    #[test]
+    fn cdf_monotone_and_median_is_mu_gaussian() {
+        let grid = Array1::from_iter((0..50).map(|i| -5.0 + i as f64 * 0.2));
+        let owned = [("mu", array![0.7]), ("sigma", array![1.3])];
+        check_cdf_monotone_in_unit(&Gaussian, &grid, &owned);
+        // 50th percentile of a symmetric family is the mean.
+        let p = params_view(&owned);
+        let med = Gaussian.quantile(&array![0.5], &p).unwrap();
+        assert!((med[0] - 0.7).abs() < 1e-9);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     proptest! {
+        #[test]
+        fn cdf_roundtrip_proptest_gaussian(
+            mu_val in -5.0f64..5.0,
+            sigma_val in 0.2f64..3.0,
+            // Draw the point as a standardized z within ±6 so F(y) stays clear of
+            // the tail where the CDF saturates to 0/1 and the round-trip loses y.
+            z in -6.0f64..6.0,
+        ) {
+            let y_val = mu_val + z * sigma_val;
+            let owned = [("mu", array![mu_val]), ("sigma", array![sigma_val])];
+            let p = params_view(&owned);
+            let u = Gaussian.cdf(&array![y_val], &p).unwrap();
+            prop_assert!(u[0] >= 0.0 && u[0] <= 1.0);
+            let back = Gaussian.quantile(&u, &p).unwrap();
+            prop_assert!((back[0] - y_val).abs() < 1e-5);
+        }
+
         #[test]
         fn loglik_gaussian_pointwise_matches_naive(
             n in 1usize..20,

@@ -6,6 +6,7 @@ use super::{
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
+use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
 
@@ -169,6 +170,48 @@ impl Distribution for StudentT {
         }))
     }
 
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // Location-scale t: F(y) = T_ν((y−μ)/σ). ν varies per observation, so build
+        // one StudentsT per row (mirrors the indexed loglik_pointwise loop above).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+        let n = y.len();
+        let mut out = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let s = sigma[i].max(MIN_POSITIVE);
+            let nu_i = nu[i].max(MIN_POSITIVE);
+            out[i] = StudentsT::new(mu[i], s, nu_i)
+                .expect("valid StudentsT params")
+                .cdf(y[i]);
+        }
+        Ok(out)
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+        let n = p.len();
+        let mut out = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let s = sigma[i].max(MIN_POSITIVE);
+            let nu_i = nu[i].max(MIN_POSITIVE);
+            out[i] = StudentsT::new(mu[i], s, nu_i)
+                .expect("valid StudentsT params")
+                .inverse_cdf(p[i].clamp(1e-12, 1.0 - 1e-12));
+        }
+        Ok(out)
+    }
+
     fn name(&self) -> &'static str {
         "StudentT"
     }
@@ -201,6 +244,7 @@ fn median_abs_deviation(y: &Array1<f64>) -> f64 {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
@@ -312,5 +356,31 @@ mod tests {
         check_score_via_finite_diff(&StudentT, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "sigma", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "nu", 1e-5);
+    }
+
+    #[test]
+    fn cdf_quantile_roundtrip_studentt() {
+        let y = array![-3.0, -0.5, 0.0, 1.2, 4.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, 1.0, 2.0, 1.5]),
+            ("sigma", array![1.0, 1.5, 0.8, 2.0, 1.2]),
+            ("nu", array![5.0, 10.0, 4.0, 8.0, 30.0]),
+        ];
+        check_cdf_quantile_roundtrip(&StudentT, &y, &owned, 1e-6);
+        check_cdf_pdf_consistency(&StudentT, &y, &owned, 1e-4, 1e-3);
+    }
+
+    #[test]
+    fn cdf_monotone_studentt_and_median_is_mu() {
+        let grid = Array1::from_iter((0..60).map(|i| -8.0 + i as f64 * 0.25));
+        let owned = [
+            ("mu", array![1.0]),
+            ("sigma", array![1.3]),
+            ("nu", array![6.0]),
+        ];
+        check_cdf_monotone_in_unit(&StudentT, &grid, &owned);
+        let p = params_view(&owned);
+        let med = StudentT.quantile(&array![0.5], &p).unwrap();
+        assert!((med[0] - 1.0).abs() < 1e-7);
     }
 }

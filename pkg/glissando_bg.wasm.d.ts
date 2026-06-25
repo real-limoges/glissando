@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_wasmgamlssmodel_free: (a: number, b: number) => void;
+export const wasmgamlssmodel_centiles: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmgamlssmodel_coefficients: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_converged: (a: number) => number;
 export const wasmgamlssmodel_covarianceMatrix: (a: number, b: number, c: number) => [number, number, number, number];
@@ -11,9 +12,14 @@ export const wasmgamlssmodel_fit: (a: number, b: number, c: number, d: number, e
 export const wasmgamlssmodel_fitWithConfig: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
 export const wasmgamlssmodel_fittedValues: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_fromJson: (a: number, b: number) => [number, number, number];
+export const wasmgamlssmodel_gaic: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const wasmgamlssmodel_lrTest: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmgamlssmodel_predict: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_predictSamples: (a: number, b: number, c: number, d: number, e: number, f: bigint) => [number, number, number, number];
 export const wasmgamlssmodel_predictWithSe: (a: number, b: number, c: number) => [number, number, number, number];
+export const wasmgamlssmodel_quantilePrediction: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const wasmgamlssmodel_quantileResiduals: (a: number, b: number, c: number, d: number, e: bigint) => [number, number, number, number];
+export const wasmgamlssmodel_stepGaic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => [number, number, number, number];
 export const wasmgamlssmodel_termIndexMap: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmgamlssmodel_toJson: (a: number) => [number, number, number, number];
 export const __wbindgen_exn_store: (a: number) => void;

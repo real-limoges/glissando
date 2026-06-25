@@ -1,11 +1,12 @@
 //! Binomial distribution: counts of successes out of `n` trials.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_POSITIVE,
-    MIN_WEIGHT,
+    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogitLink,
+    MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
+use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -107,6 +108,52 @@ impl Distribution for Binomial {
         Ok(n.as_ref() * mu)
     }
 
+    fn is_discrete(&self) -> bool {
+        true
+    }
+
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // F(⌊y⌋ | n, μ) = I_{1−μ}(n−⌊y⌋, ⌊y⌋+1) = beta_reg(n−⌊y⌋, ⌊y⌋+1, 1−μ).
+        let mu = require(self, params, "mu")?;
+        let n = self.trials(y.len());
+        Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
+            if yi < 0.0 {
+                return 0.0;
+            }
+            let k = yi.floor();
+            if k >= ni {
+                return 1.0;
+            }
+            let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            beta_reg(ni - k, k + 1.0, 1.0 - m)
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let n = self.trials(p.len());
+        Ok(par_zip3_map(p, mu, n.as_ref(), |pi, mui, ni| {
+            let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+            let nmax = ni;
+            discrete_quantile(pi.clamp(0.0, 1.0 - 1e-12), |k| {
+                let kf = k as f64;
+                if kf >= nmax {
+                    1.0
+                } else {
+                    beta_reg(nmax - kf, kf + 1.0, 1.0 - m)
+                }
+            })
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Binomial"
     }
@@ -131,7 +178,8 @@ impl Distribution for Binomial {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use approx::assert_relative_eq;
     use ndarray::array;
@@ -222,5 +270,42 @@ mod tests {
         let y = array![3.0, 5.0, 8.0];
         let owned = [("mu", array![0.3, 0.5, 0.7])];
         check_score_via_finite_diff(&bin, &y, &owned, "mu", 1e-5);
+    }
+
+    #[test]
+    fn cdf_matches_pmf_binomial() {
+        let bin = Binomial::new(20);
+        let ks = array![0.0, 5.0, 10.0, 15.0, 20.0];
+        let owned = [("mu", array![0.25, 0.4, 0.5, 0.6, 0.75])];
+        check_discrete_cdf_matches_pmf(&bin, &ks, &owned, 1e-9);
+    }
+
+    #[test]
+    fn cdf_endpoints_and_quantile_inverts_binomial() {
+        let bin = Binomial::new(15);
+        // F(n) = 1 and F(y < 0) = 0 at the support boundaries.
+        let boundary_params = [("mu", array![0.4, 0.4])];
+        let p = params_view(&boundary_params);
+        let at_boundary = bin.cdf(&array![15.0, -1.0], &p).unwrap();
+        assert_eq!(at_boundary[0], 1.0);
+        assert_eq!(at_boundary[1], 0.0);
+
+        let owned = [("mu", array![0.4])];
+        let p = params_view(&owned);
+        for &prob in &[0.05, 0.5, 0.95] {
+            let q = bin.quantile(&array![prob], &p).unwrap()[0];
+            assert!((0.0..=15.0).contains(&q), "quantile {q} outside [0,n]");
+            let f_q = bin.cdf(&array![q], &p).unwrap()[0];
+            assert!(f_q >= prob - 1e-12, "F(q)={f_q} < p={prob}");
+        }
+    }
+
+    #[test]
+    fn cdf_per_observation_trials_binomial() {
+        // Distinct n per row exercises the broadcast path.
+        let bin = Binomial::with_trials(array![10.0, 20.0, 5.0]);
+        let ks = array![3.0, 10.0, 2.0];
+        let owned = [("mu", array![0.3, 0.5, 0.4])];
+        check_discrete_cdf_matches_pmf(&bin, &ks, &owned, 1e-9);
     }
 }

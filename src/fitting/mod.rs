@@ -14,6 +14,7 @@
 pub(crate) mod assembler;
 pub mod diagnostics;
 mod scoring;
+pub mod selection;
 mod solver;
 
 use self::assembler::{assemble_model_matrices, resolve_terms};
@@ -28,9 +29,12 @@ use ndarray::{Array1, Array2};
 use rand::rngs::StdRng;
 use rand::{rng, Rng, SeedableRng};
 use rand_distr::{Distribution as _, StandardNormal};
+use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
+/// Default relative tolerance on the global-deviance change (FIT-2).
+const DEFAULT_GD_TOLERANCE: f64 = 1e-3;
 
 /// How close a smooth term's EDF must sit to its penalty null-space dimension
 /// before the fit flags it as collapsed. Half an effective degree of freedom of
@@ -73,6 +77,17 @@ pub struct FitConfig {
     /// Smoothing-parameter selection criterion (default: REML).
     #[cfg_attr(feature = "serde", serde(default))]
     pub criterion: SmoothingCriterion,
+    /// Whether to step-halve (line-search on the global deviance) each accepted
+    /// Fisher-scoring update so every cycle is a monotone descent (FIT-1).
+    /// On by default; matches R `gamlss`'s RS loop. Disabling it recovers the
+    /// raw (unguarded) full-step behaviour.
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    pub step_halving: bool,
+    /// Relative tolerance on the global-deviance change between cycles (FIT-2).
+    /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
+    /// Default: 1e-3.
+    #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
+    pub gd_tolerance: f64,
 }
 
 #[cfg(feature = "serde")]
@@ -83,6 +98,14 @@ fn default_max_iter() -> usize {
 fn default_tolerance() -> f64 {
     DEFAULT_TOLERANCE
 }
+#[cfg(feature = "serde")]
+fn default_true() -> bool {
+    true
+}
+#[cfg(feature = "serde")]
+fn default_gd_tolerance() -> f64 {
+    DEFAULT_GD_TOLERANCE
+}
 
 impl Default for FitConfig {
     fn default() -> Self {
@@ -90,6 +113,8 @@ impl Default for FitConfig {
             max_iterations: DEFAULT_MAX_ITER,
             tolerance: DEFAULT_TOLERANCE,
             criterion: SmoothingCriterion::default(),
+            step_halving: true,
+            gd_tolerance: DEFAULT_GD_TOLERANCE,
         }
     }
 }
@@ -113,6 +138,15 @@ pub struct FitDiagnostics {
     /// so JSON/FFI consumers can surface fit health.
     #[cfg_attr(feature = "serde", serde(default))]
     pub warnings: Vec<String>,
+    /// Global deviance `−2·ℓ̂` at the final cycle (FIT-2). `None` only if no
+    /// cycle ran (e.g. `max_iterations == 0`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub final_deviance: Option<f64>,
+    /// Relative global-deviance change at the final cycle,
+    /// `|GD_{c−1} − GD_c| / (|GD_c| + 0.1)` (FIT-2). `None` on the first cycle
+    /// (no previous deviance) or if no cycle ran.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub final_deviance_change: Option<f64>,
 }
 
 /// Diagnostic information for a single distribution parameter.
@@ -126,6 +160,11 @@ pub struct ParamDiagnostic {
     pub weight_floor_hits: usize,
     /// Non-zero means IRLS steps were damped; persistent at convergence indicates trouble.
     pub step_cap_hits: usize,
+    /// Number of global-deviance step-halvings applied to this parameter on the
+    /// final cycle (FIT-1). Zero when the full Fisher step was accepted as-is or
+    /// when `step_halving` is disabled.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub step_halving_hits: usize,
 }
 
 /// Fitted results for a single distribution parameter (e.g., mu, sigma).
@@ -167,6 +206,52 @@ pub(super) struct FittingParameter {
     pub(super) edf: f64,
     /// Latest per-term EDF (aligned with `terms`); updated each RS cycle.
     pub(super) term_edf: Vec<f64>,
+}
+
+/// (Prior-weighted) global deviance of the current fit:
+/// `GD(θ) = −2·Σᵢ wᵢ·log f(yᵢ | θᵢ)`.
+///
+/// This is the objective the Rigby–Stasinopoulos loop implicitly minimizes. It
+/// is the shared substrate for step-halving (FIT-1) and the global-deviance
+/// convergence test (FIT-2): each `FittingParameter.mu` already holds the
+/// response-scale parameter, so the helper just assembles the params view and
+/// calls the family's pointwise log-density.
+pub(super) fn global_deviance<D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
+    models: &IndexMap<String, FittingParameter>,
+) -> Result<f64, GamlssError> {
+    let params: HashMap<&str, &Array1<f64>> =
+        models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
+    let ll_pt = family.loglik_pointwise(y, &params)?;
+    let ll = match prior_weights {
+        Some(w) => (&ll_pt * w).sum(),
+        None => ll_pt.sum(),
+    };
+    Ok(-2.0 * ll)
+}
+
+/// Same as [`global_deviance`], but evaluating one parameter block at a *proposed*
+/// `mu_override` not yet committed to `models` — used by step-halving to score a
+/// trial move before accepting it.
+pub(super) fn global_deviance_with<D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
+    models: &IndexMap<String, FittingParameter>,
+    param: &str,
+    mu_override: &Array1<f64>,
+) -> Result<f64, GamlssError> {
+    let mut params: HashMap<&str, &Array1<f64>> =
+        models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
+    params.insert(param, mu_override); // swap in the trial block
+    let ll_pt = family.loglik_pointwise(y, &params)?;
+    let ll = match prior_weights {
+        Some(w) => (&ll_pt * w).sum(),
+        None => ll_pt.sum(),
+    };
+    Ok(-2.0 * ll)
 }
 
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
@@ -247,6 +332,12 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut final_change = f64::MAX;
     let mut param_diagnostics: IndexMap<String, ParamDiagnostic> = IndexMap::new();
 
+    // FIT-2: track the global deviance across cycles so convergence can be judged
+    // on objective improvement, not just coefficient movement.
+    let mut gd_prev = f64::INFINITY;
+    let mut final_deviance: Option<f64> = None;
+    let mut final_deviance_change: Option<f64> = None;
+
     for cycle in 0..config.max_iterations {
         param_diagnostics.clear();
         let mut max_diff = 0.0_f64; // kept for FitDiagnostics.final_change
@@ -265,6 +356,28 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 max_diff = update.max_diff;
             }
 
+            // FIT-1: backtrack the proposed block update on the global deviance so
+            // the accepted step never increases it (monotone descent). The full
+            // step is the α = 1 case, so a well-behaved fit pays no halvings.
+            let accepted = if config.step_halving {
+                scoring::step_halving(
+                    family,
+                    y,
+                    prior_weights,
+                    &models,
+                    param_name,
+                    &update,
+                    scoring::MIN_STEP_ALPHA,
+                )?
+            } else {
+                scoring::Halved {
+                    beta: update.beta.clone(),
+                    eta: update.eta.clone(),
+                    mu: update.mu.clone(),
+                    hits: 0,
+                }
+            };
+
             // Per-parameter relative convergence check.
             //
             // The previous (global) test divided the max β-change across *all*
@@ -276,6 +389,12 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             // Fix: each parameter is checked against its own |β| scale.  The floor of
             // 1.0 keeps the test equivalent to an absolute threshold when all
             // coefficients are O(1) (normalised data).
+            //
+            // The Δβ test uses the full-step `update`: as the fit approaches the
+            // optimum the score → 0, so the full step (and `max_diff`) → 0 and
+            // step-halving accepts α = 1. Far from the optimum a large full step
+            // keeps this test conservative (won't declare convergence), which is
+            // exactly when the GD test below is the one that should decide.
             let param_beta_scale = update
                 .beta
                 .0
@@ -295,25 +414,40 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     edf: update.edf,
                     weight_floor_hits: update.weight_floor_hits,
                     step_cap_hits: update.step_cap_hits,
+                    step_halving_hits: accepted.hits,
                 },
             );
 
             let model = models.get_mut(*param_name).ok_or_else(|| {
                 GamlssError::Internal(format!("Model for parameter '{}' not found", param_name))
             })?;
-            model.beta = update.beta;
-            model.eta = update.eta;
-            model.mu = update.mu;
+            // β/η/μ come from the accepted (possibly damped) step; covariance /
+            // EDF / λ keep the values `scoring::step` computed at the full step.
+            // Near convergence α → 1 so those are evaluated at the right point —
+            // matching how gamlss reports them at the converged step.
+            model.beta = accepted.beta;
+            model.eta = accepted.eta;
+            model.mu = accepted.mu;
             model.lambdas = update.lambdas;
             model.covariance = Some(update.covariance);
             model.edf = update.edf;
             model.term_edf = update.term_edf;
         }
 
+        // FIT-2: global-deviance change after the full sweep. Require *both* the
+        // Δβ test and the GD test to agree before declaring convergence.
+        let gd = global_deviance(family, y, prior_weights, &models)?;
+        let gd_rel = (gd_prev - gd).abs() / (gd.abs() + 0.1);
+        let gd_converged = cycle > 0 && gd_rel < config.gd_tolerance;
+
+        final_deviance = Some(gd);
+        final_deviance_change = if cycle > 0 { Some(gd_rel) } else { None };
+        gd_prev = gd;
+
         final_iteration = cycle + 1;
         final_change = max_diff;
 
-        if all_converged {
+        if all_converged && gd_converged {
             converged = true;
             break;
         }
@@ -383,6 +517,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         max_gradient: None,
         param_diagnostics,
         warnings,
+        final_deviance,
+        final_deviance_change,
     };
 
     Ok((final_results, diagnostics))
@@ -479,6 +615,9 @@ mod tests {
         assert_eq!(c.tolerance, 1e-3);
         assert_eq!(c.criterion, SmoothingCriterion::Reml);
         assert_eq!(SmoothingCriterion::default(), SmoothingCriterion::Reml);
+        // FIT-1/FIT-2 defaults: step-halving on, GD tolerance 1e-3.
+        assert!(c.step_halving);
+        assert_eq!(c.gd_tolerance, 1e-3);
     }
 
     #[test]

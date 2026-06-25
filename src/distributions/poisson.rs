@@ -1,9 +1,12 @@
 //! Poisson distribution for count data.
 
-use super::{require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE};
+use super::{
+    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
+    MIN_POSITIVE,
+};
 use crate::math::par_zip_map;
 use ndarray::Array1;
-use statrs::function::gamma::ln_gamma;
+use statrs::function::gamma::{gamma_ur, ln_gamma};
 use std::collections::HashMap;
 
 /// Poisson distribution for count data.
@@ -58,6 +61,38 @@ impl Distribution for Poisson {
         Ok(require(self, params, "mu")?.to_owned())
     }
 
+    fn is_discrete(&self) -> bool {
+        true
+    }
+
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // F(⌊y⌋ | μ) = Q(⌊y⌋+1, μ) = gamma_ur(⌊y⌋+1, μ) — the upper-incomplete-gamma
+        // identity for the Poisson CDF (no summation loop).
+        let mu = require(self, params, "mu")?;
+        Ok(par_zip_map(y, mu, |yi, mui| {
+            if yi < 0.0 {
+                return 0.0;
+            }
+            gamma_ur(yi.floor() + 1.0, mui.max(MIN_POSITIVE))
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        Ok(par_zip_map(p, mu, |pi, mui| {
+            let m = mui.max(MIN_POSITIVE);
+            discrete_quantile(pi.clamp(0.0, 1.0 - 1e-12), |k| gamma_ur(k as f64 + 1.0, m))
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "Poisson"
     }
@@ -67,7 +102,8 @@ impl Distribution for Poisson {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
 
@@ -121,5 +157,30 @@ mod tests {
         let y = array![0.0, 3.0, 7.0, 12.0];
         let owned = [("mu", array![1.0, 3.5, 6.0, 10.0])];
         check_score_via_finite_diff(&Poisson, &y, &owned, "mu", 1e-5);
+    }
+
+    #[test]
+    fn cdf_matches_pmf_poisson() {
+        let ks = array![0.0, 1.0, 3.0, 7.0, 12.0];
+        let owned = [("mu", array![2.0, 2.0, 4.0, 6.0, 10.0])];
+        check_discrete_cdf_matches_pmf(&Poisson, &ks, &owned, 1e-9);
+    }
+
+    #[test]
+    fn cdf_monotone_and_quantile_inverts_poisson() {
+        let grid = Array1::from_iter((0..30).map(|i| i as f64));
+        let owned = [("mu", array![5.0])];
+        check_cdf_monotone_in_unit(&Poisson, &grid, &owned);
+        // Quantile is the smallest k with F(k) ≥ p; check it brackets the CDF.
+        let p = params_view(&owned);
+        for &prob in &[0.05, 0.5, 0.95] {
+            let q = Poisson.quantile(&array![prob], &p).unwrap()[0];
+            let f_q = Poisson.cdf(&array![q], &p).unwrap()[0];
+            assert!(f_q >= prob - 1e-12, "F(q)={f_q} < p={prob}");
+            if q > 0.0 {
+                let f_qm1 = Poisson.cdf(&array![q - 1.0], &p).unwrap()[0];
+                assert!(f_qm1 < prob, "F(q-1)={f_qm1} should be < p={prob}");
+            }
+        }
     }
 }

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{linear_intercepts, Generator};
+use common::{intercept_only, linear_intercepts, Generator};
 use glissando::{
     diagnostics::{compute_aic, compute_bic, pearson_residuals, response_residuals, total_edf},
     distributions::{Distribution, Gaussian, Poisson},
@@ -112,6 +112,66 @@ fn test_total_edf() {
         "Total EDF should be ~3, got {}",
         edf
     );
+}
+
+#[test]
+fn gaic_matches_aic_and_bic_at_canonical_k() {
+    let mut rng = Generator::new(7);
+    let (y, data) = rng.linear_gaussian(150, 1.5, 4.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let diag = model.diagnostics(&Gaussian::new(), &y).unwrap();
+    let aic = model.gaic(&Gaussian::new(), &y, 2.0).unwrap();
+    let bic = model
+        .gaic(&Gaussian::new(), &y, (y.len() as f64).ln())
+        .unwrap();
+
+    // k = 2 ≡ AIC, k = log(n) ≡ BIC.
+    assert!(
+        (aic - diag.aic).abs() < 1e-9,
+        "gaic(2) {} vs aic {}",
+        aic,
+        diag.aic
+    );
+    assert!(
+        (bic - diag.bic).abs() < 1e-9,
+        "gaic(log n) {} vs bic {}",
+        bic,
+        diag.bic
+    );
+}
+
+#[test]
+fn gaic_works_for_a_discrete_family() {
+    // GAIC is family-agnostic: it must produce a finite score for a Poisson fit,
+    // and stay consistent with AIC/BIC at the canonical penalties.
+    let mut rng = Generator::new(17);
+    let (y, data) = rng.poisson_data(200, 0.5, 0.3);
+    let formula = intercept_only(&["mu"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
+
+    let diag = model.diagnostics(&Poisson::new(), &y).unwrap();
+    let aic = model.gaic(&Poisson::new(), &y, 2.0).unwrap();
+    let bic = model
+        .gaic(&Poisson::new(), &y, (y.len() as f64).ln())
+        .unwrap();
+    assert!(aic.is_finite() && bic.is_finite());
+    assert!((aic - diag.aic).abs() < 1e-9);
+    assert!((bic - diag.bic).abs() < 1e-9);
+}
+
+#[test]
+fn gaic_is_monotone_in_k() {
+    let mut rng = Generator::new(11);
+    let (y, data) = rng.linear_gaussian(120, 1.0, 3.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    // edf > 0, so a larger penalty strictly raises GAIC.
+    let g2 = model.gaic(&Gaussian::new(), &y, 2.0).unwrap();
+    let g4 = model.gaic(&Gaussian::new(), &y, 4.0).unwrap();
+    assert!(g4 > g2, "GAIC(4) {} should exceed GAIC(2) {}", g4, g2);
 }
 
 #[test]

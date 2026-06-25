@@ -646,3 +646,92 @@ fn cr_spline_prediction_reuses_training_knots() {
         );
     }
 }
+
+// --- INFER-2: centiles / quantile prediction ---
+
+#[test]
+fn centiles_median_equals_fitted_mu_for_gaussian() {
+    let mut rng = Generator::new(42);
+    let (y, data) = rng.linear_gaussian(120, 1.0, 3.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let centiles = model.centiles(&data, &Gaussian::new(), &[50.0]).unwrap();
+    let fitted = model.predict(&data, &Gaussian::new()).unwrap();
+    // For a symmetric family the 50th centile is the fitted mean.
+    let c50 = &centiles["C50"];
+    let mu = &fitted["mu"];
+    for (i, (&c, &m)) in c50.iter().zip(mu.iter()).enumerate() {
+        assert!((c - m).abs() < 1e-6, "row {}: C50 {} vs mu {}", i, c, m);
+    }
+}
+
+#[test]
+fn centiles_are_strictly_increasing_in_level() {
+    let mut rng = Generator::new(7);
+    let (y, data) = rng.linear_gaussian(80, 1.0, 2.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let levels = [2.0, 10.0, 25.0, 50.0, 75.0, 90.0, 98.0];
+    let centiles = model.centiles(&data, &Gaussian::new(), &levels).unwrap();
+    // At every row the quantile is monotone increasing in the centile level.
+    for w in levels.windows(2) {
+        let lo_curve = &centiles[&format!("C{}", w[0])];
+        let hi_curve = &centiles[&format!("C{}", w[1])];
+        for (i, (&lo, &hi)) in lo_curve.iter().zip(hi_curve.iter()).enumerate() {
+            assert!(
+                hi > lo,
+                "row {}: C{} {} should exceed C{} {}",
+                i,
+                w[1],
+                hi,
+                w[0],
+                lo
+            );
+        }
+    }
+}
+
+#[test]
+fn centiles_have_nominal_coverage() {
+    // Empirical fraction of y below C_α should be ≈ α (the residual property
+    // checked from the centile side).
+    let mut rng = Generator::new(2024);
+    let (y, data) = rng.linear_gaussian(2000, 1.0, 3.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let centiles = model
+        .centiles(&data, &Gaussian::new(), &[10.0, 50.0, 90.0])
+        .unwrap();
+    for (pct, key) in [(0.10, "C10"), (0.50, "C50"), (0.90, "C90")] {
+        let curve = &centiles[key];
+        let below = (0..y.len()).filter(|&i| y[i] <= curve[i]).count() as f64 / y.len() as f64;
+        assert!(
+            (below - pct).abs() < 0.04,
+            "{}: empirical {} vs nominal {}",
+            key,
+            below,
+            pct
+        );
+    }
+}
+
+#[test]
+fn quantile_prediction_matches_per_row_levels() {
+    let mut rng = Generator::new(11);
+    let (y, data) = rng.linear_gaussian(60, 1.0, 2.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    // A constant 0.5 level reproduces the 50th centile (= fitted mu).
+    let p = Array1::from_elem(y.len(), 0.5);
+    let q = model
+        .quantile_prediction(&data, &Gaussian::new(), &p)
+        .unwrap();
+    let fitted = model.predict(&data, &Gaussian::new()).unwrap();
+    for (&qi, &mui) in q.iter().zip(fitted["mu"].iter()) {
+        assert!((qi - mui).abs() < 1e-6);
+    }
+}

@@ -1,10 +1,12 @@
 //! Negative Binomial (NB2) distribution for overdispersed count data.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
+    MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
+use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
 
@@ -98,6 +100,44 @@ impl Distribution for NegativeBinomial {
         Ok(par_zip_map(mu, sigma, |m, s| m + s * m * m))
     }
 
+    fn is_discrete(&self) -> bool {
+        true
+    }
+
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // size r = 1/σ, success prob q = r/(r+μ); F(⌊y⌋) = I_q(r, ⌊y⌋+1) = beta_reg(r, ⌊y⌋+1, q).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            if yi < 0.0 {
+                return 0.0;
+            }
+            let r = 1.0 / si.max(MIN_POSITIVE);
+            let q = r / (r + mui.max(MIN_POSITIVE));
+            beta_reg(r, yi.floor() + 1.0, q)
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
+            let r = 1.0 / si.max(MIN_POSITIVE);
+            let q = r / (r + mui.max(MIN_POSITIVE));
+            discrete_quantile(pi.clamp(0.0, 1.0 - 1e-12), |k| {
+                beta_reg(r, k as f64 + 1.0, q)
+            })
+        }))
+    }
+
     fn name(&self) -> &'static str {
         "NegativeBinomial"
     }
@@ -107,7 +147,8 @@ impl Distribution for NegativeBinomial {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
 
@@ -153,5 +194,28 @@ mod tests {
         ];
         check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_matches_pmf_negative_binomial() {
+        let ks = array![0.0, 2.0, 5.0, 10.0, 20.0];
+        let owned = [
+            ("mu", array![2.0, 4.0, 6.0, 8.0, 15.0]),
+            ("sigma", array![0.5, 0.5, 0.3, 0.4, 0.2]),
+        ];
+        check_discrete_cdf_matches_pmf(&NegativeBinomial, &ks, &owned, 1e-9);
+    }
+
+    #[test]
+    fn cdf_monotone_and_quantile_inverts_negative_binomial() {
+        let grid = Array1::from_iter((0..40).map(|i| i as f64));
+        let owned = [("mu", array![6.0]), ("sigma", array![0.4])];
+        check_cdf_monotone_in_unit(&NegativeBinomial, &grid, &owned);
+        let p = params_view(&owned);
+        for &prob in &[0.05, 0.5, 0.95] {
+            let q = NegativeBinomial.quantile(&array![prob], &p).unwrap()[0];
+            let f_q = NegativeBinomial.cdf(&array![q], &p).unwrap()[0];
+            assert!(f_q >= prob - 1e-12, "F(q)={f_q} < p={prob}");
+        }
     }
 }

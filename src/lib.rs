@@ -51,6 +51,7 @@ pub use ndarray;
 
 pub use error::GamlssError;
 pub use fitting::diagnostics::{self, ModelDiagnostics};
+pub use fitting::selection::{self, Direction, IcRow, LrTest, StepRecord, StepResult, StepScope};
 pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic, SmoothingCriterion};
 pub use model::{GamlssModel, PredictionResult};
 pub use terms::{Smooth, Term};
