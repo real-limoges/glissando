@@ -38,6 +38,34 @@ fn fit_with_config_json() {
 }
 
 #[test]
+fn config_json_defaults_step_halving_and_gd_tolerance() {
+    // Omitted FIT-1/FIT-2 keys fall back to the documented defaults via serde.
+    let parsed = json::parse_config("{}").expect("parse empty config");
+    assert!(parsed.step_halving, "step_halving should default to true");
+    assert_eq!(parsed.gd_tolerance, 1e-3);
+    assert_eq!(parsed.max_iterations, 200);
+}
+
+#[test]
+fn config_json_round_trips_step_halving_and_gd_tolerance() {
+    let cfg = r#"{"step_halving": false, "gd_tolerance": 5e-4}"#;
+    let parsed = json::parse_config(cfg).expect("parse config");
+    assert!(!parsed.step_halving);
+    assert_eq!(parsed.gd_tolerance, 5e-4);
+    // Untouched fields keep their defaults.
+    assert_eq!(parsed.tolerance, 1e-3);
+}
+
+#[test]
+fn diagnostics_json_exposes_final_deviance() {
+    let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+    let diag_json = json::diagnostics(&model).expect("diagnostics");
+    let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
+    // FIT-2 surfaces the converged global deviance through the JSON facade.
+    assert!(diag["final_deviance"].is_number());
+}
+
+#[test]
 fn predict_with_se_shape() {
     let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let se_json =

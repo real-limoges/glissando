@@ -1,6 +1,9 @@
 {
   "name": "glissando",
   "type": "module",
+  "collaborators": [
+    "Real Limoges <b.real.limoges@gmail.com>"
+  ],
   "description": "GAMLSS implementation in Rust — generalized additive models for location, scale, and shape",
   "version": "0.1.0",
   "license": "MIT",
@@ -19,5 +22,12 @@
   "sideEffects": [
     "./glissando.js",
     "./snippets/*"
+  ],
+  "keywords": [
+    "gamlss",
+    "gam",
+    "regression",
+    "smoothing",
+    "statistics"
   ]
 }
