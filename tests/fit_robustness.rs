@@ -84,8 +84,24 @@ fn step_halving_reaches_no_worse_deviance_than_raw_loop() {
     let (y, data) = heavy_tailed_stress();
     let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
 
-    let on = GamlssModel::fit_with_config(&data, &y, None, &formula, &StudentT::new(), cfg_with(true, 200)).unwrap();
-    let off = GamlssModel::fit_with_config(&data, &y, None, &formula, &StudentT::new(), cfg_with(false, 200)).unwrap();
+    let on = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &formula,
+        &StudentT::new(),
+        cfg_with(true, 200),
+    )
+    .unwrap();
+    let off = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &formula,
+        &StudentT::new(),
+        cfg_with(false, 200),
+    )
+    .unwrap();
 
     let gd_on = on.diagnostics.final_deviance.unwrap();
     let gd_off = off.diagnostics.final_deviance.unwrap();
@@ -132,7 +148,10 @@ fn final_deviance_matches_minus_two_loglik() {
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
     let gd = model.diagnostics.final_deviance.unwrap();
-    let ll = model.diagnostics(&StudentT::new(), &y).unwrap().log_likelihood;
+    let ll = model
+        .diagnostics(&StudentT::new(), &y)
+        .unwrap()
+        .log_likelihood;
     assert!(
         (gd - (-2.0 * ll)).abs() < 1e-6,
         "final_deviance {gd} != -2*loglik {}",
@@ -148,12 +167,24 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
     let (y, data) = rng.linear_gaussian(200, 1.0, 2.0, 0.5);
     let formula = linear_intercepts("x", &["mu", "sigma"]);
 
-    let on =
-        GamlssModel::fit_with_config(&data, &y, None, &formula, &glissando::distributions::Gaussian::new(), cfg_with(true, 200))
-            .unwrap();
-    let off =
-        GamlssModel::fit_with_config(&data, &y, None, &formula, &glissando::distributions::Gaussian::new(), cfg_with(false, 200))
-            .unwrap();
+    let on = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &formula,
+        &glissando::distributions::Gaussian::new(),
+        cfg_with(true, 200),
+    )
+    .unwrap();
+    let off = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &formula,
+        &glissando::distributions::Gaussian::new(),
+        cfg_with(false, 200),
+    )
+    .unwrap();
 
     for param in ["mu", "sigma"] {
         let a = &on.models[param].coefficients.0;
