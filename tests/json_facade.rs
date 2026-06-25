@@ -146,9 +146,9 @@ fn covariance_matrix_json_is_square_and_symmetric() {
         assert_eq!(row.len(), p, "covariance must be square");
     }
     // Symmetry: V[i][j] ≈ V[j][i]
-    for i in 0..p {
-        for j in 0..p {
-            let diff = (cv[i][j] - cv[j][i]).abs();
+    for (i, row) in cv.iter().enumerate() {
+        for (j, &v_ij) in row.iter().enumerate() {
+            let diff = (v_ij - cv[j][i]).abs();
             assert!(diff < 1e-10, "V[{i}][{j}] != V[{j}][{i}], diff={diff}");
         }
     }
@@ -183,4 +183,138 @@ fn predict_samples_seeded_json_is_reproducible() {
     // Unseeded output almost certainly differs (would need 10 × 3 = 30 exact
     // float matches to coincide by chance).
     assert_ne!(run1, run_unseeded, "unseeded run should differ from seeded");
+}
+
+// --- Model selection & comparison facade (INFER-3 / INFER-7 / INFER-4) ---
+
+const INTERCEPT_ONLY: &str = r#"{
+    "mu":    [{"Intercept": null}],
+    "sigma": [{"Intercept": null}]
+}"#;
+
+#[test]
+fn gaic_json_is_finite_and_monotone_in_k() {
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+
+    let read = |k: f64| -> f64 {
+        let s = json::gaic(&model, family.as_ref(), Y, k).expect("gaic");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        v["gaic"].as_f64().unwrap()
+    };
+    let g2 = read(2.0);
+    let g_bic = read((10.0_f64).ln());
+    // -2·ll can be negative for a tight Gaussian fit, so only require finiteness…
+    assert!(g2.is_finite() && g_bic.is_finite());
+    // …and that a larger penalty raises GAIC (edf > 0).
+    assert!(
+        g_bic > g2,
+        "BIC-penalty GAIC {} should exceed AIC-penalty {}",
+        g_bic,
+        g2
+    );
+}
+
+#[test]
+fn ic_table_json_ranks_models() {
+    let (m_null, family) = json::fit(Y, DATA, INTERCEPT_ONLY, "Gaussian", None, None).expect("fit");
+    let (m_x, _) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+
+    let table_json = json::ic_table(
+        &[("null", &m_null), ("with_x", &m_x)],
+        family.as_ref(),
+        Y,
+        2.0,
+    )
+    .expect("ic_table");
+    let rows: serde_json::Value = serde_json::from_str(&table_json).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!(rows[0]["label"], "null");
+    // The model with x fits y (linear) better → lower deviance.
+    let dev_null = rows[0]["global_deviance"].as_f64().unwrap();
+    let dev_x = rows[1]["global_deviance"].as_f64().unwrap();
+    assert!(dev_x < dev_null);
+}
+
+#[test]
+fn lr_test_json_detects_genuine_term() {
+    let (small, family) = json::fit(Y, DATA, INTERCEPT_ONLY, "Gaussian", None, None).expect("fit");
+    let (big, _) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+
+    let test_json = json::lr_test(&small, &big, family.as_ref(), Y).expect("lr_test");
+    let test: serde_json::Value = serde_json::from_str(&test_json).unwrap();
+    assert!(test["lr_stat"].as_f64().unwrap() > 0.0);
+    assert!(test["df"].as_f64().unwrap() > 0.0);
+    // y is strongly linear in x → tiny p-value.
+    assert!(test["p_value"].as_f64().unwrap() < 0.05);
+
+    // Mis-ordered pair surfaces an error.
+    assert!(json::lr_test(&big, &small, family.as_ref(), Y).is_err());
+}
+
+#[test]
+fn step_gaic_json_returns_trace_and_loadable_model() {
+    let scope = r#"[{"param": "mu", "candidates": [{"Linear": {"col_name": "x"}}]}]"#;
+    let out_json = json::step_gaic(
+        Y,
+        DATA,
+        "Gaussian",
+        INTERCEPT_ONLY,
+        scope,
+        2.0,
+        "forward",
+        None,
+    )
+    .expect("step_gaic");
+    let out: serde_json::Value = serde_json::from_str(&out_json).unwrap();
+
+    // The genuine linear term should have been added on mu.
+    let trace = out["trace"].as_array().unwrap();
+    assert!(!trace.is_empty(), "expected at least one accepted move");
+    assert!(out["formula"]["mu"].as_array().unwrap().len() >= 2);
+
+    // The embedded model round-trips through `load`.
+    let model_blob = serde_json::to_string(&out["model"]).unwrap();
+    let (restored, restored_family) = json::load(&model_blob).expect("load selected model");
+    assert_eq!(restored_family.name(), "Gaussian");
+    let preds = json::predict(&restored, restored_family.as_ref(), r#"{"x": [11.0]}"#).unwrap();
+    let parsed: HashMap<String, Vec<f64>> = serde_json::from_str(&preds).unwrap();
+    assert_eq!(parsed["mu"].len(), 1);
+}
+
+// --- INFER-1 / INFER-2 facade (quantile residuals, centiles) ---
+
+#[test]
+fn quantile_residuals_json_round_trip() {
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+    let json_out = json::quantile_residuals(&model, family.as_ref(), Y, None).expect("residuals");
+    let residuals: Vec<f64> = serde_json::from_str(&json_out).unwrap();
+    assert_eq!(residuals.len(), 10);
+    assert!(residuals.iter().all(|r| r.is_finite()));
+}
+
+#[test]
+fn centiles_json_are_ordered_and_keyed() {
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+    let json_out = json::centiles(&model, family.as_ref(), DATA, "[10, 50, 90]").expect("centiles");
+    let curves: std::collections::HashMap<String, Vec<f64>> =
+        serde_json::from_str(&json_out).unwrap();
+    assert_eq!(curves["C10"].len(), 10);
+    // Monotone in level at the first observation.
+    assert!(curves["C10"][0] < curves["C50"][0]);
+    assert!(curves["C50"][0] < curves["C90"][0]);
+}
+
+#[test]
+fn quantile_prediction_json_constant_level() {
+    let (model, family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
+    let p = "[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]";
+    let json_out = json::quantile_prediction(&model, family.as_ref(), DATA, p).expect("qpred");
+    let predicted: Vec<f64> = serde_json::from_str(&json_out).unwrap();
+    assert_eq!(predicted.len(), 10);
+    // 50th percentile equals fitted mu for a Gaussian.
+    let preds = json::predict(&model, family.as_ref(), DATA).unwrap();
+    let parsed: std::collections::HashMap<String, Vec<f64>> = serde_json::from_str(&preds).unwrap();
+    for i in 0..10 {
+        assert!((predicted[i] - parsed["mu"][i]).abs() < 1e-6);
+    }
 }

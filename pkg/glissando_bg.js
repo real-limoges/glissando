@@ -23,6 +23,35 @@ export class WasmGamlssModel {
         wasm.__wbg_wasmgamlssmodel_free(ptr, 0);
     }
     /**
+     * Response-scale centile curves for `data_json`, as `{"C<pct>": [..], ...}`.
+     * `percentiles_json` is a JSON array of centile levels in percent.
+     * @param {string} data_json
+     * @param {string} percentiles_json
+     * @returns {string}
+     */
+    centiles(data_json, percentiles_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(percentiles_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_centiles(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * @param {string} param
      * @returns {Float64Array}
      */
@@ -208,6 +237,63 @@ export class WasmGamlssModel {
         return WasmGamlssModel.__wrap(ret[0]);
     }
     /**
+     * Generalized AIC at penalty `k` against the response `y` this model was fit
+     * on. Returns `{"gaic": value}`. `k = 2` ≡ AIC, `k = ln(n)` ≡ BIC.
+     * @param {string} y_json
+     * @param {number} k
+     * @returns {string}
+     */
+    gaic(y_json, k) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_gaic(this.__wbg_ptr, ptr0, len0, k);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Likelihood-ratio test treating `self` as the nested (small) model and the
+     * model serialized in `bigger_model_json` as the alternative (big) model.
+     * Returns `{lr_stat, df, p_value}`. Errors if the pair is mis-ordered.
+     * @param {string} bigger_model_json
+     * @param {string} y_json
+     * @returns {string}
+     */
+    lrTest(bigger_model_json, y_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(bigger_model_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_lrTest(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * Input/output are JSON: `{"col": [values]}` → `{"param": [predictions]}`.
      * @param {string} data_json
      * @returns {string}
@@ -287,6 +373,110 @@ export class WasmGamlssModel {
             return getStringFromWasm0(ptr2, len2);
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Per-observation quantile prediction; `p_json` is a JSON array of per-row
+     * centile levels in `(0,1)`. Returns a JSON array of predicted responses.
+     * @param {string} data_json
+     * @param {string} p_json
+     * @returns {string}
+     */
+    quantilePrediction(data_json, p_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(p_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_quantilePrediction(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * Randomized normalized quantile residuals against the response `y` the
+     * model was fit on, as a JSON array. `seed` makes the discrete-family
+     * randomization reproducible; pass `null`/`undefined` for an unseeded draw.
+     * @param {string} y_json
+     * @param {bigint | null} [seed]
+     * @returns {string}
+     */
+    quantileResiduals(y_json, seed) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_quantileResiduals(this.__wbg_ptr, ptr0, len0, !isLikeNone(seed), isLikeNone(seed) ? BigInt(0) : seed);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Stepwise term selection by GAIC(`k`). Returns `{trace, formula, model}`
+     * where `model` is in the same wire form `fromJson` accepts. `scope_json` is
+     * a list of `{"param": "...", "candidates": [<term>, ...]}`; `direction` is
+     * `"forward"`, `"backward"`, or `"both"`.
+     * @param {string} y_json
+     * @param {string} data_json
+     * @param {string} distribution
+     * @param {string} start_formula_json
+     * @param {string} scope_json
+     * @param {number} k
+     * @param {string} direction
+     * @param {string | null} [config_json]
+     * @returns {string}
+     */
+    static stepGaic(y_json, data_json, distribution, start_formula_json, scope_json, k, direction, config_json) {
+        let deferred9_0;
+        let deferred9_1;
+        try {
+            const ptr0 = passStringToWasm0(y_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(distribution, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(start_formula_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ptr4 = passStringToWasm0(scope_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len4 = WASM_VECTOR_LEN;
+            const ptr5 = passStringToWasm0(direction, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len5 = WASM_VECTOR_LEN;
+            var ptr6 = isLikeNone(config_json) ? 0 : passStringToWasm0(config_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len6 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmgamlssmodel_stepGaic(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, k, ptr5, len5, ptr6, len6);
+            var ptr8 = ret[0];
+            var len8 = ret[1];
+            if (ret[3]) {
+                ptr8 = 0; len8 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred9_0 = ptr8;
+            deferred9_1 = len8;
+            return getStringFromWasm0(ptr8, len8);
+        } finally {
+            wasm.__wbindgen_free(deferred9_0, deferred9_1, 1);
         }
     }
     /**

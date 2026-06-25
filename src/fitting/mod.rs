@@ -14,6 +14,7 @@
 pub(crate) mod assembler;
 pub mod diagnostics;
 mod scoring;
+pub mod selection;
 mod solver;
 
 use self::assembler::{assemble_model_matrices, resolve_terms};

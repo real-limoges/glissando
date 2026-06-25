@@ -32,7 +32,34 @@ pub struct ModelDiagnostics {
     pub n_obs: usize,
 }
 
+/// Generalized Akaike Information Criterion: `−2·loglik + k·EDF`.
+///
+/// The penalty `k` is the selection knob: `k = 2` recovers AIC (predictive
+/// accuracy, permissive), `k = log(n)` recovers BIC/SBC (consistency,
+/// parsimonious). `k = 3.84 ≈ χ²₁,₀.₉₅` is another common choice. Every
+/// information-criterion score in the crate flows through this one definition,
+/// so AIC, BIC, and the stepwise / ANOVA scores stay mutually consistent.
+///
+/// `EDF` is the *effective* degrees of freedom (the summed smoother traces,
+/// generally fractional), not the raw coefficient count.
+///
+/// # Examples
+///
+/// ```
+/// use glissando::diagnostics::compute_gaic;
+///
+/// // k = 2 is AIC; k = log(n) is BIC.
+/// assert!((compute_gaic(-100.0, 5.0, 2.0) - 210.0).abs() < 1e-12);
+/// // Larger k penalizes complexity harder for the same fit.
+/// assert!(compute_gaic(-100.0, 5.0, 4.0) > compute_gaic(-100.0, 5.0, 2.0));
+/// ```
+pub fn compute_gaic(log_likelihood: f64, total_edf: f64, k: f64) -> f64 {
+    -2.0 * log_likelihood + k * total_edf
+}
+
 /// Computes Akaike Information Criterion: `−2·loglik + 2·EDF`.
+///
+/// Thin wrapper over [`compute_gaic`] at `k = 2`.
 ///
 /// # Examples
 ///
@@ -45,12 +72,14 @@ pub struct ModelDiagnostics {
 /// assert!(aic_simple < aic_complex);
 /// ```
 pub fn compute_aic(log_likelihood: f64, total_edf: f64) -> f64 {
-    -2.0 * log_likelihood + 2.0 * total_edf
+    compute_gaic(log_likelihood, total_edf, 2.0)
 }
 
 /// Computes Bayesian Information Criterion: `−2·loglik + log(n)·EDF`.
+///
+/// Thin wrapper over [`compute_gaic`] at `k = log(n)`.
 pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
-    -2.0 * log_likelihood + (n_obs as f64).ln() * total_edf
+    compute_gaic(log_likelihood, total_edf, (n_obs as f64).ln())
 }
 
 pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
@@ -58,8 +87,12 @@ pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
 }
 
 /// Snapshot of fitted parameters on the response scale, in the shape the
-/// [`Distribution`] trait expects.
-fn fitted_params_view(models: &IndexMap<String, FittedParameter>) -> HashMap<&str, &Array1<f64>> {
+/// [`Distribution`] trait expects (parameter name → fitted values). The single
+/// source for this view; `GamlssModel`'s scoring methods and `selection` build
+/// on it rather than re-collecting the map.
+pub(crate) fn fitted_params_view(
+    models: &IndexMap<String, FittedParameter>,
+) -> HashMap<&str, &Array1<f64>> {
     models
         .iter()
         .map(|(k, v)| (k.as_str(), &v.fitted_values))
@@ -92,6 +125,52 @@ pub(crate) fn compute<D: Distribution + ?Sized>(
     })
 }
 
+/// Randomized (normalized) quantile residuals — gamlss's default residual
+/// (Dunn & Smyth, 1996).
+///
+/// By the probability integral transform, `U = F(Y | θ̂) ∼ Uniform(0,1)` for a
+/// correct continuous fit, so `r = Φ⁻¹(U) ∼ N(0,1)` regardless of the family —
+/// one Q-Q/worm-plot yardstick across every distribution. For a discrete
+/// response `F` jumps, so the **randomized PIT** spreads each atom across its
+/// jump interval: `u_i = F(y_i−1) + v_i·(F(y_i) − F(y_i−1))` with `v_i ∼ U(0,1)`.
+///
+/// `seed` makes the discrete randomization reproducible (via `StdRng`); it is
+/// ignored for continuous families, where `u = F(y)` is deterministic.
+///
+/// # Errors
+/// Propagates [`GamlssError`] from the family's `cdf` evaluation.
+pub fn quantile_residuals<D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    params: &HashMap<&str, &Array1<f64>>,
+    seed: Option<u64>,
+) -> Result<Array1<f64>, GamlssError> {
+    use crate::math::std_normal_quantile;
+    use rand::rngs::StdRng;
+    use rand::{rng, Rng, SeedableRng};
+    use rand_distr::{Distribution as _, StandardUniform};
+
+    let u = if family.is_discrete() {
+        let upper = family.cdf(y, params)?; // F(y)
+        let lower = family.cdf(&(y - 1.0), params)?; // F(y−1)
+                                                     // One generic filler, two RNG concretizations — mirrors `sample_posterior_seeded`.
+        fn randomize<R: Rng>(rng: &mut R, lower: &Array1<f64>, upper: &Array1<f64>) -> Array1<f64> {
+            ndarray::Zip::from(lower).and(upper).map_collect(|&a, &b| {
+                let v: f64 = StandardUniform.sample(rng); // v ∼ U[0,1)
+                a + (b - a) * v
+            })
+        }
+        match seed {
+            Some(s) => randomize(&mut StdRng::seed_from_u64(s), &lower, &upper),
+            None => randomize(&mut rng(), &lower, &upper),
+        }
+    } else {
+        family.cdf(y, params)? // continuous: u = F(y)
+    };
+
+    Ok(u.mapv(std_normal_quantile))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,7 +178,45 @@ mod tests {
     use crate::types::{Coefficients, CovarianceMatrix};
     use ndarray::{array, Array2};
 
-    // --- compute_aic / compute_bic ---
+    // --- compute_gaic / compute_aic / compute_bic ---
+
+    #[test]
+    fn compute_gaic_recovers_aic_and_bic() {
+        let (ll, edf, n) = (-100.0, 5.0, 100usize);
+        assert!((compute_gaic(ll, edf, 2.0) - compute_aic(ll, edf)).abs() < 1e-12);
+        assert!((compute_gaic(ll, edf, (n as f64).ln()) - compute_bic(ll, edf, n)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_gaic_monotone_in_k() {
+        // Larger penalty ⇒ larger GAIC for the same fit (edf > 0).
+        let (ll, edf) = (-50.0, 4.0);
+        assert!(compute_gaic(ll, edf, 4.0) > compute_gaic(ll, edf, 2.0));
+        assert!(compute_gaic(ll, edf, 2.0) > compute_gaic(ll, edf, 1.0));
+    }
+
+    #[test]
+    fn compute_gaic_exact_formula_and_edge_cases() {
+        // Pin the exact arithmetic −2·ll + k·edf across ordinary and edge inputs.
+        assert!((compute_gaic(-10.0, 3.0, 2.0) - (20.0 + 6.0)).abs() < 1e-12);
+        // k = 0 ⇒ pure global deviance −2·ll (no complexity penalty).
+        assert!((compute_gaic(-10.0, 3.0, 0.0) - 20.0).abs() < 1e-12);
+        // edf = 0 ⇒ penalty term vanishes for any k.
+        assert!((compute_gaic(-10.0, 0.0, 7.5) - 20.0).abs() < 1e-12);
+        // Negative k is still evaluated literally (no clamping).
+        assert!((compute_gaic(-10.0, 3.0, -2.0) - (20.0 - 6.0)).abs() < 1e-12);
+        // Positive log-likelihood (tight continuous fit) ⇒ negative deviance.
+        assert!((compute_gaic(5.0, 1.0, 2.0) - (-10.0 + 2.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_gaic_prefers_lower_edf_at_equal_loglik() {
+        // Two fits with equal log-likelihood: the lower-EDF one wins for all k > 0.
+        let ll = -75.0;
+        for &k in &[0.5, 2.0, (1000f64).ln()] {
+            assert!(compute_gaic(ll, 3.0, k) < compute_gaic(ll, 6.0, k));
+        }
+    }
 
     #[test]
     fn compute_aic_formula() {
