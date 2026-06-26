@@ -9,6 +9,7 @@
 //! (Student-t tail) and BCPE (power-exponential kurtosis) extend the same spine,
 //! changing only the distribution `z` follows and the extra parameter column.
 
+use super::boxcox::{boxcox_inv, boxcox_z, boxcox_z_dz_dnu};
 use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
@@ -16,11 +17,6 @@ use super::{
 use crate::math::{std_normal_cdf, std_normal_quantile};
 use ndarray::Array1;
 use std::collections::HashMap;
-
-/// Threshold below which `ν` is treated as exactly 0, switching to the log-normal
-/// limit of the Box-Cox transform (`z = log(y/μ)/σ`). Below this the general
-/// `((y/μ)^ν − 1)/(νσ)` form divides by a near-zero `ν` and loses precision.
-const NU_EPS: f64 = 1e-6;
 
 /// Box-Cox–Cole-Green distribution for skew positive continuous data (`y > 0`).
 ///
@@ -107,17 +103,7 @@ impl Distribution for BCCG {
             let s = sigma[i].max(MIN_POSITIVE);
             let nu_i = nu[i];
             let yi = y[i].max(MIN_POSITIVE);
-            let l = (yi / m).ln(); // L = log(y/μ)
-            // z is smooth across ν=0 via expm1 (no cancellation), so the FD oracle
-            // sees no kink. ∂z/∂ν, however, subtracts two near-equal terms for small
-            // ν — keep a Taylor limit there (accurate to O(ν²)).
-            let z = boxcox_z(yi, m, s, nu_i);
-            let dz_dnu = if nu_i.abs() < NU_EPS {
-                l * l / (2.0 * s) + nu_i * l * l * l / (3.0 * s)
-            } else {
-                let tm1 = (nu_i * l).exp_m1(); // T − 1 = (y/μ)^ν − 1
-                (nu_i * (tm1 + 1.0) * l - tm1) / (nu_i * nu_i * s)
-            };
+            let (z, dz_dnu, l) = boxcox_z_dz_dnu(yi, m, s, nu_i); // l = log(y/μ)
 
             u_mu[i] = z / s + nu_i * (z * z - 1.0);
             w_mu[i] = 1.0 / (s * s) + 2.0 * nu_i * nu_i;
@@ -222,33 +208,13 @@ impl Distribution for BCCG {
             let s = sigma[i].max(MIN_POSITIVE);
             let nu_i = nu[i];
             let zp = std_normal_quantile(p[i].clamp(1e-12, 1.0 - 1e-12));
-            out[i] = if nu_i.abs() < NU_EPS {
-                m * (s * zp).exp()
-            } else {
-                // y = μ·(1 + νσz_p)^(1/ν); clamp the base off 0 (the truncated tail).
-                let base = (1.0 + nu_i * s * zp).max(MIN_POSITIVE);
-                m * base.powf(1.0 / nu_i)
-            };
+            out[i] = boxcox_inv(m, s, nu_i, zp);
         }
         Ok(out)
     }
 
     fn name(&self) -> &'static str {
         "BCCG"
-    }
-}
-
-/// Box-Cox z-score `((y/μ)^ν − 1)/(νσ)`, with the `ν → 0` log-normal limit
-/// `log(y/μ)/σ`. Assumes `y, μ, σ > 0` (callers clamp).
-#[inline]
-fn boxcox_z(y: f64, mu: f64, sigma: f64, nu: f64) -> f64 {
-    let l = (y / mu).ln();
-    if nu == 0.0 {
-        l / sigma
-    } else {
-        // expm1(νL)/(νσ) ≡ ((y/μ)^ν − 1)/(νσ), but accurate (no cancellation) as ν→0,
-        // so the density is smooth through ν=0 with the branch only at exactly 0.
-        (nu * l).exp_m1() / (nu * sigma)
     }
 }
 

@@ -9,6 +9,7 @@
 
 use crate::distributions::{
     Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG,
+    BCPE, BCT,
 };
 use crate::error::GamlssError;
 
@@ -32,6 +33,8 @@ pub(crate) enum FamilyType {
     Beta(Beta),
     StudentT(StudentT),
     BCCG(BCCG),
+    BCT(BCT),
+    BCPE(BCPE),
 }
 
 impl FamilyType {
@@ -47,6 +50,8 @@ impl FamilyType {
             FamilyType::Beta(d) => d,
             FamilyType::StudentT(d) => d,
             FamilyType::BCCG(d) => d,
+            FamilyType::BCT(d) => d,
+            FamilyType::BCPE(d) => d,
         }
     }
 
@@ -76,8 +81,10 @@ impl FamilyType {
             "NegativeBinomial" => Ok(FamilyType::NegativeBinomial(NegativeBinomial::new())),
             "Beta" => Ok(FamilyType::Beta(Beta::new())),
             "BCCG" => Ok(FamilyType::BCCG(BCCG::new())),
+            "BCT" => Ok(FamilyType::BCT(BCT::new())),
+            "BCPE" => Ok(FamilyType::BCPE(BCPE::new())),
             other => Err(GamlssError::Input(format!(
-                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG",
+                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG, BCT, BCPE",
                 other
             ))),
         }

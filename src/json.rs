@@ -31,9 +31,9 @@
 //!
 //! [`fit`] and [`load`] resolve a distribution by name via
 //! [`crate::distributions::from_name`], which covers `Gaussian`, `Poisson`,
-//! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, and `BCCG`. `Binomial` is
-//! excluded because it needs `n_trials` state that a name cannot carry — construct
-//! it through the typed API instead.
+//! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `BCCG`, `BCT`, and `BCPE`.
+//! `Binomial` is excluded because it needs `n_trials` state that a name cannot
+//! carry — construct it through the typed API instead.
 //!
 //! # Example
 //!
