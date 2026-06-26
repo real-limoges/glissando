@@ -12,7 +12,7 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use crate::distributions::{
-    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
+    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG,
 };
 use crate::ffi::FamilyType;
 use crate::fitting::selection::{self, Direction, StepScope};
@@ -42,6 +42,7 @@ py_distribution!(PyGamma, "Gamma");
 py_distribution!(PyNegativeBinomial, "NegativeBinomial");
 py_distribution!(PyBeta, "Beta");
 py_distribution!(PyStudentT, "StudentT");
+py_distribution!(PyBCCG, "BCCG");
 
 /// Binomial carries `n_trials` state, so it gets a manual `pyclass`.
 #[pyclass(name = "Binomial", frozen)]
@@ -189,12 +190,15 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyStudentT>>().is_ok() {
         return Ok(FamilyType::StudentT(StudentT::new()));
     }
+    if family_obj.extract::<PyRef<PyBCCG>>().is_ok() {
+        return Ok(FamilyType::BCCG(BCCG::new()));
+    }
     if let Ok(o) = family_obj.extract::<PyRef<PyOcat>>() {
         return Ok(FamilyType::Ocat(Ocat::new(o.n_categories)));
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), or Ocat(n_categories)",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), BCCG(), or Ocat(n_categories)",
     ))
 }
 
@@ -724,6 +728,7 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyNegativeBinomial>()?;
     m.add_class::<PyBeta>()?;
     m.add_class::<PyStudentT>()?;
+    m.add_class::<PyBCCG>()?;
     m.add_class::<PyOcat>()?;
     Ok(())
 }

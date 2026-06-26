@@ -8,7 +8,7 @@ This document provides detailed mathematical derivations for the GAMLSS implemen
 
 ## 1. Distribution Derivatives and Distributional Functions
 
-This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm. §1.10 then derives the cumulative distribution, density, and quantile (the CDF/PDF/quantile trio) that these same families expose for residuals, centiles, and predictive intervals.
+This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm. §1.11 then derives the cumulative distribution, density, and quantile (the CDF/PDF/quantile trio) that these same families expose for residuals, centiles, and predictive intervals.
 
 **Key quantities**:
 - **Score** $u = \frac{\partial \ell}{\partial \eta}$: Direction of steepest ascent for the log-likelihood
@@ -543,7 +543,79 @@ Source: `src/distributions/ocat.rs`.
 
 ---
 
-### 1.9 Example: Computing Derivatives for Gaussian Data
+### 1.9 Box-Cox–Cole-Green (BCCG) Distribution
+
+The BCCG family (Cole & Green 1992) models a **skew positive** response $y > 0$ by a Box-Cox power transform to a standard normal. It is parameterized by the median $\mu$ (log link), the approximate coefficient of variation $\sigma$ (log link), and the skewness / Box-Cox power $\nu$ (identity link). It is the engine behind LMS centile curves (growth charts). BCCG is the worked template for the Box-Cox family; BCT and BCPE extend the same spine, replacing the standard normal that the transformed residual follows with a Student-$t$ (extra df $\tau$) or power-exponential (extra kurtosis $\tau$).
+
+#### The Box-Cox z-score
+
+The shared spine transforms $y > 0$ to a standardized residual $z$:
+$$
+z = \begin{cases}
+\dfrac{(y/\mu)^\nu - 1}{\nu\sigma} & \nu \ne 0 \\[8pt]
+\dfrac{\log(y/\mu)}{\sigma} & \nu = 0 \quad (\text{limit})
+\end{cases}
+$$
+Numerically the $\nu \ne 0$ branch is evaluated as $\operatorname{expm1}(\nu L)/(\nu\sigma)$ with $L = \log(y/\mu)$, which is accurate (no cancellation) as $\nu \to 0$, so the density is smooth through $\nu = 0$.
+
+#### Log-Likelihood
+
+For BCCG the transformed residual is standard normal, $z \sim N(0,1)$, so adding the Jacobian $\mathrm{d}z/\mathrm{d}y$ gives the pointwise log-density
+$$
+\ell = -\tfrac{1}{2} z^2 - \tfrac{1}{2}\log(2\pi) + (\nu - 1)\log(y) - \nu\log(\mu) - \log(\sigma).
+$$
+(The exact gamlss density truncates the lower tail at $y = 0$ and renormalizes by $\Phi(1/(\sigma|\nu|))$; in the usual regime $1/(\sigma|\nu|)$ is large so $\Phi \approx 1$ and the correction is negligible — the implementation uses the un-truncated form.)
+
+By the definition of $z$ we have the identity $T \equiv (y/\mu)^\nu = 1 + \nu\sigma z$, which collapses the score functions to clean forms.
+
+#### First Derivatives (Score Functions)
+
+Partial derivatives of $z$:
+$$
+\frac{\partial z}{\partial \mu} = -\frac{T}{\mu\sigma}, \qquad
+\frac{\partial z}{\partial \sigma} = -\frac{z}{\sigma}, \qquad
+\frac{\partial z}{\partial \nu} = \frac{\nu T L - (T - 1)}{\nu^2 \sigma},
+$$
+with the limit $\partial z/\partial\nu \to L^2/(2\sigma)$ as $\nu \to 0$. On the parameter scale,
+$$
+\frac{\partial \ell}{\partial \mu} = \frac{zT}{\mu\sigma} - \frac{\nu}{\mu}, \qquad
+\frac{\partial \ell}{\partial \sigma} = \frac{z^2 - 1}{\sigma}, \qquad
+\frac{\partial \ell}{\partial \nu} = -z\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+Applying the chain rule for the links ($\mu, \sigma$ log $\Rightarrow u_\eta = \theta\,\partial\ell/\partial\theta$; $\nu$ identity $\Rightarrow u_\eta = \partial\ell/\partial\nu$) and substituting $T = 1 + \nu\sigma z$ gives the $\eta$-scale scores the implementation returns:
+$$
+u_\mu = \frac{z}{\sigma} + \nu(z^2 - 1), \qquad
+u_\sigma = z^2 - 1, \qquad
+u_\nu = -z\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+
+#### Expected Fisher Information
+
+Using $z \sim N(0,1)$ (so $E[z^2] = 1$, $E[z^4] = 3$) and a small-$\sigma$ expansion for $\nu$, the expected information on the parameter scale is
+$$
+I_{\mu\mu} = \frac{1}{\mu^2\sigma^2} + \frac{2\nu^2}{\mu^2}, \qquad
+I_{\sigma\sigma} = \frac{2}{\sigma^2}, \qquad
+I_{\nu\nu} = \frac{7\sigma^2}{4},
+$$
+matching the gamlss BCCG expected second derivatives. The $\eta$-scale weights ($W_\eta = (\mathrm{d}\theta/\mathrm{d}\eta)^2 I_{\theta\theta}$, floored to keep $W$ positive definite) are
+$$
+w_\mu = \mu^2 I_{\mu\mu} = \frac{1}{\sigma^2} + 2\nu^2, \qquad
+w_\sigma = \sigma^2 I_{\sigma\sigma} = 2, \qquad
+w_\nu = I_{\nu\nu} = \frac{7\sigma^2}{4}.
+$$
+
+#### CDF and Quantile
+
+Both reduce to the standard normal $\Phi$ of the Box-Cox z-score:
+$$
+F(y) = \Phi(z), \qquad
+Q(p) = \mu\bigl(1 + \nu\sigma\,\Phi^{-1}(p)\bigr)^{1/\nu} \quad (\nu \ne 0; \ \ \mu\,e^{\sigma\Phi^{-1}(p)} \text{ at } \nu = 0).
+$$
+Since $\mathrm{d}z/\mathrm{d}y = (y/\mu)^{\nu-1}/(\sigma\mu) > 0$ for $y > 0$, $F$ is a valid increasing CDF. Two special cases give independent oracles: at $\nu = 1$, BCCG is $N(\mu, \mu\sigma)$; at $\nu = 0$, it is $\mathrm{LogNormal}(\log\mu, \sigma)$. The mean is not $\mu$ (which is the median); the implementation uses the second-order approximation $E[Y] \approx \mu(1 + \tfrac{1}{2}\sigma^2(1-\nu))$, exact at $\nu \in \{0, 1\}$.
+
+---
+
+### 1.10 Example: Computing Derivatives for Gaussian Data
 
 Suppose we have data $y = [2.1, 1.9, 3.2]$ and current parameter estimates $\mu = [2.0, 2.0, 3.0]$, $\sigma = [0.5, 0.5, 0.5]$.
 
@@ -579,7 +651,7 @@ The PWLS solver then regresses $z_\sigma$ on the design matrix for $\sigma$ with
 
 ---
 
-### 1.10 Cumulative Distributions, Densities, and Quantiles
+### 1.11 Cumulative Distributions, Densities, and Quantiles
 
 Beyond the score/Fisher quantities that drive fitting, each family exposes the **distributional trio** — the cumulative distribution $F$, the density/mass $f$, and the quantile (inverse CDF) $Q$. These are what every statistically distinctive GAMLSS output needs (quantile residuals in §11.3, centile curves, predictive intervals).
 
@@ -1556,14 +1628,14 @@ $$
 r_i = \Phi^{-1}(F(y_i | \hat{\theta}_i))
 $$
 
-where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF. If the model is correct, $r_i \sim N(0,1)$ by the probability integral transform (§1.10).
+where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF. If the model is correct, $r_i \sim N(0,1)$ by the probability integral transform (§1.11).
 
 For a **discrete** response, $F$ jumps, so $F(Y)$ is not uniform; the *randomized* PIT spreads each atom across its jump interval. With $v_i \sim \text{Uniform}(0,1)$:
 $$
 a_i = F(y_i - 1 \mid \hat\theta_i), \quad b_i = F(y_i \mid \hat\theta_i), \quad u_i = a_i + v_i\,(b_i - a_i), \quad r_i = \Phi^{-1}(u_i).
 $$
 
-The fitted CDF $F$, quantile $Q$, and the `is_discrete` flag that selects the branch are provided by the distributional trio of §1.10; the right-continuity identity $F(k) - F(k-1) = f(k)$ is what makes $u_i$ uniform on the jump interval.
+The fitted CDF $F$, quantile $Q$, and the `is_discrete` flag that selects the branch are provided by the distributional trio of §1.11; the right-continuity identity $F(k) - F(k-1) = f(k)$ is what makes $u_i$ uniform on the jump interval.
 
 **Deviance residuals**:
 $$
@@ -1626,8 +1698,8 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Ordered categorical derivatives (§1.8) | `src/distributions/ocat.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
-| CDF / PDF / quantile / `is_discrete` trait methods (§1.10) | `src/distributions/mod.rs` + per-family files |
-| `discrete_quantile` bracket+bisection (§1.10) | `src/distributions/mod.rs` (`discrete_quantile`) |
+| CDF / PDF / quantile / `is_discrete` trait methods (§1.11) | `src/distributions/mod.rs` + per-family files |
+| `discrete_quantile` bracket+bisection (§1.11) | `src/distributions/mod.rs` (`discrete_quantile`) |
 | B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
 | Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs` (`sum_to_zero_basis`) |
 | Difference penalty matrix (§5) | `src/splines.rs` (`create_penalty_matrix`) |
@@ -1668,9 +1740,9 @@ Symbols used throughout this document.
 | $\delta_k$ | $k$-th threshold increment parameter fed to the RS loop: $\theta_1 = \delta_1$ (identity link), $\theta_k = \theta_{k-1} + e^{\delta_k}$ for $k \ge 2$ (log link) |
 | $F_k, f_k$ | Cumulative-logit CDF and logistic density at threshold $\theta_k$: $F_k = \mathrm{logistic}(\theta_k - \mu)$, $f_k = F_k(1-F_k)$ |
 | $\pi_r$ | Category probability in `Ocat`: $\pi_r = F_r - F_{r-1}$, $F_0=0$, $F_R=1$ |
-| $F(y\mid\theta)$ | Cumulative distribution $P(Y\le y\mid\theta)$; right-continuous step at $\lfloor y\rfloor$ for discrete families (§1.10) |
-| $f(y\mid\theta)$ | Density (continuous) or mass (discrete) $=\exp(\ell_{\text{pointwise}})$ (§1.10) |
-| $Q(p\mid\theta)$ | Quantile / inverse CDF: $\inf\{y:F(y\mid\theta)\ge p\}$ (§1.10) |
+| $F(y\mid\theta)$ | Cumulative distribution $P(Y\le y\mid\theta)$; right-continuous step at $\lfloor y\rfloor$ for discrete families (§1.11) |
+| $f(y\mid\theta)$ | Density (continuous) or mass (discrete) $=\exp(\ell_{\text{pointwise}})$ (§1.11) |
+| $Q(p\mid\theta)$ | Quantile / inverse CDF: $\inf\{y:F(y\mid\theta)\ge p\}$ (§1.11) |
 | $P(a,x),\, Q(a,x)$ | Regularized lower / upper incomplete gamma $\gamma(a,x)/\Gamma(a)$, $1-P(a,x)$ |
 | $I_x(a,b)$ | Regularized incomplete beta $B(x;a,b)/B(a,b)$ |
 | $\Phi, \Phi^{-1}$ | Standard normal CDF and its inverse (quantile) |
@@ -1727,4 +1799,4 @@ Symbols used throughout this document.
 
 12. McCullagh, P. (1980). Regression models for ordinal data. *Journal of the Royal Statistical Society: Series B*, 42(2), 109-142. — Proportional-odds / cumulative-logit model; foundational reference for the `Ocat` distribution (§1.8).
 
-13. Dunn, P. K., & Smyth, G. K. (1996). Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, 5(3), 236-244. — Randomized probability integral transform for discrete responses (§1.10, §11.3).
+13. Dunn, P. K., & Smyth, G. K. (1996). Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, 5(3), 236-244. — Randomized probability integral transform for discrete responses (§1.11, §11.3).

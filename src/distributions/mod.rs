@@ -202,6 +202,7 @@ pub(crate) fn discrete_quantile(p: f64, cdf_at: impl Fn(u64) -> f64) -> f64 {
 // Distribution implementations
 // ============================================================================
 
+mod bccg;
 mod beta;
 mod binomial;
 mod gamma;
@@ -211,6 +212,7 @@ mod ocat;
 mod poisson;
 mod student_t;
 
+pub use bccg::BCCG;
 pub use beta::Beta;
 pub use binomial::Binomial;
 pub use gamma::Gamma;
@@ -248,8 +250,9 @@ pub fn from_name(name: &str) -> Result<Box<dyn Distribution>, GamlssError> {
         "Gamma" => Ok(Box::new(Gamma)),
         "NegativeBinomial" => Ok(Box::new(NegativeBinomial)),
         "Beta" => Ok(Box::new(Beta)),
+        "BCCG" => Ok(Box::new(BCCG)),
         other => Err(GamlssError::Input(format!(
-            "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta",
+            "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG",
             other
         ))),
     }
@@ -469,6 +472,7 @@ mod tests {
             "Gamma",
             "NegativeBinomial",
             "Beta",
+            "BCCG",
         ] {
             let d = from_name(name).unwrap();
             assert_eq!(d.name(), *name);
@@ -493,6 +497,7 @@ mod tests {
             from_name("Gamma").unwrap(),
             from_name("Beta").unwrap(),
             from_name("NegativeBinomial").unwrap(),
+            from_name("BCCG").unwrap(),
         ] {
             for p in d.parameters() {
                 let v = d.initial_value(p, &y);
