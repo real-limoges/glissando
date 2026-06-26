@@ -141,6 +141,14 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     if let Some(v) = config.get_item("gd_tolerance")? {
         fit_config.gd_tolerance = v.extract()?;
     }
+    if let Some(v) = config.get_item("links")? {
+        // {param_name: link_name}, e.g. {"mu": "probit"}. Link names are validated
+        // against the registry at fit time, mirroring the criterion handling above.
+        let links: std::collections::HashMap<String, String> = v.extract().map_err(|_| {
+            PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
+        })?;
+        fit_config.links.extend(links);
+    }
     Ok(fit_config)
 }
 

@@ -1081,6 +1081,56 @@ where $H = X(X^TWX + \lambda S)^{-1}X^TWX$ is the hat matrix.
   - Clamp $\mu \in [10^{-10}, 1-10^{-10}]$ before applying link
   - Clamp $\eta \in [-30, 30]$ to prevent overflow in inverse
 
+### Probit Link
+- **Function**: $g(\mu) = \Phi^{-1}(\mu)$, the standard-normal quantile
+- **Inverse**: $g^{-1}(\eta) = \Phi(\eta)$
+- **Domain**: $\mu \in (0, 1)$
+- **Use**: Binomial probability — the latent-normal alternative to logit (econometrics, bioassay)
+- **Derivative**: $\frac{d\mu}{d\eta} = \phi(\eta) = \frac{1}{\sqrt{2\pi}}e^{-\eta^2/2}$, the standard-normal density
+- **Reuse**: $\Phi$ is the same `erf`-based CDF used by `Gaussian::cdf`; $\Phi^{-1}$ is `math::std_normal_quantile`
+- **Numerical safeguards**: clamp $\mu \in [10^{-10}, 1-10^{-10}]$, $\eta \in [-30, 30]$
+
+### Complementary Log-Log Link
+- **Function**: $g(\mu) = \log(-\log(1-\mu))$
+- **Inverse**: $g^{-1}(\eta) = 1 - \exp(-e^{\eta})$
+- **Domain**: $\mu \in (0, 1)$ (asymmetric: approaches the bounds at different rates)
+- **Use**: discrete-time survival / complementary-risk, asymmetric rare-event data
+- **Derivative**: $\frac{d\mu}{d\eta} = \exp(\eta - e^{\eta})$
+- **Numerical safeguards**: clamp $\eta \in [-30, 30]$ before the inner $\exp$
+
+### Inverse Link
+- **Function**: $g(\mu) = 1/\mu$
+- **Inverse**: $g^{-1}(\eta) = 1/\eta$
+- **Domain**: $\mu \neq 0$ ($\mu$ and $\eta$ share a sign)
+- **Use**: canonical link for the Gamma family
+- **Derivative**: $\frac{d\mu}{d\eta} = -1/\eta^2$
+- **Numerical safeguard**: keep $|\eta| \ge 10^{-10}$ (sign-preserving floor) so $1/\eta$ stays finite
+
+### Inverse-Square Link
+- **Function**: $g(\mu) = 1/\mu^2$
+- **Inverse**: $g^{-1}(\eta) = \eta^{-1/2}$
+- **Domain**: $\mu > 0$, $\eta > 0$
+- **Use**: positive responses (e.g. an inverse-Gaussian mean)
+- **Derivative**: $\frac{d\mu}{d\eta} = -\tfrac{1}{2}\eta^{-3/2}$
+- **Numerical safeguard**: floor $\eta \ge 10^{-10}$
+
+### Square-Root Link
+- **Function**: $g(\mu) = \sqrt{\mu}$
+- **Inverse**: $g^{-1}(\eta) = \eta^2$
+- **Domain**: $\mu \ge 0$
+- **Use**: Poisson variance-stabilizing link
+- **Derivative**: $\frac{d\mu}{d\eta} = 2\eta$
+
+### Cauchit Link
+- **Function**: $g(\mu) = \tan(\pi(\mu - \tfrac{1}{2}))$
+- **Inverse**: $g^{-1}(\eta) = \tfrac{1}{2} + \frac{\arctan(\eta)}{\pi}$
+- **Domain**: $\mu \in (0, 1)$
+- **Use**: bounded probability with heavier tails than logit/probit — robust to extreme points in the linear predictor
+- **Derivative**: $\frac{d\mu}{d\eta} = \frac{1}{\pi(1 + \eta^2)}$
+- **Numerical safeguards**: clamp $\mu \in [10^{-10}, 1-10^{-10}]$, $\eta \in [-30, 30]$
+
+All six are selectable by name (`"probit"`, `"cloglog"`, `"inverse"`, `"inverse_square"`, `"sqrt"`, `"cauchit"`) via `FitConfig::links` and reconstructed through `distributions::link_from_name`; each supplies the analytic $\frac{d\mu}{d\eta}$ above so the IRLS weights below are exact rather than finite-differenced.
+
 ### Chain Rule for Link Functions
 
 When modeling parameter $\theta$ with link function $g$, we have $\eta = g(\theta)$. The score and Fisher information transform as:

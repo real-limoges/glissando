@@ -34,6 +34,22 @@ fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Ar
         .collect()
 }
 
+/// Reconstruct the link used at fit time for a parameter: a persisted override
+/// (see [`FitConfig::links`](crate::FitConfig::links)) takes precedence over the
+/// family's `default_link`, so a model fitted with a non-default link predicts
+/// through that same link. `None`-link parameters (the common case, and all
+/// pre-feature serialized models) fall back to the family default.
+fn resolve_link<D: Distribution + ?Sized>(
+    family: &D,
+    param_name: &str,
+    fitted_param: &fitting::FittedParameter,
+) -> Result<Box<dyn distributions::Link>, GamlssError> {
+    match &fitted_param.link {
+        Some(name) => distributions::link_from_name(name),
+        None => family.default_link(param_name),
+    }
+}
+
 impl GamlssModel {
     /// Fits a GAMLSS model with default configuration.
     ///
@@ -256,7 +272,7 @@ impl GamlssModel {
             let (x_matrix, _, _, _) =
                 assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
-            let link = family.default_link(param_name)?;
+            let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
 
             predictions.insert(param_name.clone(), fitted);
@@ -299,7 +315,7 @@ impl GamlssModel {
                 })
                 .collect();
 
-            let link = family.default_link(param_name)?;
+            let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.view().mapv(|e| link.inv_link(e));
 
             results.insert(
@@ -566,7 +582,7 @@ impl GamlssModel {
                 seed,
             )?;
 
-            let link = family.default_link(param_name)?;
+            let link = resolve_link(family, param_name, fitted_param)?;
 
             let prediction_samples: Vec<Array1<f64>> = beta_samples
                 .iter()
