@@ -3,9 +3,8 @@
 //! from `η`) and by the design-matrix code (via `link` to seed initial values).
 
 use crate::error::GamlssError;
-use crate::math::std_normal_quantile;
-use statrs::function::erf::erf;
-use std::f64::consts::{PI, SQRT_2};
+use crate::math::{std_normal_cdf, std_normal_pdf, std_normal_quantile};
+use std::f64::consts::PI;
 use std::fmt::Debug;
 
 /// Floor for positive parameters (μ, σ, …) to avoid `log(0)` or division by zero.
@@ -14,19 +13,6 @@ pub(crate) const MIN_POSITIVE: f64 = 1e-10;
 pub(crate) const MAX_ETA: f64 = 30.0;
 /// Linear-predictor floor for log/logit links (prevents `exp` underflow).
 pub(crate) const MIN_ETA: f64 = -30.0;
-
-/// Standard-normal CDF `Φ(η)`, shared by [`ProbitLink`] and reused from the same
-/// `erf` formulation as `Gaussian::cdf`.
-#[inline]
-fn std_normal_cdf(eta: f64) -> f64 {
-    0.5 * (1.0 + erf(eta / SQRT_2))
-}
-
-/// Standard-normal PDF `φ(η)`, the inverse-link derivative of [`ProbitLink`].
-#[inline]
-fn std_normal_pdf(eta: f64) -> f64 {
-    (-0.5 * eta * eta).exp() / (2.0 * PI).sqrt()
-}
 
 /// A link function `g` mapping the response-scale parameter `μ` to the linear predictor `η = g(μ)`.
 pub trait Link: Debug + Send + Sync {

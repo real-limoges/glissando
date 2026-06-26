@@ -8,7 +8,7 @@
 #![cfg(any(feature = "python", feature = "wasm"))]
 
 use crate::distributions::{
-    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
+    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG,
 };
 use crate::error::GamlssError;
 
@@ -31,6 +31,7 @@ pub(crate) enum FamilyType {
     NegativeBinomial(NegativeBinomial),
     Beta(Beta),
     StudentT(StudentT),
+    BCCG(BCCG),
 }
 
 impl FamilyType {
@@ -45,6 +46,7 @@ impl FamilyType {
             FamilyType::NegativeBinomial(d) => d,
             FamilyType::Beta(d) => d,
             FamilyType::StudentT(d) => d,
+            FamilyType::BCCG(d) => d,
         }
     }
 
@@ -73,8 +75,9 @@ impl FamilyType {
             "Gamma" => Ok(FamilyType::Gamma(Gamma::new())),
             "NegativeBinomial" => Ok(FamilyType::NegativeBinomial(NegativeBinomial::new())),
             "Beta" => Ok(FamilyType::Beta(Beta::new())),
+            "BCCG" => Ok(FamilyType::BCCG(BCCG::new())),
             other => Err(GamlssError::Input(format!(
-                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta",
+                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG",
                 other
             ))),
         }

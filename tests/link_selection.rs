@@ -16,6 +16,9 @@ use ndarray::Array1;
 /// `"cauchit"`, `"sqrt"`, `"inverse"`, and `"1/mu^2"`). The non-Gaussian rows are
 /// exact arithmetic; the probit rows were tabulated with an independent `erf`
 /// implementation. A sign or formula slip in any link fails this table.
+// These are exact R make.link reference values; some happen to land near √2 / 1/√2,
+// which clippy's approx_constant lint flags — they are data, not constant approximations.
+#[allow(clippy::approx_constant)]
 #[rustfmt::skip]
 const MAKE_LINK_ORACLE: &[(&str, f64, f64, f64)] = &[
     ("probit", -2.0, 2.275013194818e-02, 5.399096651319e-02),

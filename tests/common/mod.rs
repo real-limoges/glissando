@@ -188,6 +188,36 @@ impl Generator {
         (Array1::from_vec(y), data)
     }
 
+    /// Box-Cox–Cole-Green response with log-linear median: `log(μ) = a + b·x`,
+    /// constant `σ`, `ν`. Drawn by inverse Box-Cox transform of a standard normal:
+    /// `y = μ·(1 + νσz)^(1/ν)` (`ν = 0` → `μ·e^{σz}`). `x` is evenly spaced on `[0, 1]`.
+    pub fn bccg_data(
+        &mut self,
+        n: usize,
+        intercept: f64,
+        slope: f64,
+        sigma: f64,
+        nu: f64,
+    ) -> (Array1<f64>, DataSet) {
+        let std_normal = Normal::new(0.0, 1.0).unwrap();
+        let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&xv| {
+                let mu = (intercept + slope * xv).exp();
+                let z: f64 = std_normal.sample(&mut self.rng);
+                if nu.abs() < 1e-12 {
+                    mu * (sigma * z).exp()
+                } else {
+                    mu * (1.0 + nu * sigma * z).max(1e-10).powf(1.0 / nu)
+                }
+            })
+            .collect();
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::from_vec(x));
+        (Array1::from_vec(y), data)
+    }
+
     /// Gaussian response driven by `x1` only, with two pure-noise predictors
     /// `x2`, `x3`: `y ~ N(a + b·x1, σ)`. Used by model-selection tests where the
     /// search must keep `x1` and reject the noise columns. All three predictors
