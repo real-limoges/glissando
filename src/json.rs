@@ -19,6 +19,9 @@
 //!   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}], "sigma": [{"Intercept": null}]}`.
 //! - **config** (`parse_config`): `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`
 //!   (`criterion` is `"reml"`, `"gcv"`, or `"fellner_schall"`; all fields optional).
+//!   Add `"links"` to override a parameter's link by name, e.g.
+//!   `{"links": {"mu": "probit"}}` — accepted names: `"identity"`, `"log"`, `"logit"`,
+//!   `"probit"`, `"cloglog"`, `"inverse"`, `"inverse_square"`, `"sqrt"`, `"cauchit"`.
 //! - **predictions** (`serialize_predictions`): `{"mu": [..], "sigma": [..]}`.
 //! - **predictions with SE** (`serialize_predictions_with_se`):
 //!   `{"mu": {"fitted": [..], "eta": [..], "se_eta": [..]}, ...}`.

@@ -19,7 +19,7 @@ mod solver;
 
 use self::assembler::{assemble_model_matrices, resolve_terms};
 
-use super::distributions::{Distribution, Link};
+use super::distributions::{link_from_name, Distribution, Link};
 use super::error::GamlssError;
 use super::terms::{Smooth, Term};
 use super::types::*;
@@ -88,6 +88,35 @@ pub struct FitConfig {
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
     pub gd_tolerance: f64,
+    /// Per-parameter link overrides, keyed by distribution-parameter name
+    /// (e.g. `"mu" → "probit"`). Empty (the default) uses each family's
+    /// [`default_link`](crate::distributions::Distribution::default_link). Names are
+    /// validated against [`link_from_name`](crate::distributions::link_from_name) at
+    /// fit time, so an unknown link yields [`GamlssError::Input`]. Build ergonomically
+    /// with [`with_link`](FitConfig::with_link) / [`with_links`](FitConfig::with_links).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub links: IndexMap<String, String>,
+}
+
+impl FitConfig {
+    /// Override the link for a single distribution parameter, returning `self` for
+    /// chaining: `FitConfig::default().with_link("mu", "probit")`.
+    #[must_use]
+    pub fn with_link(mut self, param: impl Into<String>, link: impl Into<String>) -> Self {
+        self.links.insert(param.into(), link.into());
+        self
+    }
+
+    /// Override the links for several parameters at once, returning `self` for chaining.
+    #[must_use]
+    pub fn with_links<K: Into<String>, V: Into<String>>(
+        mut self,
+        links: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
+        self.links
+            .extend(links.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
 }
 
 #[cfg(feature = "serde")]
@@ -115,6 +144,7 @@ impl Default for FitConfig {
             criterion: SmoothingCriterion::default(),
             step_halving: true,
             gd_tolerance: DEFAULT_GD_TOLERANCE,
+            links: IndexMap::new(),
         }
     }
 }
@@ -186,6 +216,12 @@ pub struct FittedParameter {
     /// `terms`. Column order matches `coefficients` and the design matrix.
     #[cfg_attr(feature = "serde", serde(default))]
     pub term_blocks: Vec<(String, usize, usize)>,
+    /// Canonical name of an *overridden* link (see
+    /// [`FitConfig::links`]), or `None` when the family default was used. `None`
+    /// re-derives the link via `default_link()` at predict time, so models fitted
+    /// before this field existed deserialize unchanged.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub link: Option<String>,
 }
 
 pub(super) struct FittingParameter {
@@ -275,7 +311,13 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // Resolve CrSpline1D knots once from training data so they are stored in
         // FittedParameter::terms and replayed verbatim at predict time.
         let terms = resolve_terms(formula_terms, data)?;
-        let link = family.default_link(param_name)?;
+        // Honor a per-parameter link override from the config; otherwise the
+        // family's canonical default. The chosen link name is persisted into the
+        // FittedParameter so predict reconstructs the *same* link.
+        let link = match config.links.get(&param_name_str) {
+            Some(name) => link_from_name(name)?,
+            None => family.default_link(param_name)?,
+        };
 
         let (x_model, penalty_matrices, total_coeffs, term_layouts) =
             assemble_model_matrices(data, n_obs, &terms)?;
@@ -495,6 +537,10 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             })
             .collect();
 
+        // Persist the link name only when the user overrode it; a default-link
+        // parameter stays `None` so predict re-derives via `default_link`.
+        let link = config.links.get(&name).cloned();
+
         let fitted_param = FittedParameter {
             coefficients: model.beta,
             covariance,
@@ -506,6 +552,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             edf: model.edf,
             term_edf: model.term_edf,
             term_blocks,
+            link,
         };
         final_results.insert(name, fitted_param);
     }
