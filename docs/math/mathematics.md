@@ -613,6 +613,24 @@ Q(p) = \mu\bigl(1 + \nu\sigma\,\Phi^{-1}(p)\bigr)^{1/\nu} \quad (\nu \ne 0; \ \ 
 $$
 Since $\mathrm{d}z/\mathrm{d}y = (y/\mu)^{\nu-1}/(\sigma\mu) > 0$ for $y > 0$, $F$ is a valid increasing CDF. Two special cases give independent oracles: at $\nu = 1$, BCCG is $N(\mu, \mu\sigma)$; at $\nu = 0$, it is $\mathrm{LogNormal}(\log\mu, \sigma)$. The mean is not $\mu$ (which is the median); the implementation uses the second-order approximation $E[Y] \approx \mu(1 + \tfrac{1}{2}\sigma^2(1-\nu))$, exact at $\nu \in \{0, 1\}$.
 
+#### BCT and BCPE: the same spine, a heavier-tailed $z$
+
+BCT and BCPE add a fourth parameter $\tau > 0$ (log link) by replacing the standard normal that $z$ follows. The Box-Cox spine ($z$, $\partial z/\partial\nu$, the Jacobian) is **unchanged**; only $\log h(z)$, the $\mu/\sigma/\nu$ scores' dependence on $\mathrm{d}\ell/\mathrm{d}z$, and the new $\tau$ column differ. Writing $D = -\mathrm{d}\ell/\mathrm{d}z$ (so $D = z$ for the normal), the η-scale scores keep one shape:
+$$
+u_\mu = \frac{D\,T}{\sigma} - \nu, \qquad
+u_\sigma = zD - 1, \qquad
+u_\nu = -D\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+
+**BCT** (Box-Cox-$t$): $z \sim t_\tau$ (Student-$t$, $\tau$ degrees of freedom), so $\log h(z) = \log\Gamma(\tfrac{\tau+1}{2}) - \log\Gamma(\tfrac{\tau}{2}) - \tfrac12\log(\pi\tau) - \tfrac{\tau+1}{2}\log(1 + z^2/\tau)$. The robustifying weight $w_t = (\tau+1)/(\tau+z^2)$ gives $D = w_t z$, so $u_\mu = w_t zT/\sigma - \nu$, $u_\sigma = w_t z^2 - 1$. The $\tau$ score and information mirror [`StudentT`](#12-student-t-distribution)'s df parameter; $F(y) = T_\tau(z)$. As $\tau \to \infty$, $t \to$ normal and BCT $\to$ BCCG.
+
+**BCPE** (Box-Cox power-exponential): $z$ follows a variance-standardized power-exponential with shape $\tau$. With $c^2 = 2^{-2/\tau}\,\Gamma(1/\tau)/\Gamma(3/\tau)$,
+$$
+\log h(z) = N(\tau) - \tfrac12\bigl|z/c\bigr|^\tau, \qquad
+N(\tau) = \log\tau - \log 2 - \tfrac32\log\Gamma(1/\tau) + \tfrac12\log\Gamma(3/\tau),
+$$
+so $D = \tfrac{\tau}{2c}|z/c|^{\tau-1}\operatorname{sign}(z)$ and $u_\sigma = \tfrac{\tau}{2}|z/c|^\tau - 1$. The CDF is the regularized incomplete gamma $F(y) = \tfrac12 + \tfrac12\operatorname{sign}(z)\,P\!\bigl(1/\tau,\ \tfrac12|z/c|^\tau\bigr)$, inverted for the quantile via a $\mathrm{Gamma}(1/\tau, 1)$ quantile. $\tau = 2$ is the normal, so BCPE $\to$ BCCG; $\tau < 2$ is leptokurtic, $\tau > 2$ platykurtic. The exact $\tau$ Fisher information uses the $\mathrm{Gamma}(1/\tau, 1)$ moments of $v = \tfrac12|z/c|^\tau$: writing $\partial\ell/\partial\tau = N'(\tau) + P v + Q\,v\log v$, $\;\mathrm{E}[(\partial\ell/\partial\tau)^2]$ closes in $\psi, \psi'$ at $a = 1/\tau$.
+
 ---
 
 ### 1.10 Example: Computing Derivatives for Gaussian Data

@@ -12,7 +12,7 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use crate::distributions::{
-    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG,
+    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG, BCPE, BCT,
 };
 use crate::ffi::FamilyType;
 use crate::fitting::selection::{self, Direction, StepScope};
@@ -43,6 +43,8 @@ py_distribution!(PyNegativeBinomial, "NegativeBinomial");
 py_distribution!(PyBeta, "Beta");
 py_distribution!(PyStudentT, "StudentT");
 py_distribution!(PyBCCG, "BCCG");
+py_distribution!(PyBCT, "BCT");
+py_distribution!(PyBCPE, "BCPE");
 
 /// Binomial carries `n_trials` state, so it gets a manual `pyclass`.
 #[pyclass(name = "Binomial", frozen)]
@@ -193,12 +195,18 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyBCCG>>().is_ok() {
         return Ok(FamilyType::BCCG(BCCG::new()));
     }
+    if family_obj.extract::<PyRef<PyBCT>>().is_ok() {
+        return Ok(FamilyType::BCT(BCT::new()));
+    }
+    if family_obj.extract::<PyRef<PyBCPE>>().is_ok() {
+        return Ok(FamilyType::BCPE(BCPE::new()));
+    }
     if let Ok(o) = family_obj.extract::<PyRef<PyOcat>>() {
         return Ok(FamilyType::Ocat(Ocat::new(o.n_categories)));
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), BCCG(), or Ocat(n_categories)",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), BCCG(), BCT(), BCPE(), or Ocat(n_categories)",
     ))
 }
 
@@ -729,6 +737,8 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyBeta>()?;
     m.add_class::<PyStudentT>()?;
     m.add_class::<PyBCCG>()?;
+    m.add_class::<PyBCT>()?;
+    m.add_class::<PyBCPE>()?;
     m.add_class::<PyOcat>()?;
     Ok(())
 }
