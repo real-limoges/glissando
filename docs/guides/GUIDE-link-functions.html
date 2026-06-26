@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · link-function expansion implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  tr.done td { opacity:.7; }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>B · Link functions</b></p>
+  <h1>glissando <span class="sub">· link-function expansion</span></h1>
+  <p class="lede">Implements <span class="id">LINK-1</span>…<span class="id">LINK-6</span> — probit, complementary log-log, inverse, inverse-square, sqrt, and cauchit / shifted links. The smallest and most mechanical of the remaining workstreams: it extends a 4-impl pattern with <b style="color:#fff">no new trait machinery</b>. The <code>mu_eta</code> hinge it needs (<span class="id done">TRAIT-2</span>) already shipped.</p>
+  <p class="lede"><b style="color:#fff">Touches:</b> <code>src/distributions/links.rs</code> (the only file with real logic), <code>src/distributions/mod.rs</code> (re-export line), and the by-name link lookup used by <code>default_link</code> / the JSON facade.</p>
+
+  <h2 class="part">The pattern you are extending</h2>
+  <div class="ns">
+    <p>A link function <code>g</code> maps a response-scale parameter <code>μ</code> to the linear predictor <code>η = g(μ)</code>. Every link in glissando is a zero-field unit struct that implements the <code>Link</code> trait (<code>src/distributions/links.rs:15</code>) with three methods:</p>
+    <pre><code>pub trait Link: Debug + Send + Sync {
+    fn link(&self, mu: f64) -> f64;        // η = g(μ)
+    fn inv_link(&self, eta: f64) -> f64;   // μ = g⁻¹(η)
+    fn mu_eta(&self, eta: f64) -> f64 {    // dμ/dη = (g⁻¹)'(η)
+        let h = 1e-6;                       // default: symmetric finite diff
+        (self.inv_link(eta + h) - self.inv_link(eta - h)) / (2.0 * h)
+    }
+}</code></pre>
+    <p>The IRLS inner loop is η-scale: the generic weight is <code>mu_eta(η)² · i_θ</code> (Fisher info on the natural scale). Supplying <code>mu_eta</code> <b>analytically</b> is what makes a link usable in scoring — the default finite difference works but is slower and noisier. The four existing links (<code>IdentityLink</code>, <code>LogLink</code>, <code>LogitLink</code>, <code>FlooredLogLink</code>, <code>links.rs:37–123</code>) are your copy-paste templates; <code>LogitLink</code> at <code>links.rs:109</code> is the closest analog for a bounded link.</p>
+    <p><b>Saturation guards (mandatory).</b> Reuse the module constants at <code>links.rs:8–12</code>: <code>MIN_POSITIVE = 1e-10</code> (clamp μ off 0), <code>MAX_ETA = 30.0</code> / <code>MIN_ETA = −30.0</code> (clamp η to keep <code>exp</code> finite). Every new link must clamp the same way <code>LogLink</code>/<code>LogitLink</code> do, or fitting blows up at the boundaries.</p>
+  </div>
+
+  <h2 class="part">Build order</h2>
+  <ol class="steps">
+    <li><b>Add the six structs in <code>links.rs</code>.</b> Each is <code>struct XLink;</code> + <code>impl Link for XLink</code> with a closed-form <code>mu_eta</code>. The math per link:
+      <div class="sub2" style="margin-top:.5rem">
+        <table style="width:100%; border-collapse:collapse">
+          <tr><td style="padding:.25rem 0; width:1%; white-space:nowrap; padding-right:1rem"><span class="id">LINK-1</span></td><td><b>Probit</b> — <code>link = Φ⁻¹(μ)</code>, <code>inv_link = Φ(η)</code>, <code>mu_eta = φ(η)</code>. Needs the standard-normal CDF Φ and PDF φ. Glissando already evaluates Φ inside Gaussian <code>cdf</code> (<code>src/distributions/gaussian.rs</code>) and has special functions in <code>src/math.rs</code> — reuse, don't reimplement <code>erf</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-2</span></td><td><b>cloglog</b> — <code>link = ln(−ln(1−μ))</code>, <code>inv_link = 1 − exp(−eᶦ)</code>, <code>mu_eta = exp(η − eᶦ)</code> (where <code>eᶦ = exp(η)</code>). Clamp η to <code>[MIN_ETA, MAX_ETA]</code> before <code>exp</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-3</span></td><td><b>inverse</b> — <code>link = 1/μ</code>, <code>inv_link = 1/η</code>, <code>mu_eta = −1/η²</code>. Guard <code>η</code> away from 0 with <code>MIN_POSITIVE</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-4</span></td><td><b>inverse-square</b> — <code>link = 1/μ²</code>, <code>inv_link = η^(−1/2)</code>, <code>mu_eta = −½·η^(−3/2)</code>. η stays positive.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-5</span></td><td><b>sqrt</b> — <code>link = √μ</code>, <code>inv_link = η²</code>, <code>mu_eta = 2η</code>. The Poisson variance-stabilizing link.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-6</span></td><td><b>cauchit</b> — <code>link = tan(π(μ−½))</code>, <code>inv_link = ½ + atan(η)/π</code>, <code>mu_eta = 1/(π(1+η²))</code>; plus shifted/"own" bounded-logit variants (a logit on <code>(μ−a)/(b−a)</code>) carrying the bounds as struct fields — the one case that is <b>not</b> a unit struct.</td></tr>
+        </table>
+      </div>
+    </li>
+    <li><b>Re-export them</b> from <code>src/distributions/mod.rs:13</code> — extend the existing <code>pub use links::{FlooredLogLink, IdentityLink, Link, LogLink, LogitLink};</code> line.</li>
+    <li><b>Wire selection by name.</b> Add the new variants everywhere a link is chosen by string: per-family <code>default_link</code> impls that should adopt a new canonical link (e.g. let Gamma offer <span class="id">LINK-3</span>, Poisson <span class="id">LINK-5</span>), and the JSON link parser so a saved/loaded model and the bindings can name <code>"probit"</code>, <code>"cloglog"</code>, etc. Grep for the existing link strings (<code>"identity"</code>, <code>"log"</code>, <code>"logit"</code>) to find every switch that needs a new arm.</li>
+  </ol>
+
+  <h2 class="part">Tests &amp; reference oracle</h2>
+  <div class="ns">
+    <p>Extend the existing <code>mod tests</code> in <code>links.rs:125–283</code> — it already has the scaffolding:</p>
+    <ul>
+      <li><b>Analytic vs finite-difference <code>mu_eta</code>.</b> Add every new link to the <code>[&amp;dyn Link; N]</code> array in <code>mu_eta_analytic_matches_finite_difference</code> (<code>links.rs:188</code>). It reuses the <code>fd_mu_eta</code> oracle (<code>links.rs:164</code>) — your closed form must match the finite difference to <code>1e-5</code> across the η grid. This single test catches almost every algebra slip.</li>
+      <li><b>Round-trip proptests.</b> Mirror <code>log_link_round_trip_in_safe_range</code> (<code>links.rs:260</code>): <code>link(inv_link(η)) ≈ η</code> inside each link's safe η range, and the range/sign invariants (e.g. cloglog/probit <code>inv_link ∈ (0,1)</code>).</li>
+      <li><b>Boundary saturation.</b> Mirror <code>logit_link_handles_boundary_probabilities</code> (<code>links.rs:149</code>): <code>link(0)</code>, <code>link(1)</code>, <code>inv_link(±1e6)</code> all finite and in range.</li>
+    </ul>
+    <p><b>External oracle:</b> R <code>stats::make.link("probit"|"cloglog"|"inverse"|"sqrt"|"cauchit")</code> exposes <code>linkfun</code>, <code>linkinv</code>, and <code>mu.eta</code>. Tabulate them at a grid of η and assert glissando matches. (cloglog/probit/cauchit are all in base R; inverse-square is <code>"1/mu^2"</code>.)</p>
+  </div>
+
+  <h2 class="part">Cross-surface bindings <span class="id">BIND-3</span></h2>
+  <div class="ns">
+    <p>Links are selected by string, so there is no new typed surface — the binding work is just accepting the new names. Once step 3 teaches the JSON link parser the new strings, the WASM (<code>src/wasm.rs</code>) and Python (<code>src/python.rs</code>) distribution constructors carry them for free; add the names to each surface's link documentation / enum of accepted strings. No serialization change is needed — links round-trip by name.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">LINK-1..6</span></td><td>Six links impl <code>Link</code> with analytic <code>mu_eta</code>, re-exported, selectable by name on every surface.</td></tr>
+      <tr><td class="k">tests</td><td>All six in the analytic-vs-FD array; round-trip + boundary proptests green; <kbd>cargo test -p glissando links</kbd> passes.</td></tr>
+      <tr><td class="k">parity</td><td>η-grid table matches R <code>make.link</code> to tolerance.</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream B (LINK-1..6) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a></footer>
+</div>
+</body>
+</html>

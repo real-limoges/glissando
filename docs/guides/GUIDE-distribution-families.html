@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · new distribution families implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b></p>
+  <h1>glissando <span class="sub">· new distribution families (Box-Cox)</span></h1>
+  <p class="lede">Implements <span class="id">DIST-1</span> — the Box-Cox power family <b style="color:#fff">BCCG</b> (Cole-Green), <b style="color:#fff">BCT</b> (Box-Cox-t), <b style="color:#fff">BCPE</b> (power exponential): the distributions GAMLSS is known for and #4 on the stack-rank. It is written as a <b style="color:#fff">worked example of the whole <code>Distribution</code> trait</b>, so it doubles as the template for every later family (<span class="id">DIST-2</span>/<span class="id">DIST-3</span>/<span class="id">DIST-4</span>/<span class="id">DIST-5</span>).</p>
+  <p class="lede"><b style="color:#fff">Why these first:</b> BCCG models a skew positive response by Box-Cox-transforming it to a standard normal, parameterized by median <code>μ</code>, coefficient-of-variation <code>σ</code>, and skewness <code>ν</code>. It is the engine behind LMS centile curves (growth charts) — the canonical GAMLSS deliverable that <span class="id done">INFER-2</span> centiles already exist to consume.</p>
+
+  <h2 class="part">The trait checklist</h2>
+  <div class="ns">
+    <p>A family is a struct implementing <code>Distribution</code> (<code>src/distributions/mod.rs:32</code>). Below is every method, with the BCCG answer. <code>student_t.rs</code> is the closest existing template — 3 parameters (μ/σ/ν), robust seeds — so copy its file shape.</p>
+    <table style="width:100%; border-collapse:collapse; font-size:.92rem">
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>parameters()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)"><code>["mu","sigma","nu"]</code>.</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>default_link()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)">μ → log (μ is a positive median), σ → log, ν → identity. <em>(BCT/BCPE add a 4th positive param τ → log.)</em></td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>derivatives()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)">Score <code>u</code> + Fisher <code>w</code> per parameter, <b>on the η scale</b>. The math core — see below.</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>loglik_pointwise()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)">Per-row log-density. Drives the default <code>pdf</code> (<code>mod.rs:96</code>) for free.</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>cdf()</code> / <code>quantile()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)">Required (<code>mod.rs:104–120</code>). For BCCG both reduce to the normal Φ / Φ⁻¹ of the Box-Cox z-score (below).</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>variance()</code> / <code>expected_value()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)"><code>variance</code> for Pearson residuals; <code>expected_value</code> defaults to μ (<code>mod.rs:69</code>) — override since the BCCG mean ≠ median.</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>name()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)"><code>"BCCG"</code> — used in errors and the <code>from_name</code> factory.</td></tr>
+      <tr><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top"><code>initial_value()</code></td><td style="padding:.4rem .2rem; border-bottom:1px solid var(--line)">Robust seeds (<code>mod.rs:128</code>): μ₀ = median(y), σ₀ from a robust CV, ν₀ = 1 (start at the lognormal-ish identity). Mirrors StudentT's median/MAD seeding.</td></tr>
+      <tr><td style="padding:.4rem .2rem; white-space:nowrap; vertical-align:top"><code>is_discrete()</code></td><td style="padding:.4rem .2rem">Stays <code>false</code> (continuous, y &gt; 0).</td></tr>
+    </table>
+  </div>
+
+  <h2 class="part">The Box-Cox z-score (shared spine)</h2>
+  <div class="ns">
+    <p>All three families share one transform from <code>y &gt; 0</code> to a standardized residual <code>z</code>; they differ only in the distribution <code>z</code> follows.</p>
+    <pre><code>z = ((y/μ)^ν − 1) / (ν·σ)     if ν ≠ 0
+z = log(y/μ) / σ              if ν = 0   (limit)</code></pre>
+    <p>The log-density is the density of <code>z</code> plus the Jacobian <code>d z/d y</code>:</p>
+    <pre><code>log f(y) = log h(z) + (ν−1)·log(y) − ν·log(μ) − log(σ)</code></pre>
+    <ul>
+      <li><b>BCCG</b>: <code>h = standard normal</code> ⇒ <code>log h(z) = −½z² − ½log(2π)</code>. (gamlss truncates the lower tail at <code>y=0</code>; renormalize by <code>Φ(1/(σ|ν|))</code> for exactness, or note the approximation.)</li>
+      <li><b>BCT</b>: <code>z ~ t_τ</code> (Student-t with τ df) ⇒ adds the heavy-tail parameter <code>τ</code>; reuse the t-density already in <code>student_t.rs</code>.</li>
+      <li><b>BCPE</b>: <code>z ~ power-exponential(τ)</code> ⇒ adds a kurtosis parameter; needs the PE normalizing constant (gamma functions — <code>src/math.rs</code> has lgamma).</li>
+    </ul>
+    <p><code>cdf(y) = Φ(z)</code> (BCCG) and <code>quantile(p) = μ·(1 + ν·σ·Φ⁻¹(p))^(1/ν)</code> — invert the z-score. The full derivative forms (∂z/∂μ, ∂z/∂σ, ∂z/∂ν and the resulting score/Fisher) belong in <a href="../math/mathematics.md">docs/math/mathematics.md</a> §1 alongside the existing per-distribution derivations; digamma/trigamma for BCT/BCPE are in §2 / <code>src/math.rs</code>.</p>
+  </div>
+
+  <h2 class="part">Build order</h2>
+  <ol class="steps">
+    <li><b>New file <code>src/distributions/bccg.rs</code>.</b> Copy the shape of <code>student_t.rs</code> (μ/σ/ν struct, <code>Default</code>, the trait impl skeleton). Register the module in <code>src/distributions/mod.rs</code>.</li>
+    <li><b>Transform + likelihood first.</b> Implement the z-score helper, <code>loglik_pointwise</code>, <code>cdf</code>, <code>quantile</code>. These are independently testable before any derivative work and unblock <code>pdf</code> (default) and centiles.</li>
+    <li><b>Derivatives (the heavy step).</b> Implement <code>derivatives</code> returning score/Fisher for μ, σ, ν on the η scale. <b>Validate against a finite-difference of <code>loglik_pointwise</code></b> before trusting it — a wrong score silently degrades fits rather than erroring.</li>
+    <li><b>Register in the factory.</b> Add <code>"BCCG"</code> to the by-name distribution lookup that the trait-object factory uses (the same match that lists the existing 8 families), so native + JSON + WASM + Python can all instantiate it. Grep for an existing name like <code>"StudentT"</code> to find every arm.</li>
+    <li><b>Repeat for BCT then BCPE.</b> Same file-template; only <code>h(z)</code>, the extra parameter, and its derivative column change. Note in each file where it diverges from BCCG so the next family author sees the seam.</li>
+  </ol>
+
+  <h2 class="part">Tests &amp; reference oracle</h2>
+  <div class="ns">
+    <p><b>Oracle: R <code>gamlss</code> <code>BCCG()</code> / <code>BCT()</code> / <code>BCPE()</code></b> — the like-for-like Rigby-Stasinopoulos oracle with the <em>same</em> μ/σ/ν(/τ) parameterization. This matters: per the project's StudentT experience, compare against the matching <code>gamlss</code> family, <b>not</b> mgcv (mgcv has no Box-Cox analog). Use <code>gamlss</code>'s <code>dBCCG/pBCCG/qBCCG</code> for the distributional functions and a fitted <code>gamlss(y~..., family=BCCG)</code> for coefficients.</p>
+    <ul>
+      <li><b>Coefficient recovery</b> (<code>tests/correctness.rs</code> style): simulate from known μ/σ/ν via <code>qBCCG</code>, fit, assert recovery.</li>
+      <li><b>Parity</b> (<code>tests/mgcv_reference.rs</code> style, <code>#[ignore]</code>): fixtures from <code>benchmark/run_comparison.sh</code> (add a BCCG case to <code>fit_gamlss.R</code>); compare coefficients + fitted centiles.</li>
+      <li><b>Distributional round-trips</b>: <code>cdf(quantile(p)) ≈ p</code>; <code>pdf</code> integrates to ≈1 over a fine grid; finite-difference of <code>loglik_pointwise</code> matches <code>derivatives</code> at random (μ,σ,ν).</li>
+    </ul>
+  </div>
+
+  <h2 class="part">Cross-surface bindings <span class="id">BIND-3</span></h2>
+  <div class="ns">
+    <p>Surface the family exactly as the existing 8 are surfaced: a name in the JSON facade (<code>src/json.rs</code>), a constructor in the WASM distribution enum (<code>src/wasm.rs</code>), and a Python distribution class (<code>src/python.rs</code>). Because all of μ/σ/ν are <em>fitted</em> (not structural like Binomial <code>n</code> or Ocat <code>k</code>), <span class="id">SER-1</span> does <b>not</b> bite — BCCG round-trips through <code>to_json</code>/<code>from_json</code> by name with no stateful-distribution work. Add a centile worked example (<span class="id">DOC-3</span>) since the LMS growth-chart use case is the marquee demo.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIST-1</span></td><td>BCCG/BCT/BCPE impl <code>Distribution</code>; instantiable by name on all four surfaces.</td></tr>
+      <tr><td class="k">tests</td><td>Coefficient recovery + distributional round-trips green; derivative-vs-FD passes; <code>gamlss</code> parity fixture committed (<code>#[ignore]</code>).</td></tr>
+      <tr><td class="k">demo</td><td>An LMS centile curve reproduces a <code>gamlss</code> growth-chart fit.</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream C (DIST-1, template for DIST-2..5) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a></footer>
+</div>
+</body>
+</html>
