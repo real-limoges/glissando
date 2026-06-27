@@ -96,5 +96,8 @@ fn left_truncation_recovers_parameters() {
     // The truncated sample mean is biased high (the low tail is missing); the
     // wrapper corrects for it.
     let naive_mean = y.mean().unwrap();
-    assert!(naive_mean > true_mu + 0.2, "naive mean {naive_mean} biased high");
+    assert!(
+        naive_mean > true_mu + 0.2,
+        "naive mean {naive_mean} biased high"
+    );
 }

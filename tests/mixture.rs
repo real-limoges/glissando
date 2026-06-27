@@ -42,7 +42,10 @@ fn mixture_recovers_two_components() {
     let mix = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &config, Some(42)).unwrap();
 
     assert_eq!(mix.components.len(), 2);
-    assert!(mix.converged, "EM should converge on well-separated clusters");
+    assert!(
+        mix.converged,
+        "EM should converge on well-separated clusters"
+    );
     assert!(mix.log_likelihood.is_finite());
 
     // Recover the two intercepts (identity link ⇒ coefficient[0] is the mean).
@@ -52,8 +55,16 @@ fn mixture_recovers_two_components() {
         .map(|c| c.models["mu"].coefficients.0[0])
         .collect();
     means.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    assert!((means[0] - 0.0).abs() < 1.0, "low mean ≈ 0, got {}", means[0]);
-    assert!((means[1] - 6.0).abs() < 1.0, "high mean ≈ 6, got {}", means[1]);
+    assert!(
+        (means[0] - 0.0).abs() < 1.0,
+        "low mean ≈ 0, got {}",
+        means[0]
+    );
+    assert!(
+        (means[1] - 6.0).abs() < 1.0,
+        "high mean ≈ 6, got {}",
+        means[1]
+    );
 
     // Balanced clusters ⇒ weights near 0.5 each, summing to 1.
     let wsum: f64 = mix.weights.iter().sum();
@@ -70,7 +81,10 @@ fn mixture_beats_single_component() {
     let config = FitConfig::default();
 
     let single = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
-    let single_ll = single.diagnostics(&Gaussian::new(), &y).unwrap().log_likelihood;
+    let single_ll = single
+        .diagnostics(&Gaussian::new(), &y)
+        .unwrap()
+        .log_likelihood;
 
     let mix = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &config, Some(7)).unwrap();
 
@@ -82,7 +96,10 @@ fn mixture_beats_single_component() {
     );
     // AIC should also prefer the mixture for genuinely bimodal data.
     let single_aic = single.diagnostics(&Gaussian::new(), &y).unwrap().aic;
-    assert!(mix.aic() < single_aic, "mixture AIC should beat single-component");
+    assert!(
+        mix.aic() < single_aic,
+        "mixture AIC should beat single-component"
+    );
 }
 
 #[test]

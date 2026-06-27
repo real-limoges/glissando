@@ -73,7 +73,10 @@ fn right_censored_recovers_mean() {
     }
     // Sanity: censoring actually binds on a meaningful fraction.
     let n_cens = status.iter().filter(|s| **s == CensorStatus::Right).count();
-    assert!(n_cens > 20 && n_cens < n - 20, "censoring should be partial");
+    assert!(
+        n_cens > 20 && n_cens < n - 20,
+        "censoring should be partial"
+    );
 
     let data = dummy_data(n);
     let formula = intercept_only();
