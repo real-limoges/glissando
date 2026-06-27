@@ -81,8 +81,12 @@
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>B · Link functions</b></p>
   <h1>glissando <span class="sub">· link-function expansion</span></h1>
-  <p class="lede">Implements <span class="id">LINK-1</span>…<span class="id">LINK-6</span> — probit, complementary log-log, inverse, inverse-square, sqrt, and cauchit / shifted links. The smallest and most mechanical of the remaining workstreams: it extends a 4-impl pattern with <b style="color:#fff">no new trait machinery</b>. The <code>mu_eta</code> hinge it needs (<span class="id done">TRAIT-2</span>) already shipped.</p>
+  <p class="lede">Implements <span class="id done">LINK-1</span>…<span class="id done">LINK-6</span> — probit, complementary log-log, inverse, inverse-square, sqrt, and cauchit / shifted links. The smallest and most mechanical of the remaining workstreams: it extends a 4-impl pattern with <b style="color:#fff">no new trait machinery</b>. The <code>mu_eta</code> hinge it needs (<span class="id done">TRAIT-2</span>) already shipped.</p>
   <p class="lede"><b style="color:#fff">Touches:</b> <code>src/distributions/links.rs</code> (the only file with real logic), <code>src/distributions/mod.rs</code> (re-export line), and the by-name link lookup used by <code>default_link</code> / the JSON facade.</p>
+
+  <div class="ns" style="border-color:var(--good)">
+    <p><b style="color:var(--good)">Status — shipped.</b> All six links land in <code>src/distributions/links.rs</code> as <code>ProbitLink</code> / <code>CloglogLink</code> / <code>InverseLink</code> / <code>InverseSquareLink</code> / <code>SqrtLink</code> / <code>CauchitLink</code>, each with an analytic <code>mu_eta</code>, re-exported from <code>src/distributions/mod.rs</code>, and selectable by name through <code>link_from_name</code> (so the JSON / WASM / Python surfaces accept <code>"probit"</code>, <code>"cloglog"</code>, …). The analytic-vs-finite-difference and round-trip tests are green. <b>Still open:</b> the shifted / bounded "own"-logit variant noted under <span class="id done">LINK-6</span> (a non-unit link carrying its bounds) — the six canonical links are done.</p>
+  </div>
 
   <h2 class="part">The pattern you are extending</h2>
   <div class="ns">
@@ -104,17 +108,17 @@
     <li><b>Add the six structs in <code>links.rs</code>.</b> Each is <code>struct XLink;</code> + <code>impl Link for XLink</code> with a closed-form <code>mu_eta</code>. The math per link:
       <div class="sub2" style="margin-top:.5rem">
         <table style="width:100%; border-collapse:collapse">
-          <tr><td style="padding:.25rem 0; width:1%; white-space:nowrap; padding-right:1rem"><span class="id">LINK-1</span></td><td><b>Probit</b> — <code>link = Φ⁻¹(μ)</code>, <code>inv_link = Φ(η)</code>, <code>mu_eta = φ(η)</code>. Needs the standard-normal CDF Φ and PDF φ. Glissando already evaluates Φ inside Gaussian <code>cdf</code> (<code>src/distributions/gaussian.rs</code>) and has special functions in <code>src/math.rs</code> — reuse, don't reimplement <code>erf</code>.</td></tr>
-          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-2</span></td><td><b>cloglog</b> — <code>link = ln(−ln(1−μ))</code>, <code>inv_link = 1 − exp(−eᶦ)</code>, <code>mu_eta = exp(η − eᶦ)</code> (where <code>eᶦ = exp(η)</code>). Clamp η to <code>[MIN_ETA, MAX_ETA]</code> before <code>exp</code>.</td></tr>
-          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-3</span></td><td><b>inverse</b> — <code>link = 1/μ</code>, <code>inv_link = 1/η</code>, <code>mu_eta = −1/η²</code>. Guard <code>η</code> away from 0 with <code>MIN_POSITIVE</code>.</td></tr>
-          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-4</span></td><td><b>inverse-square</b> — <code>link = 1/μ²</code>, <code>inv_link = η^(−1/2)</code>, <code>mu_eta = −½·η^(−3/2)</code>. η stays positive.</td></tr>
-          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-5</span></td><td><b>sqrt</b> — <code>link = √μ</code>, <code>inv_link = η²</code>, <code>mu_eta = 2η</code>. The Poisson variance-stabilizing link.</td></tr>
-          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id">LINK-6</span></td><td><b>cauchit</b> — <code>link = tan(π(μ−½))</code>, <code>inv_link = ½ + atan(η)/π</code>, <code>mu_eta = 1/(π(1+η²))</code>; plus shifted/"own" bounded-logit variants (a logit on <code>(μ−a)/(b−a)</code>) carrying the bounds as struct fields — the one case that is <b>not</b> a unit struct.</td></tr>
+          <tr><td style="padding:.25rem 0; width:1%; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-1</span></td><td><b>Probit</b> — <code>link = Φ⁻¹(μ)</code>, <code>inv_link = Φ(η)</code>, <code>mu_eta = φ(η)</code>. Needs the standard-normal CDF Φ and PDF φ. Glissando already evaluates Φ inside Gaussian <code>cdf</code> (<code>src/distributions/gaussian.rs</code>) and has special functions in <code>src/math.rs</code> — reuse, don't reimplement <code>erf</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-2</span></td><td><b>cloglog</b> — <code>link = ln(−ln(1−μ))</code>, <code>inv_link = 1 − exp(−eᶦ)</code>, <code>mu_eta = exp(η − eᶦ)</code> (where <code>eᶦ = exp(η)</code>). Clamp η to <code>[MIN_ETA, MAX_ETA]</code> before <code>exp</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-3</span></td><td><b>inverse</b> — <code>link = 1/μ</code>, <code>inv_link = 1/η</code>, <code>mu_eta = −1/η²</code>. Guard <code>η</code> away from 0 with <code>MIN_POSITIVE</code>.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-4</span></td><td><b>inverse-square</b> — <code>link = 1/μ²</code>, <code>inv_link = η^(−1/2)</code>, <code>mu_eta = −½·η^(−3/2)</code>. η stays positive.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-5</span></td><td><b>sqrt</b> — <code>link = √μ</code>, <code>inv_link = η²</code>, <code>mu_eta = 2η</code>. The Poisson variance-stabilizing link.</td></tr>
+          <tr><td style="padding:.25rem 0; white-space:nowrap; padding-right:1rem"><span class="id done">LINK-6</span></td><td><b>cauchit</b> — <code>link = tan(π(μ−½))</code>, <code>inv_link = ½ + atan(η)/π</code>, <code>mu_eta = 1/(π(1+η²))</code>; plus shifted/"own" bounded-logit variants (a logit on <code>(μ−a)/(b−a)</code>) carrying the bounds as struct fields — the one case that is <b>not</b> a unit struct.</td></tr>
         </table>
       </div>
     </li>
     <li><b>Re-export them</b> from <code>src/distributions/mod.rs:13</code> — extend the existing <code>pub use links::{FlooredLogLink, IdentityLink, Link, LogLink, LogitLink};</code> line.</li>
-    <li><b>Wire selection by name.</b> Add the new variants everywhere a link is chosen by string: per-family <code>default_link</code> impls that should adopt a new canonical link (e.g. let Gamma offer <span class="id">LINK-3</span>, Poisson <span class="id">LINK-5</span>), and the JSON link parser so a saved/loaded model and the bindings can name <code>"probit"</code>, <code>"cloglog"</code>, etc. Grep for the existing link strings (<code>"identity"</code>, <code>"log"</code>, <code>"logit"</code>) to find every switch that needs a new arm.</li>
+    <li><b>Wire selection by name.</b> Add the new variants everywhere a link is chosen by string: per-family <code>default_link</code> impls that should adopt a new canonical link (e.g. let Gamma offer <span class="id done">LINK-3</span>, Poisson <span class="id done">LINK-5</span>), and the JSON link parser so a saved/loaded model and the bindings can name <code>"probit"</code>, <code>"cloglog"</code>, etc. Grep for the existing link strings (<code>"identity"</code>, <code>"log"</code>, <code>"logit"</code>) to find every switch that needs a new arm.</li>
   </ol>
 
   <h2 class="part">Tests &amp; reference oracle</h2>
@@ -136,7 +140,7 @@
   <h2 class="part">Done when</h2>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">LINK-1..6</span></td><td>Six links impl <code>Link</code> with analytic <code>mu_eta</code>, re-exported, selectable by name on every surface.</td></tr>
+      <tr><td class="k"><span class="id done">LINK-1..6</span></td><td>Six links impl <code>Link</code> with analytic <code>mu_eta</code>, re-exported, selectable by name on every surface.</td></tr>
       <tr><td class="k">tests</td><td>All six in the analytic-vs-FD array; round-trip + boundary proptests green; <kbd>cargo test -p glissando links</kbd> passes.</td></tr>
       <tr><td class="k">parity</td><td>η-grid table matches R <code>make.link</code> to tolerance.</td></tr>
     </table>

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structural likelihoods (STRUCT-1..3)** — `Censored`, `Truncated`, and
+  `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base
+  family, in `src/distributions/{censored,truncated,hurdle}.rs`. Censoring swaps
+  the density for a survival/interval probability built from the base `cdf`;
+  truncation renormalizes by the in-support mass; hurdle composes a logit-linked
+  zero atom (`xi`) with a zero-truncated base.
+- **Finite mixtures (STRUCT-4)** — `MixtureModel` and `fit_mixture` in
+  `src/fitting/mixture.rs` fit a `K`-component mixture by EM, reusing the
+  prior-weighted RS fit as the M-step. Re-exported at the crate root.
+- **`Distribution::cdf_eta_derivatives`** — a new trait hook returning analytic
+  `(∂F/∂η, ∂²F/∂η²)` per parameter; implemented for the location/scale parameters
+  of Gaussian, Student-t, and Gamma, with a central-difference fallback (shared
+  helper `src/distributions/structural.rs`) for shape parameters. Drives the
+  censoring/truncation score and observed-information weight.
+- **SER-1 serialization** — a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`)
+  and a `Distribution::descriptor` hook; `Binomial`, `Ocat`, and the structural
+  wrappers now round-trip through `to_json` / `from_json`, not just the stateless
+  families. `MixtureModel` has its own `to_json` / `from_json`.
+
 - `impl Display for GamlssModel` produces an R-style summary block (convergence
   status, iteration count, per-parameter EDF + λ values, truncated coefficients
   head).
@@ -44,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sanity check.
 
 ### Changed
+
+- **Breaking:** `GamlssModel::from_json` now returns `(Self, FamilyDescriptor)`
+  instead of `(Self, String)`, and `to_json` embeds a structured `FamilyDescriptor`
+  in place of a bare distribution name. Reconstruct the family with
+  `descriptor.build()` (the `json::load` helper does this for you, returning the
+  model plus a boxed distribution as before).
 
 - StudentT initialization is now robust to heavy tails: `μ` seeds from the
   sample median, `σ` from `1.4826·MAD(y)` (instead of mean / sample SD, which the

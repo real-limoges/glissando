@@ -10,6 +10,8 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 - **Flexible terms**: Intercept, linear effects, P-splines, tensor products, and random effects
 - **Automatic smoothing**: Smoothing parameters selected via REML (default), GCV, or Fellner-Schall
 - **Distributional outputs**: `cdf` / `pdf` / `quantile` per family, randomized quantile residuals, and centile / quantile prediction (the signature GAMLSS deliverables)
+- **Structural likelihoods** *(Rust API)*: censored, truncated, and hurdle responses via `Censored` / `Truncated` / `Hurdle` wrappers over any base family — survival-style data, detection limits, two-part zero models
+- **Finite mixtures** *(Rust API)*: `K`-component mixtures fit by EM (`fit_mixture` → `MixtureModel`)
 - **Model selection**: GAIC at any penalty `k`, stepwise term selection (`step_gaic`), and ANOVA / likelihood-ratio comparison (`ic_table`, `lr_test`)
 - **Robust fitting**: step-halving line search and global-deviance convergence in the RS loop
 - **Dual backends**: OpenBLAS (default, max performance) or pure Rust via nalgebra (no system deps)
@@ -119,6 +121,87 @@ let student_t = StudentT::new();          // Heavy-tailed continuous data
 let gamma = Gamma::new();                 // Positive continuous (e.g., durations)
 let neg_bin = NegativeBinomial::new();    // Overdispersed counts
 let beta = Beta::new();                   // Proportions/rates in (0, 1)
+```
+
+## Structural Likelihoods
+
+*(Rust API — these wrappers are not yet exposed on the WASM/Python surfaces.)*
+
+Censoring, truncation, and hurdle structure are **transformations of a base
+family's likelihood** given extra per-observation information. Each is a wrapper
+that holds a boxed base `Distribution` and fits the base family's parameters
+through the standard RS loop.
+
+**Censoring** — each row is observed exactly (`Event`), or known only to lie
+below (`Left`), above (`Right`, survival), or within an interval (`Interval`):
+
+```rust
+use glissando::distributions::{Gaussian, Censored, CensorStatus};
+use glissando::ndarray::Array1;
+
+// y carries the observed time; status the censoring code per row.
+let status = Array1::from_vec(vec![
+    CensorStatus::Event, CensorStatus::Right, CensorStatus::Event, CensorStatus::Right,
+]);
+let family = Censored::new(Box::new(Gaussian::new()), status);
+let model = GamlssModel::fit(&data, &y, &formula, &family)?;
+// Interval censoring: Censored::with_upper(base, status, upper_bounds)
+```
+
+**Truncation** — the response is only observed within `(lo, hi)`; out-of-range
+values are absent, not censored. Use `±∞` for an open side:
+
+```rust
+use glissando::distributions::{Gaussian, Truncated};
+use glissando::ndarray::Array1;
+
+let lower = Array1::from_elem(y.len(), 0.0);            // left-truncated at 0
+let upper = Array1::from_elem(y.len(), f64::INFINITY);
+let family = Truncated::new(Box::new(Gaussian::new()), lower, upper);
+let model = GamlssModel::fit(&data, &y, &formula, &family)?;
+```
+
+**Hurdle** — a point mass at zero plus a zero-truncated base for the positive
+part. Adds a logit-linked parameter `xi = P(Y = 0)`, so the formula needs an
+`"xi"` block:
+
+```rust
+use glissando::distributions::{Gamma, Hurdle};
+
+let formula = Formula::new()
+    .with_terms("mu", vec![Term::Intercept])
+    .with_terms("sigma", vec![Term::Intercept])
+    .with_terms("xi", vec![Term::Intercept]);     // the zero-atom probability
+let family = Hurdle::new(Box::new(Gamma::new()));
+let model = GamlssModel::fit(&data, &y, &formula, &family)?;
+```
+
+Censoring/truncation derivatives are analytic for the location/scale parameters
+of Gaussian, Student-t, and Gamma (via the `cdf_eta_derivatives` trait hook) and
+fall back to a central difference for shape parameters.
+
+## Finite Mixtures
+
+*(Rust API.)* Fit a `K`-component mixture `f(y) = Σ_k w_k g_k(y)` by EM — an
+outer loop over the existing prior-weighted RS fit:
+
+```rust
+use glissando::{fit_mixture, FitConfig};
+use glissando::distributions::Gaussian;
+
+// `seed` makes the randomized EM initialization reproducible.
+let mix = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &FitConfig::default(), Some(42))?;
+
+println!("converged: {}, weights: {:?}", mix.converged, mix.weights);
+println!("mixture log-likelihood: {}, AIC: {}", mix.log_likelihood, mix.aic());
+
+// Each component is a full GamlssModel.
+for comp in &mix.components {
+    println!("component mu intercept: {}", comp.models["mu"].coefficients[0]);
+}
+
+// Mixture mean on new data: Σ_k w_k · E_k[Y].
+let mean = mix.predict_expected_value(&new_data, &Gaussian::new())?;
 ```
 
 ## Term Types
@@ -519,7 +602,8 @@ let with_se     = json::predict_with_se(&model, family.as_ref(), r#"{"x": [6.0]}
 let samples     = json::predict_samples(&model, family.as_ref(), r#"{"x": [6.0]}"#, 500)?;
 let diagnostics = json::diagnostics(&model)?;   // converged, per-param + per-term EDF, warnings
 
-// Persist and reload (round-trips the distribution name too).
+// Persist and reload (round-trips the family descriptor, so wrappers/Binomial
+// rebuild correctly — `json::load` returns the model + boxed distribution).
 let blob = model.to_json(family.as_ref())?;
 let (restored, family) = json::load(&blob)?;
 # Ok::<(), glissando::GamlssError>(())
@@ -543,11 +627,15 @@ glissando = { git = "...", features = ["serialization"] }
 ```
 
 ```rust
-// Serialize a fitted model (native side)
+// Serialize a fitted model (native side). The JSON bundles a `FamilyDescriptor`,
+// so stateful families (`Binomial`) and the structural wrappers round-trip too —
+// not just a bare distribution name.
 let json = model.to_json(&Gaussian::new())?;
 
-// Deserialize (returns model + distribution name)
-let (model, dist_name) = GamlssModel::from_json(&json)?;
+// Deserialize — returns the model and a `FamilyDescriptor`; call `.build()` to
+// reconstruct the boxed distribution.
+let (model, descriptor) = GamlssModel::from_json(&json)?;
+let family = descriptor.build()?;   // Box<dyn Distribution>
 ```
 
 For browser-based fitting and prediction, build with the `wasm` feature:

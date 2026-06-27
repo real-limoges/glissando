@@ -732,6 +732,112 @@ F(k) - F(k-1) = f(k) \quad \text{(pmf at integer support)},
 $$
 which the randomized quantile residuals of §11.3 rely on to de-lump each atom.
 
+### 1.12 Structural Likelihoods: Censoring, Truncation, and Hurdles
+
+These are **not new families** — they are transformations of a base family's
+likelihood given extra per-observation information the analyst supplies. Each is
+a *wrapper distribution* that holds a boxed base `Distribution` and fits the base
+family's parameters through the ordinary RS loop; only `loglik_pointwise` and
+`derivatives` change. Throughout, $F$ and $f$ are the base CDF and density, and
+for a parameter $\theta$ with linear predictor $\eta_\theta$ write
+$F' = \partial F / \partial \eta_\theta$ and $F'' = \partial^2 F / \partial \eta_\theta^2$.
+The score is $u = \partial \ell / \partial \eta$ and the IRLS working weight is the
+**observed information** $w = -\partial^2 \ell / \partial \eta^2$, floored at
+$\texttt{MIN\_WEIGHT}$ to keep $X^T W X + S_\lambda$ positive definite (large
+steps are then tamed by the step-halving line search of §4.1).
+
+#### 1.12.1 Censoring (STRUCT-1)
+
+Each observation is exact, or known only to lie below / above / within an
+interval. The pointwise log-likelihood swaps the density for a survival /
+interval probability built from the base CDF:
+$$
+\ell =
+\begin{cases}
+\log f(y) & \text{event (exact } y) \\
+\log S(y) = \log\!\big(1 - F(y)\big) & \text{right-censored } (Y > y) \\
+\log F(y) & \text{left-censored } (Y \le y) \\
+\log\!\big(F(\text{hi}) - F(y)\big) & \text{interval } [y, \text{hi}]
+\end{cases}
+$$
+Differentiating with respect to $\eta$ gives the score and observed-information
+weight per censored row:
+$$
+\text{right:} \quad u = \frac{-F'}{1 - F}, \quad w = \frac{F''}{1 - F} + \left(\frac{F'}{1 - F}\right)^2,
+$$
+$$
+\text{left:} \quad u = \frac{F'}{F}, \quad w = -\frac{F''}{F} + \left(\frac{F'}{F}\right)^2,
+$$
+$$
+\text{interval } (D = F(\text{hi}) - F(y)): \quad u = \frac{D'}{D}, \quad w = -\frac{D''}{D} + \left(\frac{D'}{D}\right)^2,
+$$
+with $D' = F'(\text{hi}) - F'(y)$, $D'' = F''(\text{hi}) - F''(y)$. Event rows keep
+the base family's $(u, w)$, so an all-event `Censored` reduces exactly to the base
+log-likelihood. Source: `src/distributions/censored.rs`.
+
+#### 1.12.2 Truncation (STRUCT-2)
+
+The response is observed only within $(\text{lo}, \text{hi})$; out-of-range values
+are *absent*, not censored, so the density renormalizes by the in-support mass
+$D = F(\text{hi}) - F(\text{lo})$:
+$$
+\ell = \log f(y) - \log D, \qquad \text{lo} < y < \text{hi}.
+$$
+The score and weight add the normalizer's contribution to the base family's:
+$$
+u = u_{\text{base}} - \frac{D'}{D}, \qquad w = w_{\text{base}} + \frac{D''}{D} - \left(\frac{D'}{D}\right)^2 .
+$$
+A $(-\infty, \infty)$ truncation reduces to the base. The wrapper's CDF/quantile
+are renormalized onto the truncated support, $F_T(y) = (F(y) - F(\text{lo}))/D$.
+Source: `src/distributions/truncated.rs`.
+
+#### 1.12.3 Hurdle / two-part (STRUCT-3)
+
+A point mass at zero plus a *zero-truncated* base for the positive part, with a
+logit-linked atom $\xi = P(Y = 0)$:
+$$
+\ell =
+\begin{cases}
+\log \xi & y = 0 \\
+\log(1 - \xi) + \log f(y) - \log\!\big(1 - F(0)\big) & y > 0
+\end{cases}
+$$
+The $\xi$ atom is a Bernoulli on the zero indicator; with the logit link
+$\eta_\xi = \operatorname{logit}\xi$,
+$$
+u_\xi = \mathbf{1}(y = 0) - \xi, \qquad w_\xi = \xi(1 - \xi).
+$$
+The base parameters receive the zero-truncation score (truncating at $0$) on the
+positive rows and nothing on the zero rows. Contrast with zero-*inflation*, where
+the base can still emit $0$. Source: `src/distributions/hurdle.rs`.
+
+#### 1.12.4 Analytic CDF $\eta$-derivatives
+
+The censoring/truncation score and weight need $F'$ and $F''$ for each parameter.
+The `Distribution::cdf_eta_derivatives` hook supplies these **analytically for the
+location/scale parameters**, while non-elementary **shape-parameter** derivatives
+(which would require differentiating the regularized incomplete gamma/beta with
+respect to its shape argument) fall back to a central difference of the base
+`cdf` on that parameter's $\eta$. For $z = (y - \mu)/\sigma$ with standardized
+density $g$ (and $g' = \mathrm{d}g/\mathrm{d}z$):
+$$
+\text{location } \mu \;(\text{identity}): \quad \frac{\partial F}{\partial \eta} = -\frac{g}{\sigma}, \quad \frac{\partial^2 F}{\partial \eta^2} = \frac{g'}{\sigma^2},
+$$
+$$
+\text{scale } \sigma \;(\text{log}): \quad \frac{\partial F}{\partial \eta} = -z\,g, \quad \frac{\partial^2 F}{\partial \eta^2} = z\,g + z^2 g'.
+$$
+**Gaussian** uses $g = \varphi$, $g' = -z\varphi$, so $\partial^2 F/\partial \eta_\sigma^2 = z\varphi(1 - z^2)$.
+**Student-t** uses the standardized $t$ density with $g' = -g\,(\nu+1)z/(\nu + z^2)$ for $\mu, \sigma$; its $\nu$ is numeric.
+**Gamma** treats $\mu$ (log link) analytically: $\mu$ enters only the scale
+$\theta = \mu\sigma^2$ at fixed shape $\alpha = 1/\sigma^2$, so with $x = y/\theta$,
+$$
+\frac{\partial F}{\partial \eta_\mu} = -\frac{x^{\alpha} e^{-x}}{\Gamma(\alpha)}, \qquad \frac{\partial^2 F}{\partial \eta_\mu^2} = (x - \alpha)\,\frac{\partial F}{\partial \eta_\mu},
+$$
+while Gamma's $\sigma$ (which enters the shape) is numeric; **Beta** (both shape
+parameters) is fully numeric. Source: `gaussian.rs` / `student_t.rs` / `gamma.rs`
+(`cdf_eta_derivatives`), `src/distributions/structural.rs` (numeric fallback +
+the score/weight composition above).
+
 ---
 
 ## 2. Special Functions
@@ -949,6 +1055,39 @@ $$
 When `prior_weights = None`, the formula reduces to $W = \mathrm{diag}(\mathrm{safe\_w}_i)$, identical to the unweighted case.
 
 Source: `src/fitting/scoring.rs:61-141` (`step`).
+
+### 4.6 Finite Mixtures via EM (STRUCT-4)
+
+A $K$-component finite mixture has density
+$$
+f(y) = \sum_{k=1}^{K} w_k\, g_k(y), \qquad w_k \ge 0, \quad \sum_k w_k = 1,
+$$
+where each component $g_k$ is a GAMLSS of the same family with its own fitted
+parameters. The components' responsibilities couple the observations, so — unlike
+the per-row structural wrappers of §1.12 — a mixture cannot be a single
+`Distribution`; it is fit by an **EM outer loop** over the existing
+prior-weighted RS fit (§4.5):
+
+- **E-step** — posterior responsibility that observation $i$ came from component $k$:
+$$
+r_{ik} = \frac{w_k\, g_k(y_i)}{\sum_{j} w_j\, g_j(y_i)} .
+$$
+- **M-step** — refit each component by the prior-weighted RS fit with observation
+  weights $r_{\cdot k}$, then update the mixing weights
+  $w_k = \tfrac{1}{n}\sum_i r_{ik}$.
+
+Iteration continues until the mixture log-likelihood
+$$
+\ell_{\text{mix}} = \sum_i \log \sum_k w_k\, g_k(y_i)
+$$
+stops improving (relative change below tolerance); EM makes $\ell_{\text{mix}}$
+monotone non-decreasing. Initialization assigns each observation to the nearest of
+$K$ randomly drawn seed observations (a 1-D $k$-means seeding that breaks the
+symmetric "all components identical" fixed point), and a small responsibility
+floor keeps every component non-empty. The fitted `MixtureModel` reports
+$\ell_{\text{mix}}$, the component models, the weights, and AIC/BIC with effective
+degrees of freedom $\sum_k \mathrm{EDF}_k + (K - 1)$ (the $K-1$ free mixing
+weights). Source: `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`).
 
 ---
 
@@ -1760,6 +1899,12 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Beta derivatives (§1.6) | `src/distributions/beta.rs` |
 | Binomial derivatives (§1.7) | `src/distributions/binomial.rs` |
 | Ordered categorical derivatives (§1.8) | `src/distributions/ocat.rs` |
+| Censoring wrapper (§1.12.1) | `src/distributions/censored.rs` |
+| Truncation wrapper (§1.12.2) | `src/distributions/truncated.rs` |
+| Hurdle wrapper (§1.12.3) | `src/distributions/hurdle.rs` |
+| Analytic CDF $\eta$-derivatives + numeric fallback (§1.12.4) | `src/distributions/{gaussian,student_t,gamma}.rs` (`cdf_eta_derivatives`), `src/distributions/structural.rs` |
+| Finite mixtures via EM (§4.6) | `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`) |
+| `FamilyDescriptor` serialization (SER-1) | `src/distributions/descriptor.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
 | CDF / PDF / quantile / `is_discrete` trait methods (§1.11) | `src/distributions/mod.rs` + per-family files |

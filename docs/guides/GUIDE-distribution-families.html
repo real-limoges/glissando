@@ -80,8 +80,12 @@
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b></p>
   <h1>glissando <span class="sub">· new distribution families (Box-Cox)</span></h1>
-  <p class="lede">Implements <span class="id">DIST-1</span> — the Box-Cox power family <b style="color:#fff">BCCG</b> (Cole-Green), <b style="color:#fff">BCT</b> (Box-Cox-t), <b style="color:#fff">BCPE</b> (power exponential): the distributions GAMLSS is known for and #4 on the stack-rank. It is written as a <b style="color:#fff">worked example of the whole <code>Distribution</code> trait</b>, so it doubles as the template for every later family (<span class="id">DIST-2</span>/<span class="id">DIST-3</span>/<span class="id">DIST-4</span>/<span class="id">DIST-5</span>).</p>
+  <p class="lede">Implements <span class="id done">DIST-1</span> — the Box-Cox power family <b style="color:#fff">BCCG</b> (Cole-Green), <b style="color:#fff">BCT</b> (Box-Cox-t), <b style="color:#fff">BCPE</b> (power exponential): the distributions GAMLSS is known for and #4 on the stack-rank. It is written as a <b style="color:#fff">worked example of the whole <code>Distribution</code> trait</b>, so it doubles as the template for every later family (<span class="id">DIST-2</span>/<span class="id">DIST-3</span>/<span class="id">DIST-4</span>/<span class="id">DIST-5</span>).</p>
   <p class="lede"><b style="color:#fff">Why these first:</b> BCCG models a skew positive response by Box-Cox-transforming it to a standard normal, parameterized by median <code>μ</code>, coefficient-of-variation <code>σ</code>, and skewness <code>ν</code>. It is the engine behind LMS centile curves (growth charts) — the canonical GAMLSS deliverable that <span class="id done">INFER-2</span> centiles already exist to consume.</p>
+
+  <div class="ns" style="border-color:var(--good)">
+    <p><b style="color:var(--good)">Status — shipped.</b> <span class="id done">DIST-1</span> is implemented: <b>BCCG</b>, <b>BCT</b>, and <b>BCPE</b> live in <code>src/distributions/bccg.rs</code> / <code>bct.rs</code> / <code>bcpe.rs</code> (with the shared Box-Cox spine in <code>boxcox.rs</code>), full <code>Distribution</code> trait incl. <code>cdf</code>/<code>quantile</code>, score/Fisher derivatives validated against finite differences, and JSON round-trip parity. <span class="id">DIST-2</span>…<span class="id">DIST-5</span> remain as future families that reuse this template.</p>
+  </div>
 
   <h2 class="part">The trait checklist</h2>
   <div class="ns">
@@ -141,7 +145,7 @@ z = log(y/μ) / σ              if ν = 0   (limit)</code></pre>
   <h2 class="part">Done when</h2>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">DIST-1</span></td><td>BCCG/BCT/BCPE impl <code>Distribution</code>; instantiable by name on all four surfaces.</td></tr>
+      <tr><td class="k"><span class="id done">DIST-1</span></td><td>BCCG/BCT/BCPE impl <code>Distribution</code>; instantiable by name on all four surfaces.</td></tr>
       <tr><td class="k">tests</td><td>Coefficient recovery + distributional round-trips green; derivative-vs-FD passes; <code>gamlss</code> parity fixture committed (<code>#[ignore]</code>).</td></tr>
       <tr><td class="k">demo</td><td>An LMS centile curve reproduces a <code>gamlss</code> growth-chart fit.</td></tr>
     </table>
