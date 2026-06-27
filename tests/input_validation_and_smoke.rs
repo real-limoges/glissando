@@ -211,8 +211,8 @@ fn json_roundtrip_preserves_predictions() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "Gaussian");
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    assert_eq!(desc.build().unwrap().name(), "Gaussian");
     let preds2 = reloaded.predict(&data, &family).unwrap();
     for (a, b) in preds["mu"].iter().zip(preds2["mu"].iter()) {
         assert!(

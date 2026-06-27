@@ -91,9 +91,9 @@ fn bct_json_roundtrip_predicts_identically() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "BCT");
-    let reloaded_family = glissando::distributions::from_name(&dist_name).unwrap();
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    let reloaded_family = desc.build().unwrap();
+    assert_eq!(reloaded_family.name(), "BCT");
     let preds2 = reloaded.predict(&data, reloaded_family.as_ref()).unwrap();
     for key in ["mu", "sigma", "nu", "tau"] {
         for (a, b) in preds[key].iter().zip(preds2[key].iter()) {
@@ -112,9 +112,9 @@ fn bcpe_json_roundtrip_predicts_identically() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "BCPE");
-    let reloaded_family = glissando::distributions::from_name(&dist_name).unwrap();
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    let reloaded_family = desc.build().unwrap();
+    assert_eq!(reloaded_family.name(), "BCPE");
     let preds2 = reloaded.predict(&data, reloaded_family.as_ref()).unwrap();
     for key in ["mu", "sigma", "nu", "tau"] {
         for (a, b) in preds[key].iter().zip(preds2[key].iter()) {

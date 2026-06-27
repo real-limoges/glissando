@@ -13,6 +13,7 @@
 
 pub(crate) mod assembler;
 pub mod diagnostics;
+pub mod mixture;
 mod scoring;
 pub mod selection;
 mod solver;

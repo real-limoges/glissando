@@ -30,6 +30,12 @@ pub(crate) const MIN_WEIGHT: f64 = 1e-6;
 /// Score / Fisher-information pairs keyed by distribution-parameter name.
 pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
 
+/// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name — the same
+/// shape as a derivatives map, used by the structural wrappers (SER-1 / STRUCT).
+pub type CdfEtaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
+/// Result wrapper around [`CdfEtaMap`], returned by [`Distribution::cdf_eta_derivatives`].
+pub type CdfEtaResult = Result<CdfEtaMap, GamlssError>;
+
 /// A statistical distribution for GAMLSS, defining parameters, link functions, and
 /// score / Fisher-information pairs that drive the IRLS algorithm.
 pub trait Distribution: Debug + Send + Sync {
@@ -114,6 +120,27 @@ pub trait Distribution: Debug + Send + Sync {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError>;
 
+    /// Analytic first and second derivatives of the CDF `F(y_i)` with respect to
+    /// each parameter's linear predictor η, returned per parameter as
+    /// `(∂F/∂η, ∂²F/∂η²)`, vectorized over rows.
+    ///
+    /// Only parameters with a closed form are included — the default returns an
+    /// empty map. The structural wrappers ([`Censored`] / [`Truncated`]) build
+    /// the censoring / truncation score and observed-information weight from
+    /// these, and fall back to a central difference of [`Self::cdf`] (perturbed
+    /// on the parameter's η via its [`Self::default_link`]) for any parameter a
+    /// family omits. Location/scale parameters are analytic (Gaussian μ/σ,
+    /// Student-t μ/σ, Gamma μ); shape parameters whose CDF derivative is
+    /// non-elementary (Gamma σ, Student-t ν, both Beta params) are left to the
+    /// numeric fallback. See the structural-likelihoods guide.
+    fn cdf_eta_derivatives(
+        &self,
+        _y: &Array1<f64>,
+        _params: &HashMap<&str, &Array1<f64>>,
+    ) -> CdfEtaResult {
+        Ok(HashMap::new())
+    }
+
     /// Inverse CDF / quantile: smallest `y` with `F(y) ≥ p_i`, element-wise over
     /// `p ∈ (0, 1)`. Returns response-scale values.
     fn quantile(
@@ -125,6 +152,18 @@ pub trait Distribution: Debug + Send + Sync {
     /// Stable distribution name (e.g. `"Gaussian"`); used in error messages and
     /// for the WASM `from_name` lookup.
     fn name(&self) -> &'static str;
+
+    /// A serializable description of this family, sufficient to rebuild it via
+    /// [`FamilyDescriptor::build`] (SER-1).
+    ///
+    /// The default — `FamilyDescriptor::Named(self.name())` — round-trips every
+    /// stateless family through [`from_name`]. Stateful families ([`Binomial`],
+    /// [`Ocat`]) and the structural wrappers ([`Censored`] / [`Truncated`] /
+    /// [`Hurdle`]), which a bare name cannot reconstruct, override it to carry
+    /// their per-observation state and (recursively) their base family.
+    fn descriptor(&self) -> FamilyDescriptor {
+        FamilyDescriptor::Named(self.name().to_string())
+    }
 
     /// Initial response-scale value for a parameter, used to seed the IRLS loop.
     /// Override for distributions where `y` is not directly a sample of the parameter.
@@ -208,24 +247,33 @@ mod bct;
 mod beta;
 mod binomial;
 mod boxcox;
+mod censored;
+mod descriptor;
 mod gamma;
 mod gaussian;
+mod hurdle;
 mod negative_binomial;
 mod ocat;
 mod poisson;
+mod structural;
 mod student_t;
+mod truncated;
 
 pub use bccg::BCCG;
 pub use bcpe::BCPE;
 pub use bct::BCT;
 pub use beta::Beta;
 pub use binomial::Binomial;
+pub use censored::{CensorStatus, Censored};
+pub use descriptor::FamilyDescriptor;
+pub use hurdle::Hurdle;
 pub use gamma::Gamma;
 pub use gaussian::Gaussian;
 pub use negative_binomial::NegativeBinomial;
 pub use ocat::Ocat;
 pub use poisson::Poisson;
 pub use student_t::StudentT;
+pub use truncated::Truncated;
 
 /// Construct a stateless distribution from its name (e.g. for WASM JSON I/O).
 ///
@@ -347,6 +395,78 @@ pub(crate) mod test_helpers {
                 i,
                 analytic_u[i],
                 numeric_u
+            );
+        }
+    }
+
+    /// Check the analytic `(∂F/∂η, ∂²F/∂η²)` returned by [`Distribution::cdf_eta_derivatives`]
+    /// for `target` against central differences of [`Distribution::cdf`] on the
+    /// η-scale. Skips silently if the family does not supply `target` analytically
+    /// (the wrapper's numeric fallback covers those parameters).
+    pub fn check_cdf_eta_derivatives_via_finite_diff<D: Distribution + ?Sized>(
+        family: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        target: &str,
+        tol: f64,
+    ) {
+        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let derivs = family.cdf_eta_derivatives(y, &p).unwrap();
+        let Some((analytic_d1, analytic_d2)) = derivs.get(target) else {
+            return; // family leaves this parameter to the numeric fallback
+        };
+
+        let link = family.default_link(target).unwrap();
+        let eps: f64 = 1e-5;
+        let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
+        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
+            owned.iter().map(|(k, v)| (*k, v.clone())).collect();
+
+        for i in 0..y.len() {
+            let mu_orig = owned[idx].1[i];
+            let eta = link.link(mu_orig);
+
+            let f0 = {
+                let pv: HashMap<&str, &Array1<f64>> =
+                    perturbed.iter().map(|(k, v)| (*k, v)).collect();
+                family.cdf(y, &pv).unwrap()[i]
+            };
+            perturbed[idx].1[i] = link.inv_link(eta + eps);
+            let f_plus = {
+                let pv: HashMap<&str, &Array1<f64>> =
+                    perturbed.iter().map(|(k, v)| (*k, v)).collect();
+                family.cdf(y, &pv).unwrap()[i]
+            };
+            perturbed[idx].1[i] = link.inv_link(eta - eps);
+            let f_minus = {
+                let pv: HashMap<&str, &Array1<f64>> =
+                    perturbed.iter().map(|(k, v)| (*k, v)).collect();
+                family.cdf(y, &pv).unwrap()[i]
+            };
+            perturbed[idx].1[i] = mu_orig;
+
+            let numeric_d1 = (f_plus - f_minus) / (2.0 * eps);
+            let numeric_d2 = (f_plus - 2.0 * f0 + f_minus) / (eps * eps);
+
+            let s1 = analytic_d1[i].abs().max(1.0);
+            assert!(
+                (analytic_d1[i] - numeric_d1).abs() / s1 < tol,
+                "{}::{} obs {}: ∂F/∂η analytic={:.6e} numeric={:.6e}",
+                family.name(),
+                target,
+                i,
+                analytic_d1[i],
+                numeric_d1
+            );
+            let s2 = analytic_d2[i].abs().max(1.0);
+            assert!(
+                (analytic_d2[i] - numeric_d2).abs() / s2 < tol,
+                "{}::{} obs {}: ∂²F/∂η² analytic={:.6e} numeric={:.6e}",
+                family.name(),
+                target,
+                i,
+                analytic_d2[i],
+                numeric_d2
             );
         }
     }

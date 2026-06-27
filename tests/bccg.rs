@@ -177,12 +177,12 @@ fn bccg_json_roundtrip_predicts_identically() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "BCCG");
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
 
     // The reloaded model predicts bit-for-bit — confirms μ/σ/ν and the family all
     // survive the round-trip and predict reconstructs the BCCG transform.
-    let reloaded_family = glissando::distributions::from_name(&dist_name).unwrap();
+    let reloaded_family = desc.build().unwrap();
+    assert_eq!(reloaded_family.name(), "BCCG");
     let preds2 = reloaded.predict(&data, reloaded_family.as_ref()).unwrap();
     for key in ["mu", "sigma", "nu"] {
         for (a, b) in preds[key].iter().zip(preds2[key].iter()) {

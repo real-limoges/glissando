@@ -140,7 +140,7 @@
 
   <h2>B · Link functions</h2>
   <div class="ns">
-    <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them.</p>
+    <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them. <b>Implementation guide:</b> <a href="../guides/GUIDE-link-functions.html">link functions</a>.</p>
   </div>
   <div class="loop">
     <table>
@@ -156,6 +156,7 @@
   <h2>C · Distribution families</h2>
   <div class="ns">
     <p>Implemented: Gaussian, Gamma, Poisson, Negative Binomial, Beta, Student-t, Binomial, Ocat (2–5 levels), and the Box-Cox family BCCG / BCT / BCPE (<span class="id done">DIST-1</span>). The catalog below is what <code>gamlss.dist</code> ships, grouped by family type.</p>
+    <p><b>Implementation guides:</b> <a href="../guides/GUIDE-distribution-families.html">Box-Cox (DIST-1)</a> is the worked trait template; <a href="../guides/GUIDE-continuous-and-count-families.html">continuous &amp; count families</a> covers <span class="id">DIST-2</span> / <span class="id">DIST-3</span> / <span class="id">DIST-4</span>; <a href="../guides/GUIDE-zero-inflated-and-tweedie.html">zero-inflated &amp; Tweedie</a> covers <span class="id">DIST-5</span> / <span class="id">DIST-7</span> / <span class="id">DIST-6</span>.</p>
   </div>
   <div class="loop">
     <table>
@@ -171,14 +172,14 @@
 
   <h2>D · Structural / likelihood modeling</h2>
   <div class="ns">
-    <p>The trait has no hooks for these; they need new machinery, not just new families.</p>
+    <p>The trait has no hooks for these; they need new machinery, not just new families. <b>Implementation guide:</b> <a href="../guides/GUIDE-structural-likelihoods.html">structural likelihoods</a> covers <span class="id done">STRUCT-1</span>..<span class="id done">STRUCT-4</span> (the wrapper-distribution + response-side-state approach).</p>
   </div>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">STRUCT-1</span></td><td>Censoring (left / right / interval) — survival-style response.</td></tr>
-      <tr><td class="k"><span class="id">STRUCT-2</span></td><td>Truncation (left / right / interval) bounds.</td></tr>
-      <tr><td class="k"><span class="id">STRUCT-3</span></td><td>Hurdle / two-part structure (generalizes zero-inflation cleanly).</td></tr>
-      <tr><td class="k"><span class="id">STRUCT-4</span></td><td>Finite mixture models (component machinery).</td></tr>
+      <tr><td class="k"><span class="id done">STRUCT-1</span></td><td>Censoring (left / right / interval) — survival-style response.</td></tr>
+      <tr><td class="k"><span class="id done">STRUCT-2</span></td><td>Truncation (left / right / interval) bounds.</td></tr>
+      <tr><td class="k"><span class="id done">STRUCT-3</span></td><td>Hurdle / two-part structure (generalizes zero-inflation cleanly).</td></tr>
+      <tr><td class="k"><span class="id done">STRUCT-4</span></td><td>Finite mixture models (component machinery).</td></tr>
     </table>
   </div>
 
@@ -243,7 +244,7 @@
 
   <h2>I · Data handling &amp; formula</h2>
   <div class="ns">
-    <p><code>DataSet</code> is <code>HashMap&lt;String, Array1&lt;f64&gt;&gt;</code> (all f64); <code>Formula</code> is term lists.</p>
+    <p><code>DataSet</code> is <code>HashMap&lt;String, Array1&lt;f64&gt;&gt;</code> (all f64); <code>Formula</code> is term lists. <b>Implementation guide:</b> <a href="../guides/GUIDE-data-and-formula.html">data &amp; formula</a>.</p>
   </div>
   <div class="loop">
     <table>
@@ -334,11 +335,11 @@
     <li class="done"><b><span class="id done">FIT-1</span> / <span class="id done">FIT-2</span></b> — ✓ Step-halving + global-deviance convergence (robustness for the heavy-tailed / skew families).</li>
     <li><b><span class="id">INFER-5</span> / <span class="id">INFER-6</span></b> / <span class="id done">INFER-7</span> — Smooth-term p-values, confidence intervals; <em>ANOVA (INFER-7) ✓ done</em>.</li>
     <li class="done"><b><span class="id done">DATA-1</span> / <span class="id done">DATA-2</span> / <span class="id done">DATA-3</span></b> — ✓ Factor / categorical encoding, interactions, offsets.</li>
-    <li><b><span class="id">STRUCT-1</span> / <span class="id">STRUCT-2</span></b> — Censoring and truncation.</li>
+    <li><b><span class="id done">STRUCT-1</span> / <span class="id done">STRUCT-2</span></b> — Censoring and truncation.</li>
     <li><b><span class="id">SMOOTH-1..4</span></b> — Cyclic, thin-plate, by-factor smooths, random slopes.</li>
     <li><b><span class="id done">DATA-5</span></b> ✓ / <b><span class="id">API-1</span> / <span class="id">API-2</span></b> — Formula parser <em>done</em>; fluent builder, <code>summary()</code> remain.</li>
     <li><b><span class="id">FIT-3</span> / <span class="id">FIT-4</span></b> — CG algorithm, GAIC / grid λ selection.</li>
-    <li><b><span class="id">STRUCT-3</span> / <span class="id">STRUCT-4</span></b> — Hurdle / mixture structure.</li>
+    <li><b><span class="id done">STRUCT-3</span> / <span class="id done">STRUCT-4</span></b> — Hurdle / mixture structure.</li>
     <li><b><span class="id">DIST-6</span></b> — Ocat beyond 5 categories.</li>
     <li><b><span class="id">DIAG-3</span> / <span class="id">DIAG-4</span> / <span class="id">DIAG-5</span></b> — Deviance residuals, GoF stats, partial-effect plots.</li>
     <li><b><span class="id">SMOOTH-5..7</span></b> — Monotonic / SCAM, &gt;2D tensors, MRF / adaptive / factor-smooth.</li>

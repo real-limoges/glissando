@@ -150,8 +150,8 @@ fn factor_levels_survive_json_roundtrip() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
     let json = model.to_json(&Gaussian).unwrap();
-    let (reloaded, name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(name, "Gaussian");
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    assert_eq!(desc.build().unwrap().name(), "Gaussian");
 
     // Predict on data containing only levels {0, 2} — the stored levels keep the
     // column mapping stable (level 2 still lands in the second dummy column).
