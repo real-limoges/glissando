@@ -140,7 +140,7 @@
 
   <h2>B · Link functions</h2>
   <div class="ns">
-    <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them. <b>Implementation guide:</b> <a href="../guides/GUIDE-link-functions.html">link functions</a>.</p>
+    <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them. The six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span>) are done; the one remaining item is the shifted / bounded "own"-logit variant. <b>Implementation guide:</b> <a href="../guides/GUIDE-bounded-shifted-links.html">bounded / shifted links (LINK-7)</a>.</p>
   </div>
   <div class="loop">
     <table>
@@ -156,7 +156,7 @@
   <h2>C · Distribution families</h2>
   <div class="ns">
     <p>Implemented: Gaussian, Gamma, Poisson, Negative Binomial, Beta, Student-t, Binomial, Ocat (2–5 levels), and the Box-Cox family BCCG / BCT / BCPE (<span class="id done">DIST-1</span>). The catalog below is what <code>gamlss.dist</code> ships, grouped by family type.</p>
-    <p><b>Implementation guides:</b> <a href="../guides/GUIDE-distribution-families.html">Box-Cox (DIST-1)</a> is the worked trait template; <a href="../guides/GUIDE-continuous-and-count-families.html">continuous &amp; count families</a> covers <span class="id">DIST-2</span> / <span class="id">DIST-3</span> / <span class="id">DIST-4</span>; <a href="../guides/GUIDE-zero-inflated-and-tweedie.html">zero-inflated &amp; Tweedie</a> covers <span class="id">DIST-5</span> / <span class="id">DIST-7</span> / <span class="id">DIST-6</span>.</p>
+    <p><b>Implementation guides:</b> <a href="../guides/GUIDE-continuous-and-count-families.html">continuous &amp; count families</a> covers <span class="id">DIST-2</span> / <span class="id">DIST-3</span> / <span class="id">DIST-4</span>; <a href="../guides/GUIDE-zero-inflated-and-tweedie.html">zero-inflated &amp; Tweedie</a> covers <span class="id">DIST-5</span> / <span class="id">DIST-7</span> / <span class="id">DIST-6</span>; and <a href="../guides/GUIDE-continuous-positive-worked.html">continuous-positive, worked end-to-end</a> writes one DIST-2 family (Weibull) in full copy-paste Rust. (<span class="id done">DIST-1</span> Box-Cox is the shipped worked example all of these copy.)</p>
   </div>
   <div class="loop">
     <table>
@@ -172,7 +172,7 @@
 
   <h2>D · Structural / likelihood modeling</h2>
   <div class="ns">
-    <p>The trait has no hooks for these; they need new machinery, not just new families. <b>Implementation guide:</b> <a href="../guides/GUIDE-structural-likelihoods.html">structural likelihoods</a> covers <span class="id done">STRUCT-1</span>..<span class="id done">STRUCT-4</span> (the wrapper-distribution + response-side-state approach).</p>
+    <p>The trait has no hooks for these; they need new machinery, not just new families. <span class="id done">STRUCT-1</span>..<span class="id done">STRUCT-4</span> (the wrapper-distribution + response-side-state approach) have landed in the Rust crate. <b>Implementation guide:</b> <a href="../guides/GUIDE-structural-bindings-and-derivatives.html">structural wrappers — bindings &amp; derivatives</a> covers the two follow-on items (Python/WASM construction; analytic shape-parameter CDF derivatives).</p>
   </div>
   <div class="loop">
     <table>
@@ -185,7 +185,7 @@
 
   <h2>E · Smooth terms &amp; splines</h2>
   <div class="ns">
-    <p><code>Smooth</code> enum (<code>src/terms.rs</code>) has PSpline1D, CrSpline1D, TensorProduct (2D only), RandomEffect (intercept only). Each new variant needs: enum case + <code>splines.rs</code> basis + <code>assembler.rs</code> block mapping.</p>
+    <p><code>Smooth</code> enum (<code>src/terms.rs</code>) has PSpline1D, CrSpline1D, TensorProduct (2D only), RandomEffect (intercept only). Each new variant needs: enum case + a basis in <code>src/splines/</code> + <code>assembler.rs</code> block mapping. <b>Implementation guide:</b> <a href="../guides/GUIDE-smooth-terms-and-splines.html">smooth terms &amp; splines</a> covers <span class="id">SMOOTH-1</span> (cyclic) / <span class="id">SMOOTH-2</span> (thin-plate) / <span class="id">SMOOTH-4</span> (random slopes).</p>
   </div>
   <div class="loop">
     <table>
@@ -201,7 +201,7 @@
 
   <h2>F · Fitting engine robustness</h2>
   <div class="ns">
-    <p><code>fit_gamlss</code> (<code>src/fitting/mod.rs</code>) is RS-only with per-parameter coefficient-change convergence; stability comes from weight floors + step caps.</p>
+    <p><code>fit_gamlss</code> (<code>src/fitting/mod.rs</code>) is RS-only with per-parameter coefficient-change convergence; stability comes from weight floors + step caps. <b>Implementation guide:</b> <a href="../guides/GUIDE-fitting-algorithms.html">fitting algorithms — CG &amp; grid λ</a> covers <span class="id">FIT-3</span> (Cole-Green) / <span class="id">FIT-4</span> (grid λ).</p>
   </div>
   <div class="loop">
     <table>

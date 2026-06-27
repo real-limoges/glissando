@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · bounded / shifted links implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  tr.done td { opacity:.7; }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>B · Link functions</b> (follow-on)</p>
+  <h1>glissando <span class="sub">· bounded / shifted links</span></h1>
+  <p class="lede">Implements <span class="id">LINK-7</span> — the shifted / bounded <em>"own"</em>-logit link: a logit on the rescaled <code>(μ−a)/(b−a)</code> that maps an arbitrary open interval <code>(a, b)</code> onto the real line. This is the one piece of workstream B left open after the six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span> — probit, cloglog, inverse, inverse-square, sqrt, cauchit) shipped. The carved-out reason it was deferred: it is <b style="color:#fff">the only link that is not a zero-field unit struct</b> — it carries its bounds as state, which ripples through name-based selection and serialization.</p>
+  <p class="lede"><b style="color:#fff">Touches:</b> <code>src/distributions/links.rs</code> (the struct + analytic <code>mu_eta</code>), the by-name link lookup (<code>link_from_name</code>) and the JSON link parser (both of which assume stateless links today), and the link documentation on each binding surface.</p>
+
+  <h2 class="part">Why it is not a unit struct</h2>
+  <div class="ns">
+    <p>Every link shipped so far is a <code>struct XLink;</code> — zero fields, fully described by its type name, selectable by a single string (<code>"probit"</code>, <code>"logit"</code>, …). The bounded-logit link is different: <code>(a, b)</code> are <em>parameters of the link itself</em>, supplied by the analyst (the known physical bounds of a response that lives strictly inside <code>(a, b)</code> — a proportion on a non-<code>[0,1]</code> scale, a measurement with hard physical limits). The struct must therefore hold them:</p>
+    <pre><code>pub struct ShiftedLogitLink { pub lower: f64, pub upper: f64 }</code></pre>
+    <p>This is the same state problem the <em>stateful distributions</em> already have — <code>Binomial</code> carries <code>n_trials</code>, <code>Ocat</code> carries <code>n_categories</code>, and the structural wrappers carry response-side vectors. The pattern to copy is theirs, not the unit-struct links'.</p>
+  </div>
+
+  <h2 class="part">The math</h2>
+  <div class="ns">
+    <p>Let <code>w = b − a</code> be the interval width and <code>p = (μ − a)/w ∈ (0,1)</code> the rescaled position. The link is an ordinary logit on <code>p</code>:</p>
+    <pre><code>link    g(μ)   = ln( (μ−a) / (b−μ) )            // logit(p)
+inv_link g⁻¹(η) = a + w / (1 + e^(−η))           // a + w·σ(η)
+mu_eta   dμ/dη  = w · σ(η)·(1 − σ(η))            // w · σ'(η)</code></pre>
+    <p>where <code>σ</code> is the logistic sigmoid. With <code>a = 0, b = 1</code> it collapses exactly to <code>LogitLink</code> — so <code>LogitLink</code> (<code>links.rs:128</code>) is the literal template; add the affine rescale around it.</p>
+    <p>The full impl — copy <code>LogitLink</code>'s clamping verbatim and wrap the affine rescale around it:</p>
+    <pre><code>pub struct ShiftedLogitLink { pub lower: f64, pub upper: f64 }
+
+impl ShiftedLogitLink {
+    pub fn new(lower: f64, upper: f64) -&gt; Self {
+        assert!(lower &lt; upper, "ShiftedLogitLink needs lower &lt; upper");
+        Self { lower, upper }
+    }
+}
+
+impl Link for ShiftedLogitLink {
+    fn link(&amp;self, mu: f64) -&gt; f64 {
+        let w = self.upper - self.lower;
+        let p = ((mu - self.lower) / w).clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
+        (p / (1.0 - p)).ln().clamp(MIN_ETA, MAX_ETA)   // logit(p)
+    }
+    fn inv_link(&amp;self, eta: f64) -&gt; f64 {
+        let w = self.upper - self.lower;
+        let s = 1.0 / (1.0 + (-eta.clamp(MIN_ETA, MAX_ETA)).exp());   // σ(η)
+        self.lower + w * s
+    }
+    fn mu_eta(&amp;self, eta: f64) -&gt; f64 {
+        let w = self.upper - self.lower;
+        let s = 1.0 / (1.0 + (-eta.clamp(MIN_ETA, MAX_ETA)).exp());
+        w * s * (1.0 - s)                               // w · σ'(η)
+    }
+    fn name(&amp;self) -&gt; &amp;'static str { "shifted_logit" }
+}</code></pre>
+    <p><b>Saturation guards (mandatory).</b> Reuse the module constants at <code>links.rs:11–15</code>: clamp <code>μ</code> off the open boundaries with <code>MIN_POSITIVE</code> (so <code>μ−a</code> and <code>b−μ</code> never hit 0) and clamp <code>η</code> to <code>[MIN_ETA, MAX_ETA]</code> before <code>exp</code>, exactly as <code>LogitLink</code> does. Validate <code>a &lt; b</code> at construction.</p>
+  </div>
+
+  <h2 class="part">Build order</h2>
+  <ol class="steps">
+    <li><b>Add the struct in <code>links.rs</code>.</b> <code>ShiftedLogitLink { lower, upper }</code> + <code>impl Link</code> with the closed-form <code>mu_eta</code> above. Construct via <code>ShiftedLogitLink::new(a, b)</code> that asserts <code>a &lt; b</code>. Re-export from <code>src/distributions/mod.rs</code> alongside the other link structs.</li>
+    <li><b>Decide the name-selection story.</b> <code>link_from_name</code> and the JSON link parser map a bare string to a unit struct — they <em>cannot</em> carry <code>(a, b)</code>. Two options, pick and document one: (a) exclude it from <code>link_from_name</code> the way stateful distributions are excluded from <code>from_name</code>, constructed only through the typed API; or (b) extend the link-selection surface to a small struct/enum that carries the bounds (a <code>{ "link": "shifted_logit", "lower": a, "upper": b }</code> JSON shape). Option (b) is the one that makes the link usable from the JSON / WASM / Python surfaces — it is the real scope of this item.</li>
+    <li><b>Serialization.</b> If you take option (b), the saved model must round-trip the bounds, not just a name — mirror how the <code>FamilyDescriptor</code> work serializes stateful families' parameters rather than their name. A bare-name round-trip silently loses <code>(a, b)</code>.</li>
+  </ol>
+
+  <h2 class="part">Tests &amp; reference oracle</h2>
+  <div class="ns">
+    <p>Extend the existing <code>mod tests</code> in <code>links.rs</code> — it already has the scaffolding:</p>
+    <ul>
+      <li><b>Analytic vs finite-difference <code>mu_eta</code>.</b> Add a <code>ShiftedLogitLink::new(a, b)</code> instance to the analytic-vs-FD check (<code>links.rs:483</code> uses an <code>[&amp;dyn Link]</code> array; this link needs a concrete instance with chosen bounds). Closed form must match the finite difference to <code>1e-5</code> across the η grid.</li>
+      <li><b>Collapse to logit.</b> Assert <code>ShiftedLogitLink::new(0.0, 1.0)</code> matches <code>LogitLink</code> on <code>link</code>, <code>inv_link</code>, and <code>mu_eta</code> across a grid — the cleanest correctness check.</li>
+      <li><b>Round-trip + range.</b> Mirror <code>log_link_round_trip_in_safe_range</code> (<code>links.rs:544</code>): <code>link(inv_link(η)) ≈ η</code> in the safe range, and <code>inv_link(η) ∈ (a, b)</code> for all η including <code>±1e6</code>.</li>
+    </ul>
+    <p><b>External oracle:</b> no base-R <code>make.link</code> equivalent, but R <code>gamlss</code> exposes the <code>"own"</code> link mechanism and bounded-response families; an affine-rescaled <code>binomial()$linkfun</code> / <code>linkinv</code> tabulated at a grid of η serves as the numeric oracle.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">LINK-7</span></td><td><code>ShiftedLogitLink { lower, upper }</code> impls <code>Link</code> with analytic <code>mu_eta</code>, validates <code>a&lt;b</code>, re-exported.</td></tr>
+      <tr><td class="k">selection</td><td>Name/bounds selection story chosen and documented; if exposed by name, JSON round-trips the bounds (not just a name).</td></tr>
+      <tr><td class="k">tests</td><td>In the analytic-vs-FD set; collapses to <code>LogitLink</code> at <code>(0,1)</code>; round-trip + range proptests green; <kbd>cargo test -p glissando links</kbd> passes.</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream B follow-on (LINK-7) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a></footer>
+</div>
+</body>
+</html>

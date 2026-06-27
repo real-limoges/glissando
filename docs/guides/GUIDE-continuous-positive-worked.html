@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · continuous-positive families — worked implementation (Weibull)</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b> · <a href="GUIDE-continuous-and-count-families.html">catalog guide</a></p>
+  <h1>glissando <span class="sub">· continuous-positive, worked end-to-end</span></h1>
+  <p class="lede">Implements <span class="id">DIST-2</span> by writing <b style="color:#fff">one family in full — Weibull (WEI)</b> — every <code>Distribution</code> method, the registration across all four surfaces, and the tests, as copy-paste Rust. The other DIST-2 families (Lognormal, Exponential, Inverse Gaussian, Generalized Gamma, Pareto) are then a <a href="#catalog">short delta table</a> off this template. The <a href="GUIDE-continuous-and-count-families.html">catalog guide</a> is the map of <em>what</em> to build; this is the <em>how</em>, in code.</p>
+  <p class="lede">The closest in-tree template is <code>src/distributions/gamma.rs</code> — same two parameters (<code>μ</code>, <code>σ</code>), both log-linked, with a closed-form CDF and quantile. Read it once; this guide reuses its exact shape so a diff against it is small.</p>
+
+  <h2 class="part">1 · The Weibull parameterization</h2>
+  <div class="ns">
+    <p>Match R <code>gamlss</code> <code>WEI(mu, sigma)</code> so the parity fixtures line up: <code>μ &gt; 0</code> is the <b>scale</b>, <code>σ &gt; 0</code> the <b>shape</b>, support <code>y &gt; 0</code>. Writing <code>z = (y/μ)^σ</code> (so <code>z ~ Exponential(1)</code> at the true parameters):</p>
+    <pre><code>pdf       f(y)  = (σ/μ)·(y/μ)^(σ−1)·exp(−z)
+loglik    ℓ     = ln σ − σ·ln μ + (σ−1)·ln y − z
+cdf       F(y)  = 1 − exp(−z)
+quantile  Q(p)  = μ·(−ln(1−p))^(1/σ)
+mean      E[Y]  = μ·Γ(1 + 1/σ)            // ≠ μ — must override expected_value
+var       V[Y]  = μ²·[Γ(1 + 2/σ) − Γ(1 + 1/σ)²]</code></pre>
+    <p>Both parameters take a <code>LogLink</code>, so the score <code>u</code> and Fisher weight <code>w</code> the RS loop needs are <b>on the η = ln θ scale</b>. With <code>z = (y/μ)^σ</code> and Euler's constant <code>γ ≈ 0.5772</code>:</p>
+    <pre><code>μ (η = ln μ):  u_μ = σ·(z − 1)                  w_μ = σ²
+σ (η = ln σ):  u_σ = 1 + σ·ln(y/μ)·(1 − z)      w_σ = π²/6 + (1 − γ)²  ≈ 1.8237</code></pre>
+    <p>Two things make Weibull a clean worked example: <code>E[u_μ] = E[u_σ] = 0</code> falls out of <code>E[z] = 1</code> and <code>E[z·ln z] = 1 − γ</code>, and the shape Fisher weight <code>w_σ</code> is a <b>parameter-free constant</b>. The full ∂/∂μ, ∂/∂σ working belongs in <a href="../math/mathematics.md">docs/math/mathematics.md</a> §1 alongside the other families.</p>
+  </div>
+
+  <h2 class="part">2 · The file — <code>src/distributions/weibull.rs</code></h2>
+  <div class="ns">
+    <p><b>Header + struct.</b> Mirror <code>gamma.rs</code>'s imports; Weibull needs <code>ln_gamma</code> for the moment overrides and the standard math helpers for the vectorized columns.</p>
+    <pre><code>//! Weibull distribution for positive continuous data.
+
+use super::{
+    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+};
+use crate::math::{par_zip3_map, par_zip_map};
+use ndarray::Array1;
+use statrs::function::gamma::ln_gamma;
+use std::collections::HashMap;
+
+/// Weibull distribution (gamlss `WEI` parameterization).
+///
+/// Parameters: `μ` (scale, log link) and `σ` (shape, log link). Support `y &gt; 0`.
+/// With `z = (y/μ)^σ`, `Var(Y) = μ²·[Γ(1+2/σ) − Γ(1+1/σ)²]` and the mean is
+/// `μ·Γ(1+1/σ)` — neither equals `μ`, so both moment methods are overridden.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Weibull;
+
+impl Weibull {
+    pub fn new() -&gt; Self {
+        Self
+    }
+}</code></pre>
+
+    <p><b>Parameters, links, seeds.</b> Both log-linked. The default <code>initial_value</code> (mean for μ, SD for σ) is wrong for a shape parameter, exactly as it was for Gamma's CV — seed σ at <code>1.0</code> (the Exponential special case, where <code>μ ≈ mean(y)</code>) and let the RS loop move it.</p>
+    <pre><code>impl Distribution for Weibull {
+    fn parameters(&amp;self) -&gt; &amp;[&amp;'static str] {
+        &amp;["mu", "sigma"]
+    }
+
+    fn default_link(&amp;self, param: &amp;str) -&gt; Result&lt;Box&lt;dyn Link&gt;, GamlssError&gt; {
+        match param {
+            "mu" | "sigma" =&gt; Ok(Box::new(LogLink)),
+            other =&gt; Err(self.unknown_param(other)),
+        }
+    }
+
+    /// σ is the Weibull shape; the default `y.std()` seed is meaningless for it.
+    /// Seed σ = 1 (Exponential), where the scale μ ≈ mean(y); RS refines both.
+    fn initial_value(&amp;self, param: &amp;str, y: &amp;Array1&lt;f64&gt;) -&gt; f64 {
+        match param {
+            "mu" =&gt; y.mean().expect("validate_inputs rejects empty y"),
+            "sigma" =&gt; 1.0,
+            _ =&gt; 0.1,
+        }
+    }</code></pre>
+
+    <p><b>Derivatives.</b> The η-scale columns from §1, vectorized with <code>par_zip3_map</code>. <code>w_σ</code> is the constant <code>π²/6 + (1−γ)²</code>; floor both weights at <code>MIN_WEIGHT</code> to keep the PWLS solve well-conditioned, matching <code>gamma.rs</code>.</p>
+    <pre><code>    fn derivatives(
+        &amp;self,
+        y: &amp;Array1&lt;f64&gt;,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; DerivativesResult {
+        // z = (y/μ)^σ ~ Exp(1) at the truth.
+        // μ (η = ln μ): u = σ(z−1),               w = σ².
+        // σ (η = ln σ): u = 1 + σ·ln(y/μ)·(1−z),  w = π²/6 + (1−γ)² (constant).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+
+        const EULER: f64 = 0.577_215_664_901_532_9;
+        let w_sigma_const = std::f64::consts::PI.powi(2) / 6.0 + (1.0 - EULER).powi(2);
+
+        let u_mu = par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let m = mui.max(MIN_POSITIVE);
+            let z = (yi.max(MIN_POSITIVE) / m).powf(*si);
+            si * (z - 1.0)
+        });
+        let w_mu = sigma.mapv(|s| (s * s).max(MIN_WEIGHT));
+
+        let u_sigma = par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let m = mui.max(MIN_POSITIVE);
+            let r = yi.max(MIN_POSITIVE) / m;
+            let z = r.powf(*si);
+            1.0 + si * r.ln() * (1.0 - z)
+        });
+        let w_sigma = Array1::from_elem(y.len(), w_sigma_const.max(MIN_WEIGHT));
+
+        Ok(HashMap::from([
+            ("mu".to_string(), (u_mu, w_mu)),
+            ("sigma".to_string(), (u_sigma, w_sigma)),
+        ]))
+    }</code></pre>
+
+    <p><b>Log-likelihood, variance, mean.</b> The mean and variance both involve <code>Γ</code>; compute it via <code>exp(ln_gamma(·))</code>.</p>
+    <pre><code>    fn loglik_pointwise(
+        &amp;self,
+        y: &amp;Array1&lt;f64&gt;,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt; {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            let yv = yi.max(MIN_POSITIVE);
+            let m = mui.max(MIN_POSITIVE);
+            let z = (yv / m).powf(*si);
+            si.ln() - si * m.ln() + (si - 1.0) * yv.ln() - z
+        }))
+    }
+
+    fn expected_value(
+        &amp;self,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt; {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        // E[Y] = μ·Γ(1 + 1/σ).
+        Ok(par_zip_map(mu, sigma, |m, s| {
+            m * ln_gamma(1.0 + 1.0 / s.max(MIN_POSITIVE)).exp()
+        }))
+    }
+
+    fn variance(&amp;self, params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;) -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt; {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        // V[Y] = μ²·[Γ(1+2/σ) − Γ(1+1/σ)²].
+        Ok(par_zip_map(mu, sigma, |m, s| {
+            let s = s.max(MIN_POSITIVE);
+            let g1 = ln_gamma(1.0 + 1.0 / s).exp();
+            let g2 = ln_gamma(1.0 + 2.0 / s).exp();
+            m * m * (g2 - g1 * g1)
+        }))
+    }</code></pre>
+
+    <p><b>CDF, quantile.</b> Both closed-form — no special functions, no <code>discrete_quantile</code> (Weibull is continuous). The CDF is <code>0</code> below the <code>y &gt; 0</code> support, as in <code>gamma.rs</code>.</p>
+    <pre><code>    fn cdf(
+        &amp;self,
+        y: &amp;Array1&lt;f64&gt;,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt; {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            if *yi &lt;= 0.0 {
+                return 0.0; // support is y &gt; 0
+            }
+            let z = (yi / mui.max(MIN_POSITIVE)).powf(*si);
+            1.0 - (-z).exp()
+        }))
+    }
+
+    fn quantile(
+        &amp;self,
+        p: &amp;Array1&lt;f64&gt;,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt; {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
+            let pc = pi.clamp(1e-12, 1.0 - 1e-12);
+            mui * (-(1.0 - pc).ln()).powf(1.0 / si.max(MIN_POSITIVE))
+        }))
+    }</code></pre>
+
+    <p><b>CDF η-derivatives (optional).</b> Supplied only for <code>μ</code> — exactly as <code>gamma.rs</code> does — so the structural wrappers (censoring/truncation) get an analytic column for the location and fall back to central differencing for <code>σ</code>. With <code>z = (y/μ)^σ</code> and <code>η = ln μ</code> (so <code>dz/dη = −σz</code>):</p>
+    <pre><code>    fn cdf_eta_derivatives(
+        &amp;self,
+        y: &amp;Array1&lt;f64&gt;,
+        params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;,
+    ) -&gt; super::CdfEtaResult {
+        // F = 1 − e^(−z), z = (y/μ)^σ.  ∂F/∂η_μ  = −σ·z·e^(−z)
+        //                               ∂²F/∂η_μ² = σ²·z·e^(−z)·(1 − z)
+        // σ enters z non-elementarily through the exponent; left to the numeric fallback.
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let mut d1 = Array1::&lt;f64&gt;::zeros(y.len());
+        let mut d2 = Array1::&lt;f64&gt;::zeros(y.len());
+        for i in 0..y.len() {
+            if !y[i].is_finite() || y[i] &lt;= 0.0 {
+                continue; // outside support or ±∞ bound: F flat, derivatives ≡ 0
+            }
+            let z = (y[i] / mu[i].max(MIN_POSITIVE)).powf(sigma[i]);
+            let ez = (-z).exp();
+            d1[i] = -sigma[i] * z * ez;
+            d2[i] = sigma[i] * sigma[i] * z * ez * (1.0 - z);
+        }
+        Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
+    }
+
+    fn name(&amp;self) -&gt; &amp;'static str {
+        "Weibull"
+    }
+}</code></pre>
+  </div>
+
+  <h2 class="part">3 · Register on all four surfaces</h2>
+  <div class="ns">
+    <p>Five edits — the same five every stateless family touches. Line numbers are current as of v0.1.0; re-check with <kbd>grep -n</kbd> if the tree has moved.</p>
+    <ol class="steps">
+      <li><b>Module + re-export</b> — <code>src/distributions/mod.rs</code>. Add <code>mod weibull;</code> in the alphabetical <code>mod</code> block (<code>mod.rs:244–260</code>) and <code>pub use weibull::Weibull;</code> in the <code>pub use</code> block (<code>mod.rs:262–276</code>).
+        <pre><code>mod truncated;
+mod weibull;        // ← add
+
+pub use student_t::StudentT;
+pub use truncated::Truncated;
+pub use weibull::Weibull;   // ← add</code></pre>
+      </li>
+      <li><b>String factory</b> — <code>from_name</code> (<code>src/distributions/mod.rs:298</code>). One arm; the JSON facade (<code>src/json.rs</code>) and the WASM shim resolve through this automatically.
+        <pre><code>"Beta" =&gt; Ok(Box::new(Beta)),
+"Weibull" =&gt; Ok(Box::new(Weibull)),   // ← add</code></pre>
+      </li>
+      <li><b>FFI enum</b> — <code>src/ffi.rs</code>. Add to the <code>use</code> list, a <code>Weibull(Weibull)</code> variant on <code>FamilyType</code> (~<code>ffi.rs:21</code>), an arm in <code>as_distribution</code> (~<code>ffi.rs:42</code>), and an arm in <code>FamilyType::from_name</code> (~<code>ffi.rs:75</code>).
+        <pre><code>// enum variant
+Weibull(Weibull),
+// as_distribution
+FamilyType::Weibull(d) =&gt; d,
+// FamilyType::from_name
+"Weibull" =&gt; Ok(FamilyType::Weibull(Weibull::new())),</code></pre>
+      </li>
+      <li><b>Python class</b> — <code>src/python.rs</code>. Add <code>Weibull</code> to the <code>use</code> (<code>python.rs:14</code>), one <code>py_distribution!</code> line (~<code>python.rs:47</code>), and one <code>extract_family</code> probe (~<code>python.rs:222</code>).
+        <pre><code>py_distribution!(PyWeibull, "Weibull");
+
+// in extract_family:
+if family_obj.extract::&lt;PyRef&lt;PyWeibull&gt;&gt;().is_ok() {
+    return Ok(FamilyType::Weibull(Weibull::new()));
+}</code></pre>
+      </li>
+      <li><b>WASM</b> — nothing. <code>src/wasm.rs</code> delegates to the JSON facade, which dispatches by name through <code>from_name</code>; once step 2 lands, <code>{"family":"Weibull"}</code> works on the WASM surface for free. Regenerate <code>pkg/</code> only if you also touch a WASM-exposed signature.</li>
+    </ol>
+    <p>Because every Weibull parameter is <em>fitted</em> (no structural state like <code>Binomial</code>'s <code>n_trials</code>), <span class="id">SER-1</span> does not bite: it round-trips through <code>to_json</code> / <code>from_json</code> by name.</p>
+  </div>
+
+  <h2 class="part">4 · Tests</h2>
+  <div class="ns">
+    <p>Copy <code>gamma.rs</code>'s inline <code>mod tests</code> shape and point the helpers (in <code>src/distributions/mod.rs::test_helpers</code>) at Weibull. These run without R and catch every algebra slip in §1 — a wrong score silently degrades the fit rather than erroring, so the finite-difference check is the one that matters most.</p>
+    <pre><code>#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distributions::test_helpers::{
+        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
+    };
+    use ndarray::array;
+
+    #[test]
+    fn score_matches_finite_diff_weibull() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![1.5, 0.8, 2.0, 1.2]),
+        ];
+        check_score_via_finite_diff(&amp;Weibull, &amp;y, &amp;owned, "mu", 1e-5);
+        check_score_via_finite_diff(&amp;Weibull, &amp;y, &amp;owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_quantile_roundtrip_weibull() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![1.5, 0.8, 2.0, 1.2]),
+        ];
+        check_cdf_quantile_roundtrip(&amp;Weibull, &amp;y, &amp;owned, 1e-6);
+        check_cdf_pdf_consistency(&amp;Weibull, &amp;y, &amp;owned, 1e-4, 1e-3);
+    }
+
+    #[test]
+    fn cdf_eta_derivatives_match_finite_diff_weibull() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![1.5, 0.8, 2.0, 1.2]),
+        ];
+        check_cdf_eta_derivatives_via_finite_diff(&amp;Weibull, &amp;y, &amp;owned, "mu", 2e-4);
+        let p = params_view(&amp;owned);
+        assert!(!Weibull.cdf_eta_derivatives(&amp;y, &amp;p).unwrap().contains_key("sigma"));
+    }
+
+    #[test]
+    fn cdf_monotone_and_zero_below_support_weibull() {
+        let grid = Array1::from_iter((0..60).map(|i| i as f64 * 0.2));
+        let owned = [("mu", array![3.0]), ("sigma", array![1.4])];
+        check_cdf_monotone_in_unit(&amp;Weibull, &amp;grid, &amp;owned);
+    }
+
+    #[test]
+    fn derivative_keys_weibull() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let mu = array![1.0, 2.0, 4.0, 6.0];
+        let sigma = array![1.5, 0.8, 2.0, 1.2];
+        let mut p = HashMap::new();
+        p.insert("mu", &amp;mu);
+        p.insert("sigma", &amp;sigma);
+        derivative_keys_match_parameters(&amp;Weibull, p, &amp;y);
+    }
+}</code></pre>
+    <p><b>Coefficient recovery</b> (<code>tests/correctness.rs</code> style): simulate from known <code>(μ, σ)</code> via <code>Weibull.quantile</code> on uniforms, fit, assert recovery. <b>Parity</b> (<code>tests/mgcv_reference.rs</code> style, <code>#[ignore]</code>): the oracle is R <code>gamlss</code> <code>WEI()</code> — same <code>μ</code>/<code>σ</code> parameterization, so <code>dWEI</code>/<code>pWEI</code>/<code>qWEI</code> tabulated at a grid compare directly. Add the scenario to <code>benchmark/run_comparison.sh</code> / <code>fit_gamlss.R</code>.</p>
+  </div>
+
+  <h2 class="part" id="catalog">5 · The rest of DIST-2 as deltas</h2>
+  <div class="ns">
+    <p>Each remaining continuous-positive family is the Weibull file with a different likelihood column and, sometimes, a non-log canonical link. The <span class="id done">LINK-3</span>/<span class="id done">LINK-4</span>/<span class="id done">LINK-5</span> column flags which exercise the shipped inverse / inverse-square / sqrt links — a <code>default_link</code> choice, nothing more.</p>
+  </div>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><b>Exponential</b></td><td>One parameter (<code>mu</code>, log). Weibull with <code>σ ≡ 1</code>: drop the σ column entirely. The cheapest first win — a few lines.</td></tr>
+      <tr><td class="k"><b>Lognormal</b></td><td>Reuse the Gaussian density on <code>ln y</code> plus a <code>−ln y</code> Jacobian; <code>cdf</code> = <code>Φ((ln y − μ)/σ)</code>, <code>mean</code> = <code>exp(μ + σ²/2)</code>. Closest to a copy of <code>gaussian.rs</code>.</td></tr>
+      <tr><td class="k"><b>Inverse Gaussian</b></td><td>Two-parameter; <code>variance</code> = <code>μ³σ²</code>. The natural home for the <b>inverse-square</b> canonical link <span class="id done">LINK-4</span> — set it in <code>default_link</code>.</td></tr>
+      <tr><td class="k"><b>Gamma</b> (shipped)</td><td>Already in tree (<code>gamma.rs</code>); pairs with the <b>inverse</b> canonical link <span class="id done">LINK-3</span>. The other reference template.</td></tr>
+      <tr><td class="k"><b>Generalized Gamma</b></td><td>Three-parameter (<code>μ</code>, <code>σ</code>, <code>ν</code>) capstone that nests Gamma/Weibull/Lognormal; closest shape is the Box-Cox files <code>bct.rs</code>/<code>bcpe.rs</code>.</td></tr>
+      <tr><td class="k"><b>Pareto</b></td><td>Heavy-tailed; wants robust median/MAD seeds in <code>initial_value</code> so the first RS step doesn't diverge.</td></tr>
+    </table>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIST-2</span></td><td>Weibull impls <code>Distribution</code> with validated score/Fisher; instantiable by name on native / JSON / WASM / Python; the remaining families follow the delta table, exercising the inverse / inverse-square / sqrt links.</td></tr>
+      <tr><td class="k">tests</td><td>Score-vs-FD, CDF/quantile round-trip, CDF/PDF consistency, monotonicity, and coefficient recovery green; <code>gamlss</code> <code>WEI</code> parity fixture committed (<code>#[ignore]</code>).</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream C (DIST-2, worked) · companion to <a href="GUIDE-continuous-and-count-families.html">the DIST-2/3/4 catalog</a> and <a href="../planning/ROADMAP.html">ROADMAP.html</a> · template: <code>src/distributions/gamma.rs</code></footer>
+</div>
+</body>
+</html>

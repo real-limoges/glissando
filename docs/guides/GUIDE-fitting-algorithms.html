@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · fitting algorithms — CG &amp; grid-λ implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>F · Fitting engine robustness</b></p>
+  <h1>glissando <span class="sub">· fitting algorithms — CG &amp; grid λ</span></h1>
+  <p class="lede">Implements <span class="id">FIT-3</span> (the <b style="color:#fff">CG / Cole-Green</b> algorithm — gamlss's second fitter, for cross-parameter derivative coupling when RS mixes slowly) and <span class="id">FIT-4</span> (<b style="color:#fff">grid / "magic"-style</b> smoothing-parameter selection as an alternative to the L-BFGS criteria). Both are <em>alternatives</em> bolted alongside the current machinery, selected by config — neither rewrites the working RS path.</p>
+  <p class="lede"><b style="color:#fff">Current state.</b> <code>fit_gamlss</code> (<code>src/fitting/mod.rs:332</code>) is RS-only: its outer loop (<code>mod.rs:415+</code>) cycles, and the inner loop (<code>mod.rs:432</code>) walks <code>for param_name in family.parameters()</code> — fitting each distribution parameter's predictor <b>one at a time</b>, treating the others as fixed. The smoothing parameters λ are chosen inside the scoring step by <code>SmoothingCriterion</code> (<code>mod.rs:58</code>) dispatching (<code>scoring.rs:220–226</code>) into the L-BFGS optimizers (<code>solver.rs:278</code>/<code>:337</code>) or the Fellner-Schall fixed point (<code>solver.rs:400</code>). FIT-3 changes the <em>first</em> loop; FIT-4 adds a <em>fourth</em> criterion.</p>
+
+  <h2 class="part">FIT-3 · CG (Cole-Green) algorithm</h2>
+  <div class="ns">
+    <p>RS is block-coordinate ascent: it updates <code>μ</code>'s predictor holding <code>σ</code>, <code>ν</code> fixed, then <code>σ</code> holding the rest fixed, and so on. That is fast and stable when the parameters are near-orthogonal, but mixes slowly when they are <b>strongly correlated</b> (the heavy-tailed / skew families). CG instead forms the <b>full cross-parameter</b> expected-information system — the off-diagonal <code>∂²ℓ/∂η_p∂η_q</code> blocks RS discards — and updates all predictors jointly each cycle.</p>
+    <p>There is no algorithm enum today; RS is hardcoded. Introduce one and dispatch on it.</p>
+    <ol class="steps">
+      <li><b>The algorithm enum</b> — <code>src/fitting/mod.rs</code> (near the <code>SmoothingCriterion</code> definition, ~<code>mod.rs:70</code>):
+        <pre><code>#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum FittingAlgorithm {
+    /// Rigby–Stasinopoulos block-coordinate ascent (current behaviour).
+    #[default]
+    RS,
+    /// Cole–Green: joint update using cross-parameter expected information.
+    CG,
+}</code></pre>
+      </li>
+      <li><b>The config field</b> — add to <code>FitConfig</code> (<code>mod.rs:89–123</code>), mirroring how <code>criterion</code> is declared so it round-trips through serde:
+        <pre><code>/// Fitting algorithm: RS (default) or CG for coupled parameters (FIT-3).
+#[cfg_attr(feature = "serde", serde(default))]
+pub algorithm: FittingAlgorithm,</code></pre>
+        Add a <code>with_algorithm</code> builder next to <code>with_na_action</code> (<code>mod.rs:128</code>) and seed the field in <code>Default for FitConfig</code>.
+      </li>
+      <li><b>The dispatch</b> — branch once in <code>fit_gamlss</code>'s outer loop body (~<code>mod.rs:428</code>), before the per-parameter walk:
+        <pre><code>match config.algorithm {
+    FittingAlgorithm::RS =&gt; {
+        for param_name in family.parameters() {
+            // …existing one-at-a-time scoring step (unchanged)…
+        }
+    }
+    FittingAlgorithm::CG =&gt; step_cg(&amp;mut state, family, data, config)?,
+}</code></pre>
+      </li>
+      <li><b>The coupled step</b> — a new <code>step_cg</code> beside <code>scoring.rs::step</code> (<code>scoring.rs:126</code>). Where <code>step</code> builds the working response and weight for one parameter from its diagonal Fisher block, <code>step_cg</code> assembles the <b>stacked</b> system across all parameters and solves it once:
+        <pre><code>// Per cycle, for parameters p = 1..P with predictors η_p = X_p β_p:
+//   • working response z_p and diagonal weight W_pp as in RS (scoring.rs::step)
+//   • PLUS the off-diagonal weights W_pq = −E[∂²ℓ / ∂η_p ∂η_q]   (RS sets these 0)
+// Solve the block system  (Xᵀ W X + S) β = Xᵀ W z  for the *stacked* β,
+// where W is the P·n × P·n expected-information matrix (block-tridiagonal in
+// practice), X = blkdiag(X_p), S = blkdiag(λ_p S_p). Reuse fit_pwls
+// (solver.rs:463) on the assembled blocks; the only new code is the
+// cross-parameter weight blocks, which come from the family's derivatives.</code></pre>
+        The off-diagonal weights need the family to expose its mixed second derivatives; most two-parameter families have a closed form (e.g. Gaussian's <code>∂²ℓ/∂η_μ∂η_σ</code>), and where it is awkward the numeric cross-derivative is a fallback.
+      </li>
+    </ol>
+    <p><b>Validate:</b> on well-conditioned data RS and CG must converge to the <em>same</em> coefficients (to tolerance) — the regression test. The win shows on a deliberately correlated fit (e.g. a heavy-tailed family where RS needs many cycles): CG reaches the same deviance in markedly fewer. Oracle: R <code>gamlss(..., method = CG())</code>.</p>
+  </div>
+
+  <h2 class="part">FIT-4 · Grid / "magic" λ selection</h2>
+  <div class="ns">
+    <p>The L-BFGS optimizers minimize REML/GCV by gradient descent in <code>log λ</code> — fast but able to stall in a local minimum or on a flat ridge. A <b>grid</b> search over <code>log λ</code> is the robust fallback (mgcv's "magic"/"performance iteration" lineage): evaluate the same criterion the L-BFGS path uses on a coarse log-spaced grid, take the minimizer, optionally golden-section-refine around it. It is a new <code>SmoothingCriterion</code> value, so it slots into the existing dispatch with no change to the RS loop.</p>
+    <ol class="steps">
+      <li><b>The variant</b> — extend <code>SmoothingCriterion</code> (<code>mod.rs:58–66</code>):
+        <pre><code>pub enum SmoothingCriterion {
+    Gcv,
+    #[default]
+    Reml,
+    FellnerSchall,
+    /// Grid search over log λ minimizing the GCV/REML score (FIT-4).
+    Grid,
+}</code></pre>
+        Optionally carry grid resolution on <code>FitConfig</code> (default to a sensible span/step) rather than hardcoding:
+        <pre><code>/// log10(λ) grid bounds and point count for `SmoothingCriterion::Grid` (FIT-4).
+#[cfg_attr(feature = "serde", serde(default = "default_lambda_grid"))]
+pub lambda_grid: (f64, f64, usize),   // (log10_lo, log10_hi, n_points)</code></pre>
+      </li>
+      <li><b>The dispatch arm</b> — in the criterion match (<code>scoring.rs:220–226</code>), route <code>Grid</code> to a new optimizer:
+        <pre><code>match config.criterion {
+    SmoothingCriterion::Gcv =&gt; run_optimization(/* GCV target */ …),
+    SmoothingCriterion::Reml =&gt; run_optimization_reml(…),
+    SmoothingCriterion::FellnerSchall =&gt; run_optimization_fellner_schall(…),
+    SmoothingCriterion::Grid =&gt; run_optimization_grid(…, config.lambda_grid),
+}</code></pre>
+      </li>
+      <li><b>The optimizer</b> — <code>run_optimization_grid</code> beside <code>run_optimization</code> (<code>solver.rs:278</code>). It reuses the <em>same</em> score closure the L-BFGS path already builds (the GCV/REML objective as a function of <code>log λ</code>), so this is pure search, no new statistics:
+        <pre><code>/// Evaluate the GCV/REML score on a log10(λ) grid; return the minimizer.
+/// Optionally golden-section refine the best bracket.
+pub(crate) fn run_optimization_grid(
+    score: impl Fn(&amp;[f64]) -&gt; f64,   // log λ ↦ criterion (as L-BFGS uses)
+    n_lambda: usize,
+    grid: (f64, f64, usize),
+) -&gt; Vec&lt;f64&gt; {
+    let (lo, hi, n) = grid;
+    // 1. coarse sweep: for each of n log-spaced points, score() and keep argmin.
+    //    (n_lambda &gt; 1 ⇒ either a shared λ or a small product grid — document
+    //     which; start with a shared λ across blocks for tractability.)
+    // 2. golden-section refine inside the bracket around the best point.
+    // 3. return the optimal log λ vector for the caller to plug into fit_pwls.
+    todo!("coarse grid + golden-section; reuse the existing score closure")
+}</code></pre>
+      </li>
+    </ol>
+    <p><b>Validate:</b> on a smooth where the L-BFGS criterion has a clean unimodal score, <code>Grid</code> and <code>Reml</code>/<code>Gcv</code> pick the same λ (to grid resolution) and the same EDF. The value case is a pathological score surface where L-BFGS undersmooths — grid finds the global minimum the gradient method walked past. Surface the chosen criterion on every binding so callers can opt in.</p>
+  </div>
+
+  <h2 class="part">Surfacing &amp; diagnostics</h2>
+  <div class="ns">
+    <p>Both items are config-only from the caller's view, so the cross-surface work is small: thread <code>algorithm</code> / <code>criterion: "grid"</code> through the JSON <code>FitConfig</code> shape (<code>src/json.rs</code>) — serde already covers it once the enums derive <code>Serialize</code>/<code>Deserialize</code> — and through the Python <code>FitConfig</code> wrapper (<code>src/python.rs</code>). Record which algorithm/criterion actually ran in <code>FitDiagnostics</code> (<code>mod.rs:188–217</code>) so a fit is reproducible from its own report; the existing <code>final_deviance</code> field already lets a test assert RS-vs-CG agreement.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">FIT-3</span></td><td><code>FittingAlgorithm::CG</code> selectable on <code>FitConfig</code>; <code>step_cg</code> solves the coupled system; RS and CG agree on well-conditioned data and CG converges in fewer cycles on correlated parameters; matches <code>gamlss method=CG()</code>.</td></tr>
+      <tr><td class="k"><span class="id">FIT-4</span></td><td><code>SmoothingCriterion::Grid</code> selectable; <code>run_optimization_grid</code> reuses the existing score closure; agrees with REML/GCV on unimodal scores and beats L-BFGS on a pathological one.</td></tr>
+      <tr><td class="k">surfaces</td><td>Both threaded through JSON + Python config; the running algorithm/criterion recorded in <code>FitDiagnostics</code>.</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream F (FIT-3 / FIT-4) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a> · touches <code>src/fitting/{mod,scoring,solver}.rs</code></footer>
+</div>
+</body>
+</html>

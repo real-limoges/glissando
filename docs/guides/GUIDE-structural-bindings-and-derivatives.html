@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · structural wrappers — bindings &amp; derivatives implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  tr.done td { opacity:.7; }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>D · Structural / likelihood modeling</b> (follow-on)</p>
+  <h1>glissando <span class="sub">· structural wrappers — bindings &amp; derivatives</span></h1>
+  <p class="lede">The two items left open after <span class="id done">STRUCT-1</span>…<span class="id done">STRUCT-4</span> (censoring, truncation, hurdle, finite mixtures) landed in the Rust crate. Both their preconditions are now met — the typed Rust wrapper API ships (<code>src/distributions/censored.rs</code>, <code>truncated.rs</code>, <code>hurdle.rs</code>, <code>src/fitting/mixture.rs</code>) and so does <span class="id done">SER-1</span> (the serializable <code>FamilyDescriptor</code>) — so neither is blocked any longer.</p>
+  <p class="lede">This guide covers <b style="color:#fff">two independent pieces</b> that can be tackled in either order:</p>
+  <ul class="lede" style="margin-top:-.5rem">
+    <li><span class="id">BIND-D</span> — Python &amp; WASM construction of the structural wrappers.</li>
+    <li><span class="id">DERIV-D</span> — analytic shape-parameter CDF η-derivatives, retiring the central-difference fallback.</li>
+  </ul>
+
+  <h2 class="part">BIND-D · cross-surface construction of the wrappers</h2>
+  <div class="ns">
+    <p>The wrappers are <b>stateful</b> — each holds a boxed base <code>Distribution</code> plus per-observation response-side state (a censoring-status vector, truncation limits, mixing weights). Like <code>Binomial</code> and <code>Ocat</code>, they are therefore <em>excluded from <code>from_name</code></em> (<code>src/distributions/mod.rs:298</code>): a bare family string cannot carry the base family <em>and</em> the per-row state. They are constructed only through the typed Rust API today; this item carries that typed surface to Python and WASM.</p>
+    <p>The serialization precondition is already met: <span class="id done">SER-1</span> means <code>to_json</code> / <code>from_json</code> bundle a structured <code>FamilyDescriptor</code> (not just a name), and <code>FamilyDescriptor::build()</code> reconstructs the boxed base — so a wrapper built on a surface can round-trip. What is missing is only the surface constructors.</p>
+    <ol class="steps">
+      <li><b>Python classes</b> in <code>src/python.rs</code> — a class per wrapper mirroring the Rust constructor: <code>Censored(base=..., status=...)</code>, <code>Truncated(base=..., lower=..., upper=...)</code>, <code>Hurdle(base=..., ...)</code>, and a mixture entry point over <code>fit_mixture</code>. Accept the base as an already-constructed family object and the response-side state as numpy arrays; marshal to the <code>Array1</code> the Rust constructor expects. The <code>FamilyType</code> enum in <code>src/ffi.rs</code> is the precedent for passing typed family state the name-based dispatch can't.</li>
+      <li><b>WASM constructors</b> in <code>src/wasm.rs</code> — <code>wasm.rs</code> delegates to the <code>glissando::json</code> facade, so expose the wrappers through a JSON shape that names the base family descriptor plus the structural state, and have the facade build the wrapper via <code>FamilyDescriptor</code>. No new serialization format is needed — reuse the descriptor that <span class="id done">SER-1</span> already round-trips.</li>
+      <li><b>Worked examples</b> (<span class="id">DOC-3</span>): a right-censored Weibull survival fit and a left-truncated Gaussian, one per surface, in the docs.</li>
+    </ol>
+  </div>
+
+  <h2 class="part">DERIV-D · analytic shape-parameter CDF derivatives</h2>
+  <div class="ns">
+    <p>Censoring and truncation differentiate the base family's <code>cdf</code> w.r.t. the η of each parameter. The trait hook is <code>Distribution::cdf_eta_derivatives</code> — it returns analytic <code>(∂F/∂η, ∂²F/∂η²)</code> and defaults to empty, in which case <code>src/distributions/structural.rs</code> central-differences the <code>cdf</code> on the η scale (<code>numeric_cdf_grad</code>, <code>structural.rs:49</code>).</p>
+    <p>Analytic derivatives are <b>already supplied for the location/scale parameters</b> where the CDF is elementary — Gaussian μ/σ, Student-t μ/σ, Gamma μ (see the <code>cdf_eta_derivatives</code> impls in <code>gaussian.rs</code>, <code>student_t.rs</code>, <code>gamma.rs</code>). What still falls back to central differencing is the <b>non-elementary shape parameters</b>:</p>
+    <ul>
+      <li><b>Gamma σ</b> — derivative of the regularized lower incomplete gamma w.r.t. its shape (a series / <code>digamma</code> term).</li>
+      <li><b>Student-t ν</b> — derivative of the regularized incomplete beta w.r.t. the degrees of freedom.</li>
+      <li><b>Beta (both shapes)</b> — derivatives of the regularized incomplete beta w.r.t. its parameters.</li>
+    </ul>
+    <p>Each is a matter of differentiating the special function that the family's <code>cdf</code> already calls (<code>statrs::function::gamma::gamma_ur</code>, <code>statrs::function::beta::beta_reg</code>), then mapping <code>∂F/∂θ → ∂F/∂η</code> via the link's <code>mu_eta</code> and the chain rule — the same shape as the location/scale impls already in tree. Extend each family's <code>cdf_eta_derivatives</code> to return the shape-parameter entries; <code>structural.rs</code> will pick them up automatically and stop central-differencing those rows.</p>
+    <p>The shape is the same as the location/scale impls already in tree (<code>gamma.rs:136</code> supplies the <code>μ</code> entry); you add the <code>"sigma"</code> entry alongside it. For Gamma <code>σ</code>, with <code>F = P(α, x)</code>, <code>α = 1/σ²</code>, <code>x = y/(μσ²)</code>:</p>
+    <pre><code>// Gamma σ (η = ln σ):  F = P(α, x).
+//   ∂F/∂σ = (∂P/∂α)·(dα/dσ) + (∂P/∂x)·(dx/dσ)
+//   dα/dσ = −2/σ³            dx/dσ = −2x/σ
+//   ∂P/∂x = xᵅ·e⁻ˣ / Γ(α)    (the density term — already used for the μ entry)
+//   ∂P/∂α = the regularized-lower-incomplete-gamma shape derivative — the ONE new
+//           non-elementary piece (a digamma/series term). Then ∂F/∂η_σ = σ·∂F/∂σ.
+for i in 0..y.len() {
+    if !y[i].is_finite() || y[i] &lt;= 0.0 { continue; }   // flat outside support
+    let s = sigma[i].max(MIN_POSITIVE);
+    let alpha = 1.0 / (s * s);
+    let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
+    let dens = (alpha * x.ln() - x - ln_gamma(alpha)).exp();   // ∂P/∂x
+    let dp_dalpha = lower_incomplete_gamma_shape_deriv(alpha, x);   // ← todo!()
+    let df_dsigma = dp_dalpha * (-2.0 / (s * s * s)) + dens * (-2.0 * x / s);
+    d1_sigma[i] = s * df_dsigma;          // chain to η = ln σ
+    // d2_sigma[i]: differentiate df_dsigma once more, or fall back numerically
+    //              for the second order if the algebra is not worth it.
+}</code></pre>
+    <p>Student-t <code>ν</code> and Beta's two shapes are the analogous derivatives of the regularized incomplete <em>beta</em> w.r.t. its parameters; once <code>lower_incomplete_gamma_shape_deriv</code> / its beta sibling land in <code>src/math.rs</code>, the per-family wiring is this same dozen lines.</p>
+    <p><b>Validate</b> with the existing <code>check_score_via_finite_diff</code> harness: the new analytic entries must match the central-difference values they replace to tolerance, on both censored and uncensored rows. This is the single test that catches every algebra slip; gate it across Gamma, Student-t, and Beta.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">BIND-D</span></td><td>Python classes &amp; WASM constructors build all four wrappers from a base family + response-side state; round-trip via the <code>FamilyDescriptor</code> SER-1 path; worked examples shipped.</td></tr>
+      <tr><td class="k"><span class="id">DERIV-D</span></td><td>Analytic <code>cdf_eta_derivatives</code> for Gamma σ, Student-t ν, and Beta shapes; <code>structural.rs</code> no longer central-differences those parameters; analytic-vs-FD checks green.</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream D follow-on (BIND-D, DERIV-D) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a></footer>
+</div>
+</body>
+</html>
