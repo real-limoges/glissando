@@ -9,6 +9,80 @@ use crate::types::{DataSet, Formula};
 use ndarray::prelude::*;
 use std::collections::HashSet;
 
+/// Owned, row-aligned model frame returned by [`drop_incomplete_rows`]: the
+/// filtered response, referenced columns, and (optional) prior weights.
+type CompleteFrame = (DataSet, Array1<f64>, Option<Array1<f64>>);
+
+/// Drop every row carrying a missing (non-finite) value in `y`, a
+/// formula-referenced column, or — when present — its prior weight, returning
+/// owned, row-aligned copies of the response, the referenced columns, and the
+/// weights (DATA-4, `NaAction::DropRows`). This is R's `na.omit` over the model
+/// frame: only variables the formula references participate in the completeness
+/// test, so an unrelated column with missing entries never drops a row.
+///
+/// The returned `DataSet` carries only the referenced columns (all the fitter
+/// needs); other columns are dropped from the working copy. Errors with
+/// [`GamlssError::EmptyData`] if no complete row remains.
+pub fn drop_incomplete_rows(
+    y: &Array1<f64>,
+    data: &DataSet,
+    formula: &Formula,
+    weights: Option<&Array1<f64>>,
+) -> Result<CompleteFrame, GamlssError> {
+    // Columns the formula actually references — the only ones that can mask a row.
+    let mut referenced: HashSet<&str> = HashSet::new();
+    for terms in formula.values() {
+        for term in terms {
+            for col in term.column_names() {
+                referenced.insert(col);
+            }
+        }
+    }
+
+    // Only the response and referenced columns participate in the completeness
+    // test. Weights are deliberately excluded: a non-finite or negative weight is
+    // a user error, not missing data, and is rejected by `validate_inputs` rather
+    // than silently dropping the row.
+    let n = y.len();
+    let mut keep = vec![true; n];
+    for (i, &yi) in y.iter().enumerate() {
+        if !yi.is_finite() {
+            keep[i] = false;
+        }
+    }
+    for col in &referenced {
+        if let Some(arr) = data.get(*col) {
+            for (i, &v) in arr.iter().enumerate() {
+                if i < n && !v.is_finite() {
+                    keep[i] = false;
+                }
+            }
+        }
+    }
+
+    let kept_idx: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
+    if kept_idx.is_empty() {
+        return Err(GamlssError::EmptyData);
+    }
+    let take =
+        |arr: &Array1<f64>| -> Array1<f64> { Array1::from_iter(kept_idx.iter().map(|&i| arr[i])) };
+
+    let mut filtered = DataSet::new();
+    for col in &referenced {
+        if let Some(arr) = data.get(*col) {
+            filtered.insert_column(*col, take(arr));
+        }
+    }
+    let y_filtered = take(y);
+    // Subset weights only when their length matches `y`; a mismatched length is
+    // left untouched so `validate_inputs` surfaces the length error downstream.
+    let w_filtered = match weights {
+        Some(w) if w.len() == n => Some(take(w)),
+        other => other.cloned(),
+    };
+    Ok((filtered, y_filtered, w_filtered))
+}
+
 /// Validates input data, formula, and optional prior weights for model fitting.
 ///
 /// Checks that:

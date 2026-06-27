@@ -9,10 +9,24 @@ use crate::splines::{
     create_cr_penalty_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
     sum_to_zero_basis,
 };
+use crate::terms::Contrast;
 use crate::types::{DataSet, ModelMatrix};
 use ndarray::concatenate;
 use ndarray::{s, Array1, Array2, Axis};
 use std::collections::HashMap;
+
+/// The numeric realization of a [`Formula`](crate::Formula)'s term list for one
+/// distribution parameter: the design matrix, its penalty blocks, the total
+/// coefficient count, per-term layout, and the fixed per-row `offset` that enters
+/// the linear predictor as `η = X·β + offset` (zeros when no `Term::Offset` is
+/// present).
+pub(crate) struct AssembledDesign {
+    pub(crate) x: ModelMatrix,
+    pub(crate) penalties: Vec<PenaltyMatrix>,
+    pub(crate) n_coeffs: usize,
+    pub(crate) layouts: Vec<TermLayout>,
+    pub(crate) offset: Array1<f64>,
+}
 
 fn get_col<'a>(data: &'a DataSet, name: &str) -> Result<&'a Array1<f64>, GamlssError> {
     data.get(name).ok_or_else(|| GamlssError::MissingVariable {
@@ -96,26 +110,161 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
 /// knots are embedded in `FittedParameter::terms` and replayed verbatim at
 /// predict time, guaranteeing that the fit and predict bases are identical.
 pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>, GamlssError> {
-    terms
-        .iter()
-        .map(|term| match term {
-            Term::Smooth(Smooth::CrSpline1D {
-                col_name,
-                k,
-                pc,
-                knots,
-            }) if knots.is_empty() => {
-                let x = get_col(data, col_name)?;
-                Ok(Term::Smooth(Smooth::CrSpline1D {
-                    col_name: col_name.clone(),
-                    k: *k,
-                    pc: *pc,
-                    knots: cr_knots(x, *k),
-                }))
+    terms.iter().map(|term| resolve_term(term, data)).collect()
+}
+
+/// Resolve a single term's data-dependent state from the training columns:
+/// `CrSpline1D` knots and `Factor` levels. Recurses into `Interaction` operands.
+/// All other terms are cloned unchanged.
+fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
+    match term {
+        Term::Smooth(Smooth::CrSpline1D {
+            col_name,
+            k,
+            pc,
+            knots,
+        }) if knots.is_empty() => {
+            let x = get_col(data, col_name)?;
+            Ok(Term::Smooth(Smooth::CrSpline1D {
+                col_name: col_name.clone(),
+                k: *k,
+                pc: *pc,
+                knots: cr_knots(x, *k),
+            }))
+        }
+        Term::Factor {
+            col_name,
+            contrast,
+            levels,
+            labels,
+        } if levels.is_empty() => {
+            let x = get_col(data, col_name)?;
+            Ok(Term::Factor {
+                col_name: col_name.clone(),
+                contrast: *contrast,
+                levels: distinct_levels(x),
+                labels: labels.clone(),
+            })
+        }
+        Term::Interaction(left, right) => Ok(Term::Interaction(
+            Box::new(resolve_term(left, data)?),
+            Box::new(resolve_term(right, data)?),
+        )),
+        other => Ok(other.clone()),
+    }
+}
+
+/// Sorted distinct numeric level codes of a categorical column. Mirrors the
+/// `RandomEffect` level-walk but yields a deterministic, sorted ordering so the
+/// treatment baseline (`levels[0]`) and contrast columns are reproducible.
+fn distinct_levels(x: &Array1<f64>) -> Vec<f64> {
+    let mut seen: Vec<f64> = Vec::new();
+    for &v in x.iter() {
+        if !seen.contains(&v) {
+            seen.push(v);
+        }
+    }
+    seen.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    seen
+}
+
+/// Dummy-coded design block for a `Factor` with `L` levels under `contrast`,
+/// producing `L − 1` columns. `levels` are the sorted distinct codes (resolved at
+/// fit time and replayed at predict time so a level absent from new data still
+/// maps to the right column). An observation whose code is not among `levels`
+/// (an unseen level at predict time) contributes a zero row — the honest
+/// "no information" encoding.
+///
+/// - `Treatment`: column `j` indicates `levels[j + 1]`; `levels[0]` is the
+///   baseline (R's `contr.treatment`).
+/// - `SumToZero`: `contr.sum` — column `j` is `+1` for `levels[j]`, `−1` for the
+///   last level, `0` otherwise.
+fn factor_columns(
+    data: &DataSet,
+    n_obs: usize,
+    col_name: &str,
+    contrast: Contrast,
+    levels: &[f64],
+) -> Result<Array2<f64>, GamlssError> {
+    let x = get_col(data, col_name)?;
+    // Fall back to discovering levels from the column when unresolved (e.g. the
+    // assembler is exercised directly in a unit test without `resolve_terms`).
+    let owned;
+    let levels: &[f64] = if levels.is_empty() {
+        owned = distinct_levels(x);
+        &owned
+    } else {
+        levels
+    };
+    let n_levels = levels.len();
+    let n_cols = n_levels.saturating_sub(1);
+    let mut block = Array2::<f64>::zeros((n_obs, n_cols));
+    if n_cols == 0 {
+        return Ok(block); // single-level (or empty) factor contributes nothing
+    }
+    let level_index = |v: f64| levels.iter().position(|&u| u == v);
+    for (i, &v) in x.iter().enumerate() {
+        let Some(idx) = level_index(v) else { continue }; // unseen level → zero row
+        match contrast {
+            Contrast::Treatment => {
+                if idx >= 1 {
+                    block[[i, idx - 1]] = 1.0;
+                }
             }
-            other => Ok(other.clone()),
-        })
-        .collect()
+            Contrast::SumToZero => {
+                if idx == n_levels - 1 {
+                    for j in 0..n_cols {
+                        block[[i, j]] = -1.0;
+                    }
+                } else {
+                    block[[i, idx]] = 1.0;
+                }
+            }
+        }
+    }
+    Ok(block)
+}
+
+/// Design columns for a single term used as an operand of an `Interaction`
+/// (`Intercept`, `Linear`, `Factor`, or a nested `Interaction`). Smooth and
+/// offset operands are rejected — smooth-by-factor interactions are SMOOTH-3
+/// territory, and an offset has no design column to multiply.
+fn term_columns(data: &DataSet, n_obs: usize, term: &Term) -> Result<Array2<f64>, GamlssError> {
+    match term {
+        Term::Intercept => Ok(Array1::ones(n_obs).insert_axis(Axis(1))),
+        Term::Linear { col_name } => Ok(get_col(data, col_name)?.to_owned().insert_axis(Axis(1))),
+        Term::Factor {
+            col_name,
+            contrast,
+            levels,
+            ..
+        } => factor_columns(data, n_obs, col_name, *contrast, levels),
+        Term::Interaction(left, right) => {
+            let lc = term_columns(data, n_obs, left)?;
+            let rc = term_columns(data, n_obs, right)?;
+            Ok(row_kronecker_block(&lc, &rc, n_obs))
+        }
+        Term::Smooth(_) => Err(GamlssError::Input(
+            "smooth terms cannot appear inside an interaction (see SMOOTH-3, \
+             by-factor smooths)"
+                .to_string(),
+        )),
+        Term::Offset { .. } => Err(GamlssError::Input(
+            "an offset cannot appear inside an interaction".to_string(),
+        )),
+    }
+}
+
+/// Row-wise Kronecker product of two design blocks: an `n × p` and an `n × q`
+/// block combine into an `n × (p·q)` block whose row `i` is the Kronecker product
+/// of the two operand rows — the same primitive tensor smooths use.
+fn row_kronecker_block(left: &Array2<f64>, right: &Array2<f64>, n_obs: usize) -> Array2<f64> {
+    let n_cols = left.ncols() * right.ncols();
+    let mut out = Array2::<f64>::zeros((n_obs, n_cols));
+    for i in 0..n_obs {
+        row_kronecker_into(left.row(i), right.row(i), out.row_mut(i));
+    }
+    out
 }
 
 fn assemble_smooth(
@@ -280,7 +429,7 @@ pub(crate) fn assemble_model_matrices(
     data: &DataSet,
     n_obs: usize,
     terms: &[Term],
-) -> Result<(ModelMatrix, Vec<PenaltyMatrix>, usize, Vec<TermLayout>), GamlssError> {
+) -> Result<AssembledDesign, GamlssError> {
     // Smooth bases on this codebase (P-spline, tensor-product, random-effect indicator)
     // are all partition-of-unity, so `1_n ∈ col(B)`. When an `Intercept` term is also
     // present the design matrix is rank-deficient. Apply a sum-to-zero
@@ -291,29 +440,56 @@ pub(crate) fn assemble_model_matrices(
     let mut penalty_blocks: Vec<(usize, PenaltyMatrix)> = Vec::new();
     let mut term_layouts = Vec::with_capacity(terms.len());
     let mut total_coeffs = 0;
+    // Fixed per-row carry into η; stays zero unless a `Term::Offset` is present.
+    let mut offset = Array1::<f64>::zeros(n_obs);
+
+    // Push a parametric (unpenalized) design block and record its layout.
+    let push_parametric =
+        |parts: &mut Vec<Array2<f64>>, layouts: &mut Vec<TermLayout>, block: Array2<f64>| {
+            let n_coeffs = block.ncols();
+            parts.push(block);
+            layouts.push(TermLayout {
+                n_coeffs,
+                null_dim: 0,
+                is_smooth: false,
+            });
+            n_coeffs
+        };
 
     for term in terms {
         match term {
             Term::Intercept => {
                 let part = Array1::ones(n_obs).insert_axis(Axis(1));
-                model_matrix_parts.push(part);
-                term_layouts.push(TermLayout {
-                    n_coeffs: 1,
-                    null_dim: 0,
-                    is_smooth: false,
-                });
-                total_coeffs += 1;
+                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, part);
             }
             Term::Linear { col_name } => {
                 let x_col_vec = get_col(data, col_name)?;
                 let part: Array2<f64> = x_col_vec.to_owned().insert_axis(Axis(1));
-                model_matrix_parts.push(part);
+                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, part);
+            }
+            Term::Factor {
+                col_name,
+                contrast,
+                levels,
+                ..
+            } => {
+                let block = factor_columns(data, n_obs, col_name, *contrast, levels)?;
+                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, block);
+            }
+            Term::Interaction(..) => {
+                let block = term_columns(data, n_obs, term)?;
+                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, block);
+            }
+            Term::Offset { col_name } => {
+                // Enters η additively with a fixed coefficient of 1; contributes
+                // to the offset vector, not to β. Record a zero-width layout so
+                // term/EDF bookkeeping stays aligned with `terms`.
+                offset += get_col(data, col_name)?;
                 term_layouts.push(TermLayout {
-                    n_coeffs: 1,
+                    n_coeffs: 0,
                     null_dim: 0,
                     is_smooth: false,
                 });
-                total_coeffs += 1;
             }
             Term::Smooth(smooth) => {
                 let (basis, penalties) = assemble_smooth(data, n_obs, smooth, has_intercept)?;
@@ -333,13 +509,19 @@ pub(crate) fn assemble_model_matrices(
         }
     }
 
-    let x_model = ModelMatrix(concatenate(
-        Axis(1),
-        &model_matrix_parts
-            .iter()
-            .map(|m| m.view())
-            .collect::<Vec<_>>(),
-    )?);
+    // A formula of nothing but offsets has no design column; emit an explicit
+    // `n × 0` matrix rather than tripping `concatenate`'s empty-input error.
+    let x_model = if model_matrix_parts.is_empty() {
+        ModelMatrix(Array2::<f64>::zeros((n_obs, 0)))
+    } else {
+        ModelMatrix(concatenate(
+            Axis(1),
+            &model_matrix_parts
+                .iter()
+                .map(|m| m.view())
+                .collect::<Vec<_>>(),
+        )?)
+    };
 
     let penalty_matrices = penalty_blocks
         .into_iter()
@@ -355,7 +537,13 @@ pub(crate) fn assemble_model_matrices(
         })
         .collect::<Vec<_>>();
 
-    Ok((x_model, penalty_matrices, total_coeffs, term_layouts))
+    Ok(AssembledDesign {
+        x: x_model,
+        penalties: penalty_matrices,
+        n_coeffs: total_coeffs,
+        layouts: term_layouts,
+        offset,
+    })
 }
 
 #[cfg(test)]
@@ -379,8 +567,8 @@ mod tests {
             penalty_order: 2,
         });
 
-        let (mm, _, _, _) = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
-        for row in mm.0.rows() {
+        let design = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
+        for row in design.x.0.rows() {
             let row_sum: f64 = row.sum();
             assert!(
                 (row_sum - 1.0).abs() < 1e-10,
@@ -388,5 +576,133 @@ mod tests {
                 row_sum
             );
         }
+    }
+
+    fn data_with(name: &str, values: Vec<f64>) -> DataSet {
+        let mut d = DataSet::new();
+        d.insert_column(name, Array1::from_vec(values));
+        d
+    }
+
+    /// Treatment (dummy) coding matches R `contr.treatment`: `L − 1` columns,
+    /// `levels[0]` the baseline, column `j` indicating `levels[j + 1]`.
+    #[test]
+    fn factor_treatment_contrast_matches_r() {
+        // Levels {0,1,2}; one observation per level, in scrambled order.
+        let data = data_with("g", vec![2.0, 0.0, 1.0, 2.0]);
+        let cols = factor_columns(&data, 4, "g", Contrast::Treatment, &[]).unwrap();
+        // Rows: level 2 → [0,1], level 0 → [0,0], level 1 → [1,0], level 2 → [0,1].
+        let expected = [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        assert_eq!(cols.dim(), (4, 2));
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert_eq!(cols[[i, j]], v, "treatment[{i},{j}]");
+            }
+        }
+    }
+
+    /// Sum-to-zero coding matches R `contr.sum`: the last level is `−1` across
+    /// all columns, every other level `i` is `+1` in column `i`.
+    #[test]
+    fn factor_sum_to_zero_contrast_matches_r() {
+        let data = data_with("g", vec![0.0, 1.0, 2.0]);
+        let cols = factor_columns(&data, 3, "g", Contrast::SumToZero, &[]).unwrap();
+        // contr.sum(3): level0 → [1,0], level1 → [0,1], level2 (last) → [-1,-1].
+        let expected = [[1.0, 0.0], [0.0, 1.0], [-1.0, -1.0]];
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert_eq!(cols[[i, j]], v, "contr.sum[{i},{j}]");
+            }
+        }
+    }
+
+    /// A level absent from the resolved `levels` (unseen at predict time) yields
+    /// a zero row rather than a panic or a misaligned column.
+    #[test]
+    fn factor_unseen_level_is_zero_row() {
+        let data = data_with("g", vec![5.0]); // 5 not among the fitted levels
+        let cols = factor_columns(&data, 1, "g", Contrast::Treatment, &[0.0, 1.0, 2.0]).unwrap();
+        assert_eq!(cols.dim(), (1, 2));
+        assert_eq!(cols[[0, 0]], 0.0);
+        assert_eq!(cols[[0, 1]], 0.0);
+    }
+
+    /// Interaction is the row-wise product of operand columns. factor(2 levels) ×
+    /// continuous collapses to one column: the non-baseline dummy times `x`.
+    #[test]
+    fn interaction_factor_times_continuous_is_product() {
+        let mut data = DataSet::new();
+        data.insert_column("g", Array1::from_vec(vec![0.0, 1.0, 1.0, 0.0]));
+        data.insert_column("x", Array1::from_vec(vec![2.0, 3.0, 4.0, 5.0]));
+        let term = Term::interaction(Term::factor("g"), Term::linear("x"));
+        let cols = term_columns(&data, 4, &term).unwrap();
+        assert_eq!(cols.dim(), (4, 1));
+        // g dummy (level 1) is [0,1,1,0]; times x [2,3,4,5] → [0,3,4,0].
+        let expected = [0.0, 3.0, 4.0, 0.0];
+        for (i, &v) in expected.iter().enumerate() {
+            assert_eq!(cols[[i, 0]], v, "interaction[{i}]");
+        }
+    }
+
+    /// continuous × continuous interaction is the elementwise product `x·z`.
+    #[test]
+    fn interaction_continuous_times_continuous() {
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0]));
+        data.insert_column("z", Array1::from_vec(vec![4.0, 5.0, 6.0]));
+        let term = Term::interaction(Term::linear("x"), Term::linear("z"));
+        let cols = term_columns(&data, 3, &term).unwrap();
+        let expected = [4.0, 10.0, 18.0];
+        for (i, &v) in expected.iter().enumerate() {
+            assert_eq!(cols[[i, 0]], v);
+        }
+    }
+
+    /// factor × factor: a 2-level × 3-level interaction yields `1 × 2 = 2`
+    /// columns (the product of the two contrast blocks).
+    #[test]
+    fn interaction_factor_times_factor_column_count() {
+        let mut data = DataSet::new();
+        data.insert_column("g", Array1::from_vec(vec![0.0, 1.0, 0.0, 1.0]));
+        data.insert_column("h", Array1::from_vec(vec![0.0, 1.0, 2.0, 0.0]));
+        let term = Term::interaction(Term::factor("g"), Term::factor("h"));
+        let cols = term_columns(&data, 4, &term).unwrap();
+        assert_eq!(cols.dim(), (4, 2));
+    }
+
+    /// A smooth operand inside an interaction is rejected with a clear message
+    /// (smooth-by-factor is SMOOTH-3, out of scope here).
+    #[test]
+    fn interaction_rejects_smooth_operand() {
+        let mut data = DataSet::new();
+        data.insert_column("g", Array1::from_vec(vec![0.0, 1.0]));
+        data.insert_column("x", Array1::from_vec(vec![0.0, 1.0]));
+        let term = Term::interaction(Term::factor("g"), Term::smooth(Smooth::ps("x")));
+        assert!(term_columns(&data, 2, &term).is_err());
+    }
+
+    /// `resolve_terms` fills a bare factor's levels from the data (sorted) and
+    /// stores them on the term, so predict replays the identical coding.
+    #[test]
+    fn resolve_terms_fills_factor_levels() {
+        let data = data_with("g", vec![2.0, 0.0, 1.0, 0.0]);
+        let resolved = resolve_terms(&[Term::factor("g")], &data).unwrap();
+        match &resolved[0] {
+            Term::Factor { levels, .. } => assert_eq!(levels, &vec![0.0, 1.0, 2.0]),
+            other => panic!("expected resolved Factor, got {other:?}"),
+        }
+    }
+
+    /// The assembled offset vector is the sum of every `Term::Offset` column and
+    /// the offset terms contribute no design columns.
+    #[test]
+    fn offset_terms_accumulate_into_offset_vector() {
+        let mut data = DataSet::new();
+        data.insert_column("a", Array1::from_vec(vec![1.0, 2.0, 3.0]));
+        data.insert_column("b", Array1::from_vec(vec![10.0, 20.0, 30.0]));
+        let terms = vec![Term::Intercept, Term::offset("a"), Term::offset("b")];
+        let design = assemble_model_matrices(&data, 3, &terms).unwrap();
+        assert_eq!(design.n_coeffs, 1); // intercept only
+        assert_eq!(design.offset.to_vec(), vec![11.0, 22.0, 33.0]);
     }
 }

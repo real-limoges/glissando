@@ -16,18 +16,30 @@ def test_unknown_family_object_rejected(synthetic_gaussian, gaussian_formula):
         )
 
 
-def test_non_finite_response_rejected(gaussian_formula):
+def test_non_finite_response_rejected_with_na_fail(gaussian_formula):
+    """Under na_action='fail' a missing response is a hard error (DATA-4)."""
     n = 50
     y = np.linspace(0.0, 1.0, n)
     y[5] = np.nan
     data = {"x": np.linspace(0.0, 1.0, n)}
     with pytest.raises(RuntimeError):
-        glissando.GamlssModel.fit(
+        glissando.GamlssModel.fit_with_config(
             data,
             y,
             gaussian_formula,
             glissando.Gaussian(),
+            {"na_action": "fail"},
         )
+
+
+def test_non_finite_response_dropped_by_default(gaussian_formula):
+    """The default na_action drops the missing row and fits the rest (DATA-4)."""
+    n = 50
+    y = np.linspace(0.0, 1.0, n)
+    y[5] = np.nan
+    data = {"x": np.linspace(0.0, 1.0, n)}
+    model = glissando.GamlssModel.fit(data, y, gaussian_formula, glissando.Gaussian())
+    assert model.converged()
 
 
 def test_missing_referenced_column_rejected():

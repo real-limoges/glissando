@@ -98,7 +98,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     let (mut alpha, mut hits) = (1.0_f64, 0usize);
     loop {
         let beta_a = &model.beta.0 + &(alpha * &dir);
-        let eta_a = x.dot(&beta_a);
+        let eta_a = x.dot(&beta_a) + &model.offset; // η = X·β + offset (DATA-3)
         let mu_a = eta_a.mapv(|e| link.inv_link(e));
         let gd_a = global_deviance_with(family, y, prior_weights, models, param, &mu_a)?;
 
@@ -201,6 +201,12 @@ pub(super) fn step<D: Distribution + ?Sized>(
             *w_out = prior_i * safe_w;
         });
 
+    // The solver fits X·β to z, so the fixed offset (which enters η but not β) is
+    // subtracted out: the adjusted working response becomes (η + u/w) − offset =
+    // X·β_old + u/w. η is reconstructed as X·β_new + offset below (DATA-3). This is
+    // a no-op when there is no offset (the vector is all zeros).
+    z -= &target.offset;
+
     // 4–5. Optimize λ (warm-started from the previous step), solve PWLS, and
     //      attribute per-term EDF. Purely parametric models (no penalties) take
     //      the zero-λ fast path inside `run_opt`.
@@ -293,7 +299,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         }
     };
 
-    let new_eta = target.x_matrix.dot(&new_beta.0);
+    let new_eta = target.x_matrix.dot(&new_beta.0) + &target.offset; // η = X·β + offset
     let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
     let max_diff = (&new_beta.0 - &target.beta.0)
         .iter()
@@ -351,6 +357,7 @@ mod tests {
             beta: Coefficients(array![eta_init]),
             eta,
             mu,
+            offset: Array1::zeros(n),
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
@@ -372,6 +379,7 @@ mod tests {
             beta: Coefficients(array![eta_init]),
             eta,
             mu,
+            offset: Array1::zeros(n),
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
             edf: 0.0,
@@ -459,6 +467,7 @@ mod tests {
             eta: Array1::from_elem(n, 0.0),
             // μ = inv_link(η) = η for IdentityLink.
             mu: Array1::from_elem(n, 0.0),
+            offset: Array1::zeros(n),
             lambdas: Array1::ones(1),
             covariance: None,
             edf: 0.0,
@@ -508,6 +517,7 @@ mod tests {
             beta: Coefficients(Array1::zeros(n_splines)),
             eta: Array1::from_elem(n, 0.0),
             mu: Array1::from_elem(n, 0.0),
+            offset: Array1::zeros(n),
             // Collapsed warm start: λ on the shelf.
             lambdas: Array1::from_elem(1, 1e12),
             covariance: None,

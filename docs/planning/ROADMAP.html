@@ -234,11 +234,11 @@
   </div>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">DATA-1</span></td><td>Factor / categorical type with contrast / dummy encoding (today users pre-expand manually).</td></tr>
-      <tr><td class="k"><span class="id">DATA-2</span></td><td>Interaction terms (<code>x:z</code>, <code>x*z</code>).</td></tr>
-      <tr><td class="k"><span class="id">DATA-3</span></td><td>Offsets (no offset term or argument exists).</td></tr>
-      <tr><td class="k"><span class="id">DATA-4</span></td><td>Missing-data / NA handling (<code>validate_inputs</code> currently rejects non-finite; no <code>na.action</code> / imputation).</td></tr>
-      <tr><td class="k"><span class="id">DATA-5</span></td><td>String formula parser (<code>"y ~ s(x) + z"</code>) — major ergonomics lever; ties to <span class="id">API-1</span>.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-1</span></td><td>✓ Factor / categorical type with treatment / sum-to-zero contrast coding (<code>Term::factor</code> / <code>Contrast</code>); levels resolve at fit and replay at predict.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-2</span></td><td>✓ Interaction terms (<code>x:z</code>, <code>x*z</code>) via row-Kronecker products (<code>Term::interaction</code>); factor×continuous and factor×factor included.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-3</span></td><td>✓ Offsets (<code>Term::offset</code>) — fixed per-row carry <code>η = Xβ + offset</code> threaded through fit and predict.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-4</span></td><td>✓ Missing-data / NA handling (<code>FitConfig::na_action</code>: <code>DropRows</code> default à la <code>na.omit</code>, or <code>Fail</code>).</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-5</span></td><td>✓ String formula parser (<code>Formula::parse</code> / <code>from_strings</code>, <code>"y ~ s(x) + factor(g) + x:z"</code>) — exposed on native / JSON / WASM / Python.</td></tr>
     </table>
   </div>
 
@@ -319,10 +319,10 @@
     <li class="done"><b><span class="id done">INFER-3</span> / <span class="id done">INFER-4</span></b> — ✓ GAIC(k) and stepwise term selection (<code>stepGAIC</code>).</li>
     <li class="done"><b><span class="id done">FIT-1</span> / <span class="id done">FIT-2</span></b> — ✓ Step-halving + global-deviance convergence (robustness for the heavy-tailed / skew families).</li>
     <li><b><span class="id">INFER-5</span> / <span class="id">INFER-6</span></b> / <span class="id done">INFER-7</span> — Smooth-term p-values, confidence intervals; <em>ANOVA (INFER-7) ✓ done</em>.</li>
-    <li><b><span class="id">DATA-1</span> / <span class="id">DATA-2</span> / <span class="id">DATA-3</span></b> — Factor / categorical encoding, interactions, offsets.</li>
+    <li class="done"><b><span class="id done">DATA-1</span> / <span class="id done">DATA-2</span> / <span class="id done">DATA-3</span></b> — ✓ Factor / categorical encoding, interactions, offsets.</li>
     <li><b><span class="id">STRUCT-1</span> / <span class="id">STRUCT-2</span></b> — Censoring and truncation.</li>
     <li><b><span class="id">SMOOTH-1..4</span></b> — Cyclic, thin-plate, by-factor smooths, random slopes.</li>
-    <li><b><span class="id">DATA-5</span> / <span class="id">API-1</span> / <span class="id">API-2</span></b> — Formula parser, fluent builder, <code>summary()</code>.</li>
+    <li><b><span class="id done">DATA-5</span></b> ✓ / <b><span class="id">API-1</span> / <span class="id">API-2</span></b> — Formula parser <em>done</em>; fluent builder, <code>summary()</code> remain.</li>
     <li><b><span class="id">FIT-3</span> / <span class="id">FIT-4</span></b> — CG algorithm, GAIC / grid λ selection.</li>
     <li><b><span class="id">STRUCT-3</span> / <span class="id">STRUCT-4</span></b> — Hurdle / mixture structure.</li>
     <li><b><span class="id">DIST-6</span></b> — Ocat beyond 5 categories.</li>

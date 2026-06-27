@@ -4,7 +4,8 @@
 //! depends on predictor variables. Terms can be parametric (intercept, linear) or semiparametric
 //! (smooth with penalties, random effects).
 
-/// A single term in a model formula: intercept, linear effect, or smooth.
+/// A single term in a model formula: intercept, linear effect, smooth, offset,
+/// factor, or interaction.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Term {
@@ -14,6 +15,49 @@ pub enum Term {
     },
     /// P-spline, tensor product, or random effect.
     Smooth(Smooth),
+    /// A known per-row term that enters the linear predictor `η` additively with
+    /// a fixed coefficient of 1 (e.g. `log(exposure)` for a rate model). It
+    /// contributes to `η`, not to `β`, so it occupies no design column.
+    Offset {
+        col_name: String,
+    },
+    /// A categorical predictor expanded into dummy columns under a contrast
+    /// coding. `levels` and `labels` start empty in a hand-built formula and are
+    /// resolved once from the training column at fit time (mirroring how
+    /// [`Smooth::CrSpline1D`] resolves its knots), then replayed verbatim at
+    /// predict time so the fit and predict design matrices agree.
+    Factor {
+        col_name: String,
+        contrast: Contrast,
+        /// Sorted distinct numeric level codes, length `L`. Empty until resolved.
+        #[cfg_attr(feature = "serde", serde(default))]
+        levels: Vec<f64>,
+        /// Optional human-readable level labels aligned with `levels`, used for
+        /// readable `col[label]` coefficient naming. Empty ⇒ fall back to the
+        /// numeric code in the label.
+        #[cfg_attr(feature = "serde", serde(default))]
+        labels: Vec<String>,
+    },
+    /// Row-wise product of two terms' design columns (e.g. `x:z`). The
+    /// coefficient count is the product of the two operands' column counts;
+    /// factor×continuous and factor×factor both fall out of the same product.
+    Interaction(Box<Term>, Box<Term>),
+}
+
+/// Contrast coding for a [`Term::Factor`] with `L` levels, producing `L − 1`
+/// columns so a factor sharing its parameter with an [`Term::Intercept`] stays
+/// identifiable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum Contrast {
+    /// Treatment (dummy) coding against the first level as baseline — R's
+    /// default `contr.treatment`. Column `j` indicates level `j + 1`.
+    #[default]
+    Treatment,
+    /// Sum-to-zero coding (`contr.sum`): each column contrasts a level against
+    /// the grand mean, the last level being the negative sum of the others.
+    SumToZero,
 }
 
 impl Term {
@@ -29,12 +73,49 @@ impl Term {
         Term::Smooth(smooth)
     }
 
+    /// An offset term on `col_name` — enters `η` additively with coefficient 1.
+    pub fn offset(col_name: impl Into<String>) -> Self {
+        Term::Offset {
+            col_name: col_name.into(),
+        }
+    }
+
+    /// A categorical factor on `col_name` with treatment (dummy) contrasts —
+    /// R's default. Levels resolve from the data at fit time. Use
+    /// [`Term::factor_with`] to choose a different [`Contrast`].
+    pub fn factor(col_name: impl Into<String>) -> Self {
+        Self::factor_with(col_name, Contrast::Treatment)
+    }
+
+    /// A categorical factor on `col_name` with an explicit [`Contrast`].
+    pub fn factor_with(col_name: impl Into<String>, contrast: Contrast) -> Self {
+        Term::Factor {
+            col_name: col_name.into(),
+            contrast,
+            levels: Vec::new(),
+            labels: Vec::new(),
+        }
+    }
+
+    /// The row-wise interaction (product) of two terms — e.g.
+    /// `Term::interaction(Term::factor("region"), Term::linear("x"))`.
+    pub fn interaction(left: Term, right: Term) -> Self {
+        Term::Interaction(Box::new(left), Box::new(right))
+    }
+
     /// Returns the column names referenced by this term.
     pub fn column_names(&self) -> Vec<&str> {
         match self {
             Term::Intercept => vec![],
             Term::Linear { col_name } => vec![col_name.as_str()],
             Term::Smooth(smooth) => smooth.column_names(),
+            Term::Offset { col_name } => vec![col_name.as_str()],
+            Term::Factor { col_name, .. } => vec![col_name.as_str()],
+            Term::Interaction(left, right) => {
+                let mut cols = left.column_names();
+                cols.extend(right.column_names());
+                cols
+            }
         }
     }
 
@@ -49,6 +130,40 @@ impl Term {
             Term::Intercept => "(intercept)".to_string(),
             Term::Linear { col_name } => col_name.clone(),
             Term::Smooth(s) => s.term_name(),
+            Term::Offset { col_name } => format!("offset({col_name})"),
+            Term::Factor { col_name, .. } => col_name.clone(),
+            Term::Interaction(left, right) => {
+                format!("{}:{}", left.term_name(), right.term_name())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Term {
+    /// Renders a term in the R/mgcv formula spelling so a parsed formula can
+    /// round-trip back to a string (`Intercept` → `1`, `Linear` → the bare name,
+    /// `Smooth` → `s(..)`/`te(..)`, `Offset` → `offset(..)`, `Factor` → the bare
+    /// name, `Interaction` → `a:b`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Term::Intercept => write!(f, "1"),
+            Term::Linear { col_name } => write!(f, "{col_name}"),
+            Term::Smooth(s) => write!(f, "{}", s.formula_repr()),
+            Term::Offset { col_name } => write!(f, "offset({col_name})"),
+            // Rendered as `factor(..)` (not the bare name) so it round-trips: a
+            // bare name parses back as `Linear`, whereas `factor(..)` reparses as
+            // a `Factor`. Sum-to-zero coding surfaces its contrast hint.
+            Term::Factor {
+                col_name,
+                contrast: Contrast::Treatment,
+                ..
+            } => write!(f, "factor({col_name})"),
+            Term::Factor {
+                col_name,
+                contrast: Contrast::SumToZero,
+                ..
+            } => write!(f, "factor({col_name}, sum)"),
+            Term::Interaction(left, right) => write!(f, "{left}:{right}"),
         }
     }
 }
@@ -237,6 +352,38 @@ impl Smooth {
             } => format!("s({col_name}), pc={v}"),
             Smooth::CrSpline1D { col_name, .. } => format!("s({col_name})"),
             Smooth::RandomEffect { col_name } => format!("s({col_name})"),
+            Smooth::TensorProduct {
+                col_name_1,
+                col_name_2,
+                ..
+            } => format!("te({col_name_1},{col_name_2})"),
+        }
+    }
+
+    /// Renders this smooth in the R/mgcv formula spelling the string parser
+    /// accepts, so a parsed formula round-trips. Non-default basis sizes surface
+    /// as `k=`; the basis type surfaces as `bs=` for CR / random-effect smooths.
+    pub fn formula_repr(&self) -> String {
+        match self {
+            Smooth::PSpline1D {
+                col_name,
+                n_splines,
+                ..
+            } => {
+                if *n_splines == Self::DEFAULT_N_SPLINES {
+                    format!("s({col_name})")
+                } else {
+                    format!("s({col_name}, k={n_splines})")
+                }
+            }
+            Smooth::CrSpline1D { col_name, k, .. } => {
+                if *k == Self::DEFAULT_CR_K {
+                    format!("s({col_name}, bs=\"cr\")")
+                } else {
+                    format!("s({col_name}, bs=\"cr\", k={k})")
+                }
+            }
+            Smooth::RandomEffect { col_name } => format!("s({col_name}, bs=\"re\")"),
             Smooth::TensorProduct {
                 col_name_1,
                 col_name_2,

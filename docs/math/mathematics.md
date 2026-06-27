@@ -1017,6 +1017,52 @@ $$
 
 The new design matrix $[\mathbf{1}_n \mid B Z]$ has full column rank, and the constraint $\mathbf{1}_k^T \beta = 0$ — i.e.\ the smooth has mean zero across knots — is enforced automatically.
 
+### 5.1b Design-Matrix Terms: Factors, Interactions, and Offsets (DATA-1/2/3)
+
+The assembler (`src/fitting/assembler.rs`) turns a parameter's term list into design
+columns. Beyond the intercept, linear, and smooth blocks above, three parametric term
+kinds expand here.
+
+**Factors (contrast coding).** A categorical column with $L$ distinct level codes
+expands into $L-1$ columns under a chosen contrast, so a factor sharing the parameter
+with an intercept stays identifiable (the dropped degree of freedom is the baseline /
+grand mean). With levels sorted $\ell_0 < \ell_1 < \dots < \ell_{L-1}$:
+
+- **Treatment** (R `contr.treatment`, the default): column $j$ is the indicator
+  $\mathbb{1}[g_i = \ell_{j+1}]$, with $\ell_0$ the baseline. Coefficient $j$ is the
+  mean shift of level $\ell_{j+1}$ relative to $\ell_0$.
+- **Sum-to-zero** (R `contr.sum`): column $j$ is $+1$ for level $\ell_j$, $-1$ for the
+  last level $\ell_{L-1}$, and $0$ otherwise. Each column sums to zero over the levels,
+  so the coefficients are contrasts against the grand mean and the last level is
+  $-\sum_j \beta_j$.
+
+Levels are resolved once from the training column and stored on the term, so prediction
+replays the identical column mapping; an unseen level at predict time maps to an all-zero
+row (the honest "no information" encoding).
+
+**Interactions.** The term $a\!:\!b$ is the row-wise Kronecker product of the two
+operands' design blocks: if $A \in \mathbb{R}^{n\times p}$ and $B \in \mathbb{R}^{n\times q}$
+are the operand columns, the interaction block is $C \in \mathbb{R}^{n\times pq}$ with
+$$
+C_{i,\,(r-1)q + s} = A_{i r}\, B_{i s},
+$$
+the same `row_kronecker_into` primitive used for tensor smooths. Factor$\times$continuous
+and factor$\times$factor both fall out of this product once factors are expanded; the
+crossing $a\!*\!b$ desugars to $a + b + a\!:\!b$.
+
+**Offsets.** An offset is a known per-row term entering the linear predictor with a fixed
+coefficient of $1$:
+$$
+\eta = X\beta + o, \qquad o_i = \log(\text{exposure}_i)\ \text{(typical rate model)}.
+$$
+It contributes to $\eta$, not to $\beta$, so it carries no design column. In the
+Rigby–Stasinopoulos working response (§4.3) the solver fits $X\beta$ to
+$z = \eta + u/w$; since $X\beta = \eta - o$, the offset is subtracted from the working
+response before the penalized least-squares solve, $z' = z - o$, and $\eta$ is
+reconstructed as $X\beta + o$ afterward. The solver therefore stays offset-unaware, and a
+fit with offset $o$ is identical to folding $o$ into the response on the link scale (a
+closed-form check for the identity link).
+
 ### P-Spline Penalty (Eilers & Marx 1996)
 
 For 2nd-order differences:
