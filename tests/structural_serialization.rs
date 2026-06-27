@@ -50,7 +50,9 @@ fn censored_descriptor_round_trips() {
     assert_eq!(desc.build().unwrap().name(), "Censored");
     // The descriptor preserves the per-row status (so the base is Gaussian).
     match &desc {
-        FamilyDescriptor::Censored { base, status: s, .. } => {
+        FamilyDescriptor::Censored {
+            base, status: s, ..
+        } => {
             assert!(matches!(**base, FamilyDescriptor::Named(ref n) if n == "Gaussian"));
             assert_eq!(s.len(), n);
         }

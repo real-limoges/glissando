@@ -38,11 +38,7 @@ impl Truncated {
     /// Restrict `base` to the per-row open interval `(lower, upper)`. Use `±∞` for
     /// an unbounded side. `lower` and `upper` must match in length.
     pub fn new(base: Box<dyn Distribution>, lower: Array1<f64>, upper: Array1<f64>) -> Self {
-        Self {
-            base,
-            lower,
-            upper,
-        }
+        Self { base, lower, upper }
     }
 
     /// The wrapped base family.
@@ -268,7 +264,10 @@ mod tests {
     fn left_truncation_renormalizes() {
         // Left-truncated at 0: log f_T(y) = log f(y) − log(1 − F(0)).
         let y = array![1.0, 2.0, 0.5];
-        let owned = [("mu", array![1.0, 1.0, 1.0]), ("sigma", array![1.0, 1.0, 1.0])];
+        let owned = [
+            ("mu", array![1.0, 1.0, 1.0]),
+            ("sigma", array![1.0, 1.0, 1.0]),
+        ];
         let p = params_view(&owned);
         let lo = Array1::from_elem(3, 0.0);
         let hi = Array1::from_elem(3, f64::INFINITY);
