@@ -208,7 +208,9 @@ impl GamlssModel {
             })
     }
 
-    /// Serializes the model to JSON, including the distribution name for later deserialization.
+    /// Serializes the model to JSON, bundling a [`FamilyDescriptor`] so the family
+    /// — including stateful families and structural wrappers — can be rebuilt on
+    /// load (SER-1).
     ///
     /// # Errors
     ///
@@ -216,19 +218,22 @@ impl GamlssModel {
     #[cfg(feature = "serde")]
     pub fn to_json<D: Distribution + ?Sized>(&self, family: &D) -> Result<String, GamlssError> {
         let wrapper = SerializedModel {
-            distribution: family.name().to_string(),
+            distribution: family.descriptor(),
             model: self,
         };
         serde_json::to_string(&wrapper).map_err(|e| GamlssError::Input(e.to_string()))
     }
 
-    /// Deserializes a model from JSON, returning the model and distribution name.
+    /// Deserializes a model from JSON, returning the model and the
+    /// [`FamilyDescriptor`] describing its family. Call
+    /// [`FamilyDescriptor::build`](crate::distributions::FamilyDescriptor::build)
+    /// to reconstruct the boxed distribution.
     ///
     /// # Errors
     ///
     /// Returns `GamlssError::Input` if deserialization fails.
     #[cfg(feature = "serde")]
-    pub fn from_json(json: &str) -> Result<(Self, String), GamlssError> {
+    pub fn from_json(json: &str) -> Result<(Self, distributions::FamilyDescriptor), GamlssError> {
         let wrapper: OwnedSerializedModel =
             serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
         Ok((wrapper.model, wrapper.distribution))
@@ -664,13 +669,13 @@ impl fmt::Display for GamlssModel {
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize)]
 struct SerializedModel<'a> {
-    distribution: String,
+    distribution: distributions::FamilyDescriptor,
     model: &'a GamlssModel,
 }
 
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 struct OwnedSerializedModel {
-    distribution: String,
+    distribution: distributions::FamilyDescriptor,
     model: GamlssModel,
 }

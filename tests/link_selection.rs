@@ -192,8 +192,10 @@ fn json_roundtrip_preserves_overridden_link() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "Binomial");
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    // SER-1: Binomial now round-trips through the descriptor (it carries n_trials),
+    // where a bare name string previously could not rebuild it.
+    assert_eq!(desc.build().unwrap().name(), "Binomial");
     // The persisted link survives the round-trip...
     assert_eq!(reloaded.models["mu"].link.as_deref(), Some("probit"));
 

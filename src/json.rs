@@ -223,11 +223,11 @@ pub fn fit(
 /// returning it alongside its resolved distribution.
 ///
 /// # Errors
-/// Returns [`GamlssError`] if the JSON is malformed or names a distribution that
-/// cannot be reconstructed from its name (e.g. `Binomial`).
+/// Returns [`GamlssError`] if the JSON is malformed or describes a distribution
+/// that cannot be reconstructed (e.g. a `Named` descriptor for an unknown family).
 pub fn load(json: &str) -> Result<(GamlssModel, Box<dyn Distribution>), GamlssError> {
-    let (model, distribution_name) = GamlssModel::from_json(json)?;
-    let family = from_name(&distribution_name)?;
+    let (model, descriptor) = GamlssModel::from_json(json)?;
+    let family = descriptor.build()?;
     Ok((model, family))
 }
 

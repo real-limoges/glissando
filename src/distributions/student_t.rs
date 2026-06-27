@@ -192,6 +192,50 @@ impl Distribution for StudentT {
         Ok(out)
     }
 
+    fn cdf_eta_derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> super::CdfEtaResult {
+        // Location-scale derivatives of F = T_ν(z), z = (y−μ)/σ, with standardized
+        // t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²):
+        //   μ (identity):  ∂F/∂η = −g/σ,   ∂²F/∂η² = g'/σ².
+        //   σ (log):       ∂F/∂η = −zg,    ∂²F/∂η² = zg + z²g'.
+        // ν has no elementary CDF derivative (incomplete-beta shape derivative) and
+        // is left to the wrapper's numeric fallback.
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+
+        let mut d1_mu = Array1::<f64>::zeros(y.len());
+        let mut d2_mu = Array1::<f64>::zeros(y.len());
+        let mut d1_sigma = Array1::<f64>::zeros(y.len());
+        let mut d2_sigma = Array1::<f64>::zeros(y.len());
+        for i in 0..y.len() {
+            if !y[i].is_finite() {
+                continue; // ±∞ bound: F saturates, all derivatives vanish
+            }
+            let s = sigma[i].max(MIN_POSITIVE);
+            let nu_i = nu[i].max(MIN_POSITIVE);
+            let z = (y[i] - mu[i]) / s;
+            // standardized t density g(z)
+            let log_g = ln_gamma((nu_i + 1.0) / 2.0)
+                - ln_gamma(nu_i / 2.0)
+                - 0.5 * (std::f64::consts::PI * nu_i).ln()
+                - 0.5 * (nu_i + 1.0) * (1.0 + z * z / nu_i).ln();
+            let g = log_g.exp();
+            let g_prime = -g * (nu_i + 1.0) * z / (nu_i + z * z);
+            d1_mu[i] = -g / s;
+            d2_mu[i] = g_prime / (s * s);
+            d1_sigma[i] = -z * g;
+            d2_sigma[i] = z * g + z * z * g_prime;
+        }
+        Ok(HashMap::from([
+            ("mu".to_string(), (d1_mu, d2_mu)),
+            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+        ]))
+    }
+
     fn quantile(
         &self,
         p: &Array1<f64>,
@@ -244,8 +288,9 @@ fn median_abs_deviation(y: &Array1<f64>) -> f64 {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
 
@@ -356,6 +401,23 @@ mod tests {
         check_score_via_finite_diff(&StudentT, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "sigma", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "nu", 1e-5);
+    }
+
+    #[test]
+    fn cdf_eta_derivatives_match_finite_diff_studentt() {
+        // μ and σ are analytic; ν is intentionally absent (numeric fallback).
+        let y = array![-2.0, 0.3, 1.4, 3.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, 1.0, 2.0]),
+            ("sigma", array![1.0, 1.2, 0.9, 1.4]),
+            ("nu", array![5.0, 8.0, 6.0, 12.0]),
+        ];
+        check_cdf_eta_derivatives_via_finite_diff(&StudentT, &y, &owned, "mu", 2e-4);
+        check_cdf_eta_derivatives_via_finite_diff(&StudentT, &y, &owned, "sigma", 2e-4);
+        // ν must not be supplied analytically.
+        let p = params_view(&owned);
+        let derivs = StudentT.cdf_eta_derivatives(&y, &p).unwrap();
+        assert!(!derivs.contains_key("nu"));
     }
 
     #[test]
