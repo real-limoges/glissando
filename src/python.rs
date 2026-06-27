@@ -93,8 +93,17 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
-        let term_list: &Bound<pyo3::types::PyList> = terms.cast()?;
-        formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
+        // DATA-5: each parameter's value may be an R/mgcv-style **formula string**
+        // (`"y ~ s(x) + factor(g)"`) for ergonomics, or the structured list of term
+        // tuples. A `str` extracts cleanly; anything else is treated as a term list.
+        if let Ok(formula_str) = terms.extract::<String>() {
+            let (_response, parsed) = crate::parse_formula_string(&formula_str)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            formula.add_terms(param_name, parsed);
+        } else {
+            let term_list: &Bound<pyo3::types::PyList> = terms.cast()?;
+            formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
+        }
     }
     Ok(formula)
 }
@@ -151,6 +160,18 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
             PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
         })?;
         fit_config.links.extend(links);
+    }
+    if let Some(v) = config.get_item("na_action")? {
+        let s: String = v.extract()?;
+        fit_config.na_action = match s.to_ascii_lowercase().as_str() {
+            "drop_rows" | "drop" | "omit" => crate::fitting::NaAction::DropRows,
+            "fail" | "error" => crate::fitting::NaAction::Fail,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown na_action '{other}', expected 'drop_rows' or 'fail'"
+                )))
+            }
+        };
     }
     Ok(fit_config)
 }

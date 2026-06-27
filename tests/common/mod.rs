@@ -253,7 +253,8 @@ impl Generator {
         nu: f64,
         tau: f64,
     ) -> (Array1<f64>, DataSet) {
-        let c = (-(2.0_f64.ln()) / tau + 0.5 * ln_gamma(1.0 / tau) - 0.5 * ln_gamma(3.0 / tau)).exp();
+        let c =
+            (-(2.0_f64.ln()) / tau + 0.5 * ln_gamma(1.0 / tau) - 0.5 * ln_gamma(3.0 / tau)).exp();
         let g = RGamma::new(1.0 / tau, 1.0).unwrap();
         let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
         let y: Vec<f64> = x
@@ -262,7 +263,11 @@ impl Generator {
                 let mu = (intercept + slope * xv).exp();
                 let v: f64 = g.sample(&mut self.rng);
                 let mag = c * (2.0 * v).powf(1.0 / tau);
-                let z = if self.rng.random::<f64>() < 0.5 { -mag } else { mag };
+                let z = if self.rng.random::<f64>() < 0.5 {
+                    -mag
+                } else {
+                    mag
+                };
                 boxcox_inv_response(mu, sigma, nu, z)
             })
             .collect();

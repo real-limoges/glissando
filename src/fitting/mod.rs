@@ -17,7 +17,7 @@ mod scoring;
 pub mod selection;
 mod solver;
 
-use self::assembler::{assemble_model_matrices, resolve_terms};
+use self::assembler::{assemble_model_matrices, resolve_terms, AssembledDesign};
 
 use super::distributions::{link_from_name, Distribution, Link};
 use super::error::GamlssError;
@@ -64,6 +64,24 @@ pub enum SmoothingCriterion {
     FellnerSchall,
 }
 
+/// How the fitter treats rows carrying a missing (non-finite) value in the
+/// response or any formula-referenced column (DATA-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum NaAction {
+    /// Drop any row with a missing value in `y` or a referenced column before
+    /// fitting — R's `na.omit`, and the default. Weights and every model column
+    /// are masked together so the design, working response, and weights stay
+    /// aligned.
+    #[default]
+    DropRows,
+    /// Reject the fit with [`GamlssError`](crate::GamlssError) if any model
+    /// variable is non-finite (the historical behaviour). Use when a missing
+    /// value should be a hard error rather than silently dropped.
+    Fail,
+}
+
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -96,9 +114,22 @@ pub struct FitConfig {
     /// with [`with_link`](FitConfig::with_link) / [`with_links`](FitConfig::with_links).
     #[cfg_attr(feature = "serde", serde(default))]
     pub links: IndexMap<String, String>,
+    /// How to treat rows with a missing (non-finite) value in `y` or a referenced
+    /// column. Default: [`NaAction::DropRows`] (R's `na.omit`). Set to
+    /// [`NaAction::Fail`] to reject such inputs instead.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub na_action: NaAction,
 }
 
 impl FitConfig {
+    /// Choose how missing values are handled, returning `self` for chaining:
+    /// `FitConfig::default().with_na_action(NaAction::Fail)`.
+    #[must_use]
+    pub fn with_na_action(mut self, na_action: NaAction) -> Self {
+        self.na_action = na_action;
+        self
+    }
+
     /// Override the link for a single distribution parameter, returning `self` for
     /// chaining: `FitConfig::default().with_link("mu", "probit")`.
     #[must_use]
@@ -145,6 +176,7 @@ impl Default for FitConfig {
             step_halving: true,
             gd_tolerance: DEFAULT_GD_TOLERANCE,
             links: IndexMap::new(),
+            na_action: NaAction::default(),
         }
     }
 }
@@ -237,6 +269,12 @@ pub(super) struct FittingParameter {
     /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
     /// `inv_link` passes per Fisher-scoring step.
     pub(super) mu: Array1<f64>,
+    /// Fixed per-row offset entering the linear predictor as `η = X·β + offset`
+    /// (DATA-3). All-zeros unless the parameter's formula carries a
+    /// [`Term::Offset`](crate::Term::Offset). The PWLS solver stays offset-unaware:
+    /// the working response it sees is `z − offset`, and `η` is reconstructed as
+    /// `X·β + offset` afterwards.
+    pub(super) offset: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
     pub(super) edf: f64,
@@ -319,8 +357,13 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             None => family.default_link(param_name)?,
         };
 
-        let (x_model, penalty_matrices, total_coeffs, term_layouts) =
-            assemble_model_matrices(data, n_obs, &terms)?;
+        let AssembledDesign {
+            x: x_model,
+            penalties: penalty_matrices,
+            n_coeffs: total_coeffs,
+            layouts: term_layouts,
+            offset,
+        } = assemble_model_matrices(data, n_obs, &terms)?;
 
         let response_scale_start = family.initial_value(param_name, y);
         let eta_start = link.link(response_scale_start);
@@ -328,15 +371,15 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // Seed the intercept coefficient so the first IRLS step starts near
         // η = link(initial μ). `beta[0]` is only the intercept when the leading
         // term is `Term::Intercept`; for a smooth-only or leading-Linear formula
-        // we leave β = 0 and η = 0, which is consistent with X·β and IRLS will
-        // move us from there.
+        // we leave β = 0 and η = X·β, which IRLS will move from there. The fixed
+        // `offset` is always added: η = X·β + offset (DATA-3).
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
         let intercept_leads = matches!(terms.first(), Some(Term::Intercept));
         let eta = if intercept_leads && total_coeffs > 0 {
             beta.0[0] = eta_start;
-            Array1::from_elem(n_obs, eta_start)
+            Array1::from_elem(n_obs, eta_start) + &offset
         } else {
-            Array1::zeros(n_obs)
+            offset.clone()
         };
         let mu = eta.mapv(|e| link.inv_link(e));
         let lambdas = if penalty_matrices.is_empty() {
@@ -361,6 +404,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 beta,
                 eta,
                 mu,
+                offset,
                 lambdas,
                 covariance: None,
                 edf: 0.0,

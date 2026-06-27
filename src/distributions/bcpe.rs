@@ -132,7 +132,7 @@ impl Distribution for BCPE {
             let abs_a = aa.abs();
             let gt = abs_a.powf(t); // |z/c|^τ
             let big_t = 1.0 + nu_i * s * z; // T = (y/μ)^ν
-            // D = −dl/dz; 0 at the mode (z=0) for τ ≥ 1.
+                                            // D = −dl/dz; 0 at the mode (z=0) for τ ≥ 1.
             let d_score = if z == 0.0 {
                 0.0
             } else {
@@ -220,7 +220,9 @@ impl Distribution for BCPE {
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        Ok(crate::math::par_zip_map(mu, sigma, |m, s| (s * m) * (s * m)))
+        Ok(crate::math::par_zip_map(mu, sigma, |m, s| {
+            (s * m) * (s * m)
+        }))
     }
 
     /// `μ` is the median; the second-order mean approximation matches BCCG (the PE

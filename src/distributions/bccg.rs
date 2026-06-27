@@ -149,7 +149,9 @@ impl Distribution for BCCG {
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        Ok(crate::math::par_zip_map(mu, sigma, |m, s| (s * m) * (s * m)))
+        Ok(crate::math::par_zip_map(mu, sigma, |m, s| {
+            (s * m) * (s * m)
+        }))
     }
 
     /// `μ` is the **median**, not the mean. The exact mean has no closed form; this
@@ -385,9 +387,15 @@ mod tests {
     fn initial_value_seeds_are_robust_and_sane() {
         let y = array![2.0, 2.1, 1.9, 2.2, 2.0, 1.8, 2.3, 50.0];
         let mu0 = BCCG.initial_value("mu", &y);
-        assert!((mu0 - 2.05).abs() < 0.3, "median seed near the core (got {mu0})");
+        assert!(
+            (mu0 - 2.05).abs() < 0.3,
+            "median seed near the core (got {mu0})"
+        );
         let sigma0 = BCCG.initial_value("sigma", &y);
-        assert!(sigma0 > 0.0 && sigma0 < 1.0, "robust CV seed (got {sigma0})");
+        assert!(
+            sigma0 > 0.0 && sigma0 < 1.0,
+            "robust CV seed (got {sigma0})"
+        );
         assert_eq!(BCCG.initial_value("nu", &y), 1.0);
     }
 }
