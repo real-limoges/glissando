@@ -41,19 +41,25 @@ PROVISIONAL until the real files are inspectable.
   tolerant COLMAP (handles the `YEAR_` trailing-underscore style); required
   columns missing ⇒ hard failure, unrecognized raw columns dropped with a log
   line, optional canonical columns absent from the source created as all-null,
-  and every optional column force-cast to pandas `string` (even
-  present-but-all-null ones) so the output schema is source-stable. Invalid geometries repaired with
-  `make_valid` (keeping only the polygonal part); null/empty geometries and
-  exact duplicate rows dropped. PROVISIONAL: COLMAP was written from FRAP docs
-  for earlier releases, not the actual fire25_1 schema.
+  and every optional column force-cast (strings to pandas `string`, code
+  columns to `Int64`, even present-but-all-null ones) so the output schema is
+  source-stable. Invalid geometries repaired with `make_valid` (keeping only
+  the polygonal part); null/empty geometries and exact duplicate rows
+  dropped. VERIFIED 2026-07-02 against the real data: COLMAP matches the
+  fire25_1 column set exactly; `collection_method`/`objective_code` are int16
+  domain codes; extras `GlobalID`/`SHAPE_Length`/`SHAPE_Area` drop as
+  unrecognized; 408 invalid geometries repaired, zero null-geometry or
+  exact-duplicate rows in the real source.
 - **D5 — Deduplication (s03).** Near-duplicates are rows sharing
   (year, normalized fire_name, alarm_date), with non-empty name and non-null
   date; keep the largest `gis_acres`, ties broken by geometry area then lowest
   `src_row` (deterministic). Rows missing the key fields are never grouped.
-- **D6 — CAUSE codes.** `config.CAUSE_CODES` (1–19) transcribed from FRAP
-  metadata of earlier releases; codes outside the table keep the code and get
-  null `cause_desc` plus a warning. PROVISIONAL until checked against
-  fire25_1 metadata.
+- **D6 — CAUSE codes.** `config.CAUSE_CODES` (1–19) VERIFIED 2026-07-02
+  against the official "Wildland Fire Perimeter Metadata" PDF (AGOL item
+  a31aa1efe1d6466f8530b501c30ab00a); two corrections from the provisional
+  table: 8 = "Playing with fire", 11 = "Electrical Power". Codes outside the
+  table keep the code and get null `cause_desc` plus a warning (none occur in
+  fire25_1). C_METHOD and OBJECTIVE domains documented in SCHEMA.md.
 - **D7 — Division assignment (s05).** Fire → division by representative point
   within CA division polygons (nClimDiv state code 4); misses fall back to
   nearest division within 25 km (`division_assigned_nearest=True`), else null
@@ -61,22 +67,31 @@ PROVISIONAL until the real files are inspectable.
 - **D8 — nClimDiv parsing (s06).** Fixed-width: 10-char ID (state 2, division
   2, element 2, year 4) + 12 monthly values; units left native (tavg °F,
   precip inches, PDSI unitless); element-specific missing sentinels
-  (pdsi −99.99, tavg −99.90, pcpn −9.99). PROVISIONAL: layout and sentinels
-  from the climdiv README, unverified against real files.
-- **D9 — GSOM wind (s07).** AWND per station-month from an NCEI Access Data
-  Service CSV over a CA bounding box, 1980-01-01–2025-12-31; stations mapped
-  to divisions as in D7; covariate is the division-month *mean* AWND plus the
-  contributing-station count. PROVISIONAL: exact API parameter support, CSV
-  column names, and AWND units (assumed m/s) unverified.
+  (pdsi −99.99, tavg −99.90, pcpn −9.99). VERIFIED 2026-07-02 against the
+  real files: layout, CA state code 04, divisions 01–07, element codes
+  (05/02/01, now validated per record), and sentinels all confirmed.
+- **D9 — GSOM wind (s07).** AWND per station-month, 1980-01-01–2025-12-31;
+  stations mapped to divisions as in D7; covariate is the division-month
+  *mean* AWND plus the contributing-station count. VERIFIED/REVISED
+  2026-07-02: the data service rejects bounding boxes ("A station is
+  required"), so the pull is two-step — search service enumerates the 118
+  AWND stations in the CA bbox (pinned `gsom_stations.json`), then chunked
+  data pulls concatenate into one pinned CSV. Columns confirmed (STATION,
+  LATITUDE, LONGITUDE, ELEVATION, DATE, AWND); units confirmed m/s (metric
+  service default; GSOM docs + value distribution, mean 2.9 max 8.3).
 - **D10 — Join semantics (s08).** Covariate month = alarm month. Left joins
   only; fires without division or alarm_date keep null covariates and are
   never dropped.
 - **D11 — Coarse-geometry flag (s04).** `vertices_per_km` (vertex count over
   perimeter length) below `COARSE_VERTICES_PER_KM` ⇒ `coarse_geometry`.
-  Threshold currently a 0.5 placeholder; s04 writes
-  `data/processed/s04_vertex_density.csv` (quantiles) to calibrate against
-  the real distribution — TBD, document the chosen value here and in
-  PROVENANCE.md.
+  CALIBRATED 2026-07-02 to **3.0**: the real distribution (committed as
+  `data/processed/s04_vertex_density.csv`) has median 27.4, p05 5.9,
+  p01 3.17; 3.0 ≈ the empirical 1st percentile and reads as "average vertex
+  spacing coarser than ~333 m". Flags 197/23,205 fires (0.85%) — the tail is
+  dominated by pre-1950 digitizations plus a few crude modern polygons
+  (e.g. FIREBAUGH 2024: 7 vertices over a 9.6 km perimeter). Rejected
+  alternatives: 0.5/1.0 flag almost nothing real; p05 (≈5.9) starts flagging
+  perimeters that are visibly fine at fire scale.
 - **D12 — Determinism.** `fire_id` = first 12 hex of sha256 over
   `year|fire_name_norm|alarm_date|src_row` (`src_row` = position in the raw
   layer, stable within a pinned release). Final table sorted by `fire_id`,
@@ -92,6 +107,22 @@ PROVISIONAL until the real files are inspectable.
   e.g. smoke fixtures — are exempt), and `download.py` refuses to silently
   re-pin: a drifted local file or drifted upstream content is a hard error
   telling the operator to delete the manifest entry deliberately.
+- **D15 — FRAP source is the CNRA hub gdb export, not the official file.**
+  The canonical `fire25_1.gdb.zip` on fire.ca.gov is behind a WAF that 403s
+  this environment (browser UAs and server-side fetchers included; the old
+  frap.fire.ca.gov pages now redirect there). The pinned source is therefore
+  the hub filegdb export of AGOL item c3c10388e3b24cec8a954ba10458039d
+  layer 0 ("California Fire Perimeters (all)"), verified to carry the
+  fire25_1 release data (23,334 features, max YEAR_ 2025, FRAP schema).
+  Consequences documented in PROVENANCE.md: source CRS is EPSG:3857
+  (reprojected in s02), no prescribed-burn layer, export regenerated
+  server-side (download.py polls through the hub's "Pending" state and
+  validates the zip magic; the manifest sha256 is the pin). Revisit if the
+  official file becomes reachable.
+- **D16 — Date semantics.** fire25_1 stores ALARM_DATE/CONT_DATE as
+  midnight-UTC instants (verified: every non-null value is 00:00:00 UTC).
+  s02 strips the timezone to recover the recorded calendar date and warns if
+  a future release ever carries non-midnight times.
 
 ## Fresh-context audit (2026-07-02)
 
@@ -111,46 +142,34 @@ poison-value GSOM station, `.gitignore` now actually commits the QC report
 D13 promised, and SCHEMA.md's date types / null policy / code-column dtypes
 were corrected.
 
-## Session state (end of 2026-07-02 session)
+## Session state (end of 2026-07-02 session, part 2 — network opened)
 
-**Done and verified this session:**
+**The dataset is built.** After the user opened the egress policy, this
+session completed every remaining step:
 
-- Rebuilt from scratch: `pipeline/` (config, util, download, s01–s09,
-  run_all), Makefile targets (`download`, `all`, `smoke`, `pipeline-clean`),
-  synthetic fixtures under `tests/fixtures/pipeline/`, smoke runner
-  `scripts/smoke_pipeline.py`, `requirements.txt` (pinned), this file,
-  PROVENANCE.md, artifacts/SCHEMA.md.
-- `make smoke` is green: 8-row artifact; assertions cover near-dedup, exact
-  dedup, name normalization, bow-tie repair, null-geometry drop, coarse flag,
-  nearest-division fallback, beyond-fallback null division, climate join
-  values, December sentinel month → null covariates, out-of-state station
-  exclusion, and string-typing of all-null optional columns; two full runs
-  produce byte-identical artifacts.
-- Fresh-context audit run; all findings fixed (see audit section above) and
-  re-verified by the strengthened smoke test.
-- `python -m pipeline.download` fails loudly (exit 1) with actionable errors
-  while URLs are unresolved / network is blocked — by design.
+- Verified host access (note: www.fire.ca.gov / the relocated FRAP pages are
+  still WAF-blocked at the application level — hence D15).
+- Resolved and pinned all sources; `make download` wrote
+  `data/raw/MANIFEST.json` (7 files: hub gdb export, 3 nClimDiv element
+  files @ 20260604, division boundaries, GSOM station list + AWND CSV).
+- Verified every provisional assumption against real data (D4, D6, D8, D9,
+  D15, D16 updated above); fixed s01 layer detection, s02 code-column types
+  and NaT-safe midnight check, GSOM two-step download, hub Pending polling,
+  zip-magic validation.
+- `make all`: 23,334 raw → 23,205 final rows (129 near-dups removed; 408
+  invalid geometries repaired; 1 division-null fire = 2002 BISCUIT, rep.
+  point in Oregon). Climate coverage among joinable fires: nClimDiv 100%,
+  AWND 64.2% (GSOM window starts 1980).
+- Calibrated `COARSE_VERTICES_PER_KM` = 3.0 (D11) — flags 197 fires (0.85%).
+- Determinism verified on real data: two clean rebuilds → identical
+  sha256 `222a8e9a3e50148b43448759a5bcf0d944c09927c43bd2cadf9c6acf8cd6133f`.
+- PROVENANCE.md and artifacts/SCHEMA.md fully populated (no TBDs left);
+  QC report + vertex-density CSV committed.
+- `make smoke` still green after all changes.
 
-**Blocked — network egress policy.** The session's egress gateway answers
-403 (CONNECT denied) for every data host: `www.ncei.noaa.gov`,
-`gis.data.cnra.ca.gov`, `data.ca.gov`, `www.fire.ca.gov`, `frap.fire.ca.gov`,
-`services.arcgis.com`. Verified via curl and the agent-proxy status endpoint
-at session start (2026-07-02). PyPI was reachable (proxy-exempt), so
-dependencies install fine. **The network policy for this environment must
-allow those hosts before the remaining work can proceed.**
+**Remaining / follow-ups (none blocking):**
 
-**Remaining work, in order (unchanged from the original plan):**
-
-1. Resolve and hardcode the fire25_1 gdb URL (`config.FRAP_GDB_URL`) and the
-   versioned nClimDiv filenames (`config.CLIMDIV_PINNED_FILES`); then
-   `make download` (writes `data/raw/MANIFEST.json`).
-2. Inspect the real gdb schema / climdiv files / GSOM CSV; fix the
-   PROVISIONAL assumptions (D4 COLMAP, D6 cause table, D8 layout+sentinels,
-   D9 GSOM columns+units, s05 boundary-shapefile attribute names).
-3. `make all`; calibrate `COARSE_VERTICES_PER_KM` from
-   `data/processed/s04_vertex_density.csv` and document it (D11).
-4. Rebuild twice; confirm byte-identical artifact sha256.
-5. Fill every TBD in PROVENANCE.md and artifacts/SCHEMA.md from the QC report
-   and the manifest.
-6. Fresh-context subagent audit of dataset + docs; fix findings; update this
-   file; commit each logical step; push.
+- The artifact parquet itself is gitignored; distribute out-of-band and
+  verify against the sha256 above.
+- If the official fire25_1.gdb.zip ever becomes reachable, consider re-basing
+  on it (D15) — expect geometry deltas from the 3857→3310 round-trip.
