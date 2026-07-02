@@ -29,22 +29,27 @@ MANIFEST_PATH = RAW_DIR / "MANIFEST.json"
 # ---------------------------------------------------------------------------
 FRAP_RELEASE = "fire25_1"
 
-# TBD: the exact download URL for the fire25_1 file-geodatabase zip could not
-# be resolved yet — the session network policy denies CONNECT to
-# frap.fire.ca.gov / www.fire.ca.gov / gis.data.cnra.ca.gov / *.arcgis.com
-# (403 from the egress gateway, see NOTES.md). download.py fails loudly while
-# this is None. Expected shape:
-#   https://frap.fire.ca.gov/media/<hash>/fire25_1.gdb.zip
-FRAP_GDB_URL: str | None = None
+# The official fire25_1.gdb.zip lives on www.fire.ca.gov behind a WAF that
+# blocks this environment (403 for both local curl and server-side fetchers),
+# so the pinned source is the CNRA hub file-geodatabase export of CAL FIRE's
+# AGOL service "California Fire Perimeters (all)" (item c3c10388..., layer 0),
+# which carries the fire25_1 release data (verified: 23,334 features, max
+# YEAR_ = 2025, FRAP column set). See NOTES.md D15 for the trade-offs
+# (service CRS is Web Mercator; the snapshot checksum in MANIFEST.json is the
+# real pin because hub exports are regenerated server-side).
+FRAP_GDB_URL: str | None = (
+    "https://gis.data.cnra.ca.gov/api/download/v1/items/"
+    "c3c10388e3b24cec8a954ba10458039d/filegdb?layers=0"
+)
 
 # Local filename for the raw download; PIPELINE_FRAP_RAW lets the smoke test
 # substitute a synthetic GeoJSON without touching the download path.
 FRAP_RAW_PATH = Path(os.environ.get("PIPELINE_FRAP_RAW", str(RAW_DIR / f"{FRAP_RELEASE}.gdb.zip")))
 
-# Layer inside the gdb holding wildfire perimeters. None = autodetect the
-# unique layer whose name contains "firep" (PROVISIONAL: expected name
-# "firep25_1"; the gdb also carries prescribed-burn layers like "rxburn25_1").
-FRAP_GDB_LAYER: str | None = None
+# Layer inside the gdb holding wildfire perimeters (verified 2026-07-02: the
+# hub export contains exactly this single layer; the prescribed-burn layer of
+# the official gdb is not part of item c3c10388/layer 0).
+FRAP_GDB_LAYER: str | None = "California_Fire_Perimeters__all_"
 
 # ---------------------------------------------------------------------------
 # Source: NOAA nClimDiv division-month climate (PDSI, temperature, precip)
@@ -64,10 +69,12 @@ CLIMDIV_ELEMENTS = {
     "climdiv-tmpcdv": ("tavg_degf", -99.90, "02"),
     "climdiv-pcpndv": ("precip_in", -9.99, "01"),
 }
+# Pinned 2026-07-02 (procdate.txt = 20260604). NCEI replaces these monthly and
+# does not retain old versions; MANIFEST.json checksums pin the snapshot.
 CLIMDIV_PINNED_FILES: dict[str, str | None] = {
-    "climdiv-pdsidv": None,  # TBD (blocked network)
-    "climdiv-tmpcdv": None,  # TBD (blocked network)
-    "climdiv-pcpndv": None,  # TBD (blocked network)
+    "climdiv-pdsidv": "climdiv-pdsidv-v1.0.0-20260604",
+    "climdiv-tmpcdv": "climdiv-tmpcdv-v1.0.0-20260604",
+    "climdiv-pcpndv": "climdiv-pcpndv-v1.0.0-20260604",
 }
 
 # nClimDiv state code for California (not FIPS).
@@ -82,20 +89,31 @@ DIVISIONS_RAW_PATH = Path(
 # ---------------------------------------------------------------------------
 # Source: NOAA GSOM station wind (AWND) via the NCEI Access Data Service
 # ---------------------------------------------------------------------------
+# Two-step pull (the data service requires explicit stations; a bounding box
+# alone is rejected with 400 "A station is required"):
+#   1. search service enumerates GSOM stations with AWND in a CA bounding box
+#      (bbox order: north,west,south,east) -> pinned gsom_stations.json;
+#   2. data service fetches AWND per chunk of stations -> concatenated into
+#      one pinned gsom_ca_awnd.csv (columns verified 2026-07-02: STATION,
+#      LATITUDE, LONGITUDE, ELEVATION, DATE "YYYY-MM", AWND).
+GSOM_SEARCH_URL = "https://www.ncei.noaa.gov/access/services/search/v1/data"
+GSOM_SEARCH_PARAMS = {
+    "dataset": "global-summary-of-the-month",
+    "dataTypes": "AWND",
+    "bbox": "42.1,-124.6,32.4,-113.9",
+    "limit": "1000",
+}
 GSOM_API_URL = "https://www.ncei.noaa.gov/access/services/data/v1"
-# PROVISIONAL: boundingBox is (north, west, south, east) covering California;
-# parameter support and the exact CSV column set must be verified when the
-# host is reachable. GSOM AWND units are documented as meters/second
-# (PROVISIONAL — verify against the GSOM documentation table).
 GSOM_PARAMS = {
     "dataset": "global-summary-of-the-month",
     "dataTypes": "AWND",
-    "boundingBox": "42.1,-124.6,32.4,-113.9",
     "startDate": "1980-01-01",
     "endDate": "2025-12-31",
     "format": "csv",
     "includeStationLocation": "true",
 }
+GSOM_STATIONS_CHUNK = 40
+GSOM_STATIONS_RAW_PATH = RAW_DIR / "gsom_stations.json"
 GSOM_RAW_PATH = Path(os.environ.get("PIPELINE_GSOM_RAW", str(RAW_DIR / "gsom_ca_awnd.csv")))
 
 # ---------------------------------------------------------------------------
@@ -107,17 +125,20 @@ CRS_ALBERS = "EPSG:3310"
 CRS_WGS84 = "EPSG:4326"
 
 # Perimeters digitized below this vertex density are flagged coarse_geometry.
-# PROVISIONAL placeholder — calibrate against the real vertex-density
-# distribution (s04 writes data/processed/s04_vertex_density.csv) and record
-# the chosen value + rationale in NOTES.md and PROVENANCE.md.
-COARSE_VERTICES_PER_KM = 0.5
+# Calibrated 2026-07-02 against the real fire25_1 distribution
+# (data/processed/s04_vertex_density.csv): median 27.4 vertices/km, p05 5.9,
+# p01 3.17. 3.0 ≈ the empirical 1st percentile and corresponds to an average
+# vertex spacing coarser than ~333 m; flags 197/23205 fires (0.85%) — mostly
+# pre-1950 digitizations and a few crude modern polygons. See NOTES.md D11.
+COARSE_VERTICES_PER_KM = 3.0
 
 # A fire whose representative point falls outside every division polygon is
 # assigned the nearest division if within this distance, else left null.
 DIVISION_NEAREST_MAX_KM = 25.0
 
-# FRAP CAUSE code table. PROVISIONAL: transcribed from FRAP metadata for
-# earlier releases; re-verify against the fire25_1 metadata before release.
+# FRAP CAUSE code table, verified 2026-07-02 against the official "Wildland
+# Fire Perimeter Metadata" PDF (AGOL item a31aa1efe1d6466f8530b501c30ab00a,
+# CAUSE domain, display values verbatim).
 CAUSE_CODES = {
     1: "Lightning",
     2: "Equipment Use",
@@ -126,10 +147,10 @@ CAUSE_CODES = {
     5: "Debris",
     6: "Railroad",
     7: "Arson",
-    8: "Playing with Fire",
+    8: "Playing with fire",
     9: "Miscellaneous",
     10: "Vehicle",
-    11: "Powerline",
+    11: "Electrical Power",
     12: "Firefighter Training",
     13: "Non-Firefighter Training",
     14: "Unknown/Unidentified",

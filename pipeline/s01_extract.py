@@ -36,6 +36,8 @@ def _resolve_source() -> tuple[str, str | None]:
         if config.FRAP_GDB_LAYER not in layers:
             raise ValueError(f"pinned layer {config.FRAP_GDB_LAYER!r} not in {layers}")
         return src, config.FRAP_GDB_LAYER
+    if len(layers) == 1:
+        return src, layers[0]
     candidates = [name for name in layers if "firep" in name.lower()]
     if len(candidates) != 1:
         raise ValueError(

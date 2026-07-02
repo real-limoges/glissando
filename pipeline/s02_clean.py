@@ -56,15 +56,15 @@ KEEP = [
     "alarm_date", "cont_date", "cause_code", "cause_desc", "collection_method",
     "objective_code", "gis_acres", "complex_name", "complex_id", "src_row",
 ]
-# Every KEEP column not otherwise typed below is coerced to pandas "string"
-# (even when present-but-all-null) so the artifact schema never depends on
-# which optional fields a release happens to populate. collection_method and
-# objective_code are numeric codes in FRAP docs but stored as string until the
-# real dtype is confirmed (PROVISIONAL).
+# Optional columns are force-cast (even when present-but-all-null) so the
+# artifact schema never depends on which fields a release happens to populate.
+# collection_method / objective_code are int16 domain codes in the real gdb
+# (verified 2026-07-02 against fire25_1 and its metadata PDF).
 STRING_COLS = [
     "state", "agency", "unit_id", "fire_name", "inc_num", "irwin_id",
-    "collection_method", "objective_code", "complex_name", "complex_id",
+    "complex_name", "complex_id",
 ]
+INT_COLS = ["collection_method", "objective_code"]
 
 
 def main() -> int:
@@ -99,11 +99,14 @@ def main() -> int:
         if c in gdf.columns:
             parsed = pd.to_datetime(gdf[c], errors="coerce")
             if getattr(parsed.dt, "tz", None) is not None:
-                # PROVISIONAL: dropping tz keeps the stored wall-clock time; if
-                # the real gdb turns out to carry tz-aware instants, decide the
-                # local-date policy explicitly (NOTES.md) before trusting this.
-                util.log(STAGE, f"WARNING: {c} is timezone-aware ({parsed.dt.tz}); "
-                                "stripping tz without conversion")
+                # The fire25_1 gdb stores dates as midnight-UTC instants
+                # (verified 2026-07-02), so dropping the tz recovers the
+                # recorded calendar date exactly (NOTES.md D16).
+                nonmidnight = int((parsed.notna()
+                                   & (parsed.dt.time != pd.Timestamp("00:00").time())).sum())
+                if nonmidnight:
+                    util.log(STAGE, f"WARNING: {c}: {nonmidnight} values are not "
+                                    "midnight UTC; date extraction may be off by one")
                 parsed = parsed.dt.tz_localize(None)
             gdf[c] = parsed.dt.normalize()
     gdf["cause_code"] = pd.to_numeric(gdf["cause_code"], errors="coerce").astype("Int64")
@@ -111,6 +114,9 @@ def main() -> int:
     for c in STRING_COLS:
         if c in gdf.columns:
             gdf[c] = gdf[c].astype("string")
+    for c in INT_COLS:
+        if c in gdf.columns:
+            gdf[c] = pd.to_numeric(gdf[c], errors="coerce").astype("Int64")
     gdf["cause_desc"] = gdf["cause_code"].map(config.CAUSE_CODES).astype("string")
     n_unknown_cause = int((gdf["cause_desc"].isna() & gdf["cause_code"].notna()).sum())
     if n_unknown_cause:
@@ -138,10 +144,11 @@ def main() -> int:
         gdf = gdf[~still_empty]
 
     # Optional canonical columns absent from the raw schema still exist in the
-    # output (all-null, string-typed) so the final schema is source-stable.
+    # output (all-null, correctly typed) so the final schema is source-stable.
     absent = [c for c in KEEP if c not in gdf.columns]
     for c in absent:
-        gdf[c] = pd.Series(pd.NA, index=gdf.index, dtype="string")
+        gdf[c] = pd.Series(pd.NA, index=gdf.index,
+                           dtype="Int64" if c in INT_COLS else "string")
     if absent:
         util.log(STAGE, f"optional columns absent in raw source, created as null: {absent}")
     gdf = gdf[KEEP + ["geometry"]]

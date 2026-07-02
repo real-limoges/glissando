@@ -1,0 +1,54 @@
+{
+  "files": {
+    "climdiv-pcpndv": {
+      "bytes": 4622268,
+      "filename": "climdiv-pcpndv-v1.0.0-20260604",
+      "retrieved_at": "2026-07-02T16:03:52Z",
+      "sha256": "cd1278485a05399d59c09564a8ed4532aa3f5c657512de2b81d3e718afbe5109",
+      "url": "https://www.ncei.noaa.gov/pub/data/cirs/climdiv/climdiv-pcpndv-v1.0.0-20260604"
+    },
+    "climdiv-pdsidv": {
+      "bytes": 4449984,
+      "filename": "climdiv-pdsidv-v1.0.0-20260604",
+      "retrieved_at": "2026-07-02T16:03:49Z",
+      "sha256": "db6c4e40a13927463bafa42208e20e8a4e3b7b6a76bf87083d02ba7ba0a3e101",
+      "url": "https://www.ncei.noaa.gov/pub/data/cirs/climdiv/climdiv-pdsidv-v1.0.0-20260604"
+    },
+    "climdiv-tmpcdv": {
+      "bytes": 4622268,
+      "filename": "climdiv-tmpcdv-v1.0.0-20260604",
+      "retrieved_at": "2026-07-02T16:03:51Z",
+      "sha256": "b5eaaa08236129da2f7373b8dcd13d920a288bb437c67cb82f4bf9c391cdc792",
+      "url": "https://www.ncei.noaa.gov/pub/data/cirs/climdiv/climdiv-tmpcdv-v1.0.0-20260604"
+    },
+    "divisions_shp": {
+      "bytes": 35544701,
+      "filename": "CONUS_CLIMATE_DIVISIONS.shp.zip",
+      "retrieved_at": "2026-07-02T16:03:53Z",
+      "sha256": "edcfadfd390f41eafb8cd4e112d3ead7444a25e505f43fa29107f0c64516aeb3",
+      "url": "https://www.ncei.noaa.gov/pub/data/cirs/climdiv/CONUS_CLIMATE_DIVISIONS.shp.zip"
+    },
+    "frap_gdb": {
+      "bytes": 45719838,
+      "filename": "fire25_1.gdb.zip",
+      "retrieved_at": "2026-07-02T16:06:59Z",
+      "sha256": "1bc7e1ef21014f5048631631b79d9db03e298201cf0d2bf9cbc4e5ed8e0bd68a",
+      "url": "https://gis.data.cnra.ca.gov/api/download/v1/items/c3c10388e3b24cec8a954ba10458039d/filegdb?layers=0"
+    },
+    "gsom_awnd": {
+      "bytes": 2659091,
+      "filename": "gsom_ca_awnd.csv",
+      "retrieved_at": "2026-07-02T16:07:08Z",
+      "sha256": "45512cf48897783bba3e91b63b1f6485ec0060db78a795d92640d34de439ef49",
+      "url": "https://www.ncei.noaa.gov/access/services/data/v1?dataset=global-summary-of-the-month&dataTypes=AWND&startDate=1980-01-01&endDate=2025-12-31&format=csv&includeStationLocation=true&stations=%3Cpinned+station+list%3E"
+    },
+    "gsom_stations": {
+      "bytes": 1464010,
+      "filename": "gsom_stations.json",
+      "retrieved_at": "2026-07-02T16:07:00Z",
+      "sha256": "246dc8c286fe79699889be0b6afe9f2a577c213ef98cb87dce77b95b5ed1f300",
+      "url": "https://www.ncei.noaa.gov/access/services/search/v1/data?dataset=global-summary-of-the-month&dataTypes=AWND&bbox=42.1%2C-124.6%2C32.4%2C-113.9&limit=1000"
+    }
+  },
+  "release": "fire25_1"
+}
