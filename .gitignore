@@ -21,3 +21,11 @@ docs/planning/feature-brainstorm.md
 # Accidental root-level npm scaffolding — the published npm package is pkg/.
 /package.json
 /package-lock.json
+
+# Data pipeline outputs (raw snapshots are pinned via data/raw/MANIFEST.json,
+# which IS committed; the bulky files themselves are not).
+/data/*
+!/data/raw
+/data/raw/*
+!/data/raw/MANIFEST.json
+/artifacts/*.parquet
