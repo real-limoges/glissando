@@ -8,7 +8,7 @@ build; the authoritative per-build numbers live in
 
 - rows: 23,205
 - year range: 1878–2025 (77 fires have no recorded year)
-- artifact sha256: `222a8e9a3e50148b43448759a5bcf0d944c09927c43bd2cadf9c6acf8cd6133f`
+- artifact sha256: `128675030cad1030acd725b96c489a0b43f02fea837e14557e67617a55394cd5`
 - FRAP release: `fire25_1`
 
 ## Identity
@@ -23,7 +23,7 @@ build; the authoritative per-build numbers live in
 | column | type | description |
 |---|---|---|
 | `year` | Int64 | Fire year as recorded by FRAP (`YEAR_`). Null for 77 old records. |
-| `state` | string | State code; predominantly `CA`, with border-fire values `AZ`, `NV`, `OR`, `MX`. |
+| `state` | string | State code: `CA` 23,188, `NV` 11, `OR` 4, `AZ` 2 (border fires). |
 | `agency` | string | Reporting agency code (e.g. `CDF`, `USF`, `BLM`). |
 | `unit_id` | string | Responsibility-area unit code. |
 | `fire_name` | string | Fire name as recorded; null for 28.4% (mostly pre-1950). |

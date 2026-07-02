@@ -5,8 +5,10 @@ station to a California climate division with the same point-in-polygon +
 nearest fallback used for fires (s05.assign_division), and averages AWND per
 (division, year, month), keeping the contributing-station count.
 
-PROVISIONAL assumptions to verify against the real download: CSV columns are
-STATION, DATE (YYYY-MM), LATITUDE, LONGITUDE, AWND; AWND is meters/second.
+Verified 2026-07-02 against the real download: CSV columns are STATION,
+LATITUDE, LONGITUDE, ELEVATION, DATE (YYYY-MM), AWND; AWND is meters/second
+(the Access Data Service metric default — corroborated by GSOM documentation
+and the value distribution).
 """
 
 from __future__ import annotations

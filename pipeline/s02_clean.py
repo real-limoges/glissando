@@ -7,10 +7,9 @@
   null/empty geometries;
 - drops rows that are exact duplicates (all attributes + geometry).
 
-The COLMAP below is PROVISIONAL — written from FRAP documentation for earlier
-releases before fire25_1 was inspectable. s02 fails loudly if any *required*
-canonical column is missing so schema drift is caught, and logs raw columns it
-did not recognize.
+The COLMAP below matches the fire25_1 schema exactly (verified 2026-07-02).
+s02 fails loudly if any *required* canonical column is missing so drift in a
+future release is caught, and logs raw columns it did not recognize.
 """
 
 from __future__ import annotations
@@ -113,7 +112,10 @@ def main() -> int:
     gdf["gis_acres"] = pd.to_numeric(gdf["gis_acres"], errors="coerce").astype("float64")
     for c in STRING_COLS:
         if c in gdf.columns:
-            gdf[c] = gdf[c].astype("string")
+            s = gdf[c].astype("string")
+            # Whitespace-only values (fire25_1 has two empty-string IDs) are
+            # missing data, not values.
+            gdf[c] = s.mask(s.str.strip() == "")
     for c in INT_COLS:
         if c in gdf.columns:
             gdf[c] = pd.to_numeric(gdf[c], errors="coerce").astype("Int64")

@@ -2,7 +2,7 @@
 
 - FRAP release: `fire25_1`
 - artifact: `fires_enriched.parquet`
-- artifact sha256: `222a8e9a3e50148b43448759a5bcf0d944c09927c43bd2cadf9c6acf8cd6133f`
+- artifact sha256: `128675030cad1030acd725b96c489a0b43f02fea837e14557e67617a55394cd5`
 - rows: 23205
 - CRS: EPSG:3310
 - coarse-geometry threshold (vertices/km): 3.0
@@ -28,9 +28,9 @@
 | fire_name | 6583 | 28.4% |  "Y" | ZWINGE |
 | fire_name_norm | 0 | 0.0% |  | ZWINGE |
 | inc_num | 953 | 4.1% | 00000000 | SKU03705 |
-| irwin_id | 19575 | 84.4% |  | {f9653bc1-2e4a-42bb-81be-6df0f6a3a91b} |
+| irwin_id | 19576 | 84.4% |  {1D244C5D-2411-41BC-9890-EF9D7914D7F6} | {f9653bc1-2e4a-42bb-81be-6df0f6a3a91b} |
 | complex_name | 22594 | 97.4% | 2022 SRF Lightning Complex | YUBA RIVER COMPLEX |
-| complex_id | 22622 | 97.5% |  | {FE46567A-A03E-4D5C-91E5-2788D89AA5A9} |
+| complex_id | 22623 | 97.5% | 00000000 | {FE46567A-A03E-4D5C-91E5-2788D89AA5A9} |
 | alarm_date | 5384 | 23.2% | 1898-04-01 00:00:00 | 2025-12-24 00:00:00 |
 | cont_date | 12526 | 54.0% | 1912-08-31 00:00:00 | 2025-12-24 00:00:00 |
 | alarm_year | 5384 | 23.2% | 1898 | 2025 |

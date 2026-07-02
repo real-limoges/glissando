@@ -6,10 +6,10 @@ point. Fires whose point falls outside every polygon (coastal slivers, CRS
 edge effects) get the nearest division if within DIVISION_NEAREST_MAX_KM,
 recorded via division_assigned_nearest; otherwise division stays null.
 
-The boundary-file attribute schema is detected tolerantly (PROVISIONAL until
-verified against the real shapefile): first a CLIMDIV column (state*100+div),
-else STATE_CODE/CD_2DIG style pairs, else lowercase state_code/division as
-used by the smoke fixture.
+The boundary-file attribute schema is detected tolerantly: first a CLIMDIV
+column (state*100+div — the branch the real CONUS shapefile takes, verified
+2026-07-02), else STATE_CODE/CD_2DIG style pairs, else lowercase
+state_code/division as used by the smoke fixture.
 """
 
 from __future__ import annotations

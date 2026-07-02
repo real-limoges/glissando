@@ -20,7 +20,7 @@ overwrites nClimDiv files monthly; hub exports and the GSOM API are live), so
 the checksummed snapshot — not the URLs — defines the dataset; `download.py`
 refuses to silently re-pin a drifted file.
 
-- artifact sha256: `222a8e9a3e50148b43448759a5bcf0d944c09927c43bd2cadf9c6acf8cd6133f`
+- artifact sha256: `128675030cad1030acd725b96c489a0b43f02fea837e14557e67617a55394cd5`
 - artifact rows: 23,205 (fires 1878–2025)
 - built with: Python 3.11.15, pinned package versions in `requirements.txt`
 - full per-file checksums: `data/raw/MANIFEST.json` (committed)
@@ -117,4 +117,10 @@ refuses to silently re-pin a drifted file.
 - FRAP's own use limitation applies: the record is incomplete (missing and
   over-generalized perimeters, especially pre-1950); use care in statistical
   analysis.
+- `gis_acres` is FRAP's published value and is not recomputed: it matches the
+  geometry almost everywhere (median gis_acres / geometry-acres = 1.0000,
+  p01 = p99 = 1.0), but 9 fires >10 acres disagree with their geometry by
+  more than 25% (worst: DOOLITTLE 2023, published 16.6 ac vs ~2.4 ac of
+  polygon) — upstream inconsistencies, kept as published. Use `area_km2` for
+  geometry-derived size.
 - Climate values are division-scale monthly context, not at-fire weather.

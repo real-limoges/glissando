@@ -162,10 +162,25 @@ session completed every remaining step:
   AWND 64.2% (GSOM window starts 1980).
 - Calibrated `COARSE_VERTICES_PER_KM` = 3.0 (D11) — flags 197 fires (0.85%).
 - Determinism verified on real data: two clean rebuilds → identical
-  sha256 `222a8e9a3e50148b43448759a5bcf0d944c09927c43bd2cadf9c6acf8cd6133f`.
+  sha256 `128675030cad1030acd725b96c489a0b43f02fea837e14557e67617a55394cd5`.
 - PROVENANCE.md and artifacts/SCHEMA.md fully populated (no TBDs left);
   QC report + vertex-density CSV committed.
 - `make smoke` still green after all changes.
+
+**Second fresh-context audit (dataset + docs).** A no-context subagent
+recomputed every checkable claim: checksums, all null counts, dedup
+arithmetic (23,334 → 23,205 = exactly 129), flag counts, coverage
+percentages, parquet schema vs SCHEMA.md, fire_id formula on a sample, and
+plausibility spot-checks (CAMP/DIXIE/AUGUST COMPLEX/PALISADES present once;
+metrics reproduce from geometry byte-exactly). Everything reproduced. Four
+findings, all fixed: SCHEMA.md listed a phantom `MX` state value (actual:
+CA 23,188 / NV 11 / OR 4 / AZ 2); stale PROVISIONAL/TBD code comments
+contradicted the verified decision log; two empty-string IDs
+(irwin_id/complex_id) now normalized to null in s02 — this changed the
+artifact hash to the value above; and a PROVENANCE caveat was added for the
+9 fires whose published gis_acres disagrees with their geometry by >25%.
+Also noted, no action: the 1958 DAM fire has alarm_date 1957-07-02
+(alarm_year ≠ year; climate joins on alarm month per D10, as documented).
 
 **Remaining / follow-ups (none blocking):**
 

@@ -1,10 +1,10 @@
 """s06: parse nClimDiv fixed-width element files into division-month rows.
 
-Record layout (per the climdiv README, PROVISIONAL until checked against the
-real files): a 10-char ID — state(2) division(2) element(2) year(4) — followed
-by 12 whitespace-separated monthly values. Units are native nClimDiv units:
-tavg °F, precip inches, PDSI unitless. Element-specific missing-value
-sentinels come from config.CLIMDIV_ELEMENTS.
+Record layout (verified 2026-07-02 against the real files): a 10-char ID —
+state(2) division(2) element(2) year(4) — followed by 12 whitespace-separated
+monthly values. Units are native nClimDiv units: tavg °F, precip inches, PDSI
+unitless. Element-specific missing-value sentinels and expected element codes
+come from config.CLIMDIV_ELEMENTS.
 
 Files are discovered in CLIMDIV_RAW_DIR by element prefix so pinned real
 downloads and smoke fixtures parse through the same code path.
