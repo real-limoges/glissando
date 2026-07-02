@@ -22,10 +22,16 @@ docs/planning/feature-brainstorm.md
 /package.json
 /package-lock.json
 
-# Data pipeline outputs (raw snapshots are pinned via data/raw/MANIFEST.json,
-# which IS committed; the bulky files themselves are not).
+# Data pipeline outputs. Committed: the manifest of raw-snapshot checksums,
+# the QC report (holds the artifact sha256), and the vertex-density table
+# behind the coarse-geometry calibration. Not committed: bulky raw/interim
+# data and the parquet artifact itself.
 /data/*
 !/data/raw
 /data/raw/*
 !/data/raw/MANIFEST.json
+!/data/processed
+/data/processed/*
+!/data/processed/s09_qc_report.md
+!/data/processed/s04_vertex_density.csv
 /artifacts/*.parquet

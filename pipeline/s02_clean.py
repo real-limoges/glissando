@@ -56,6 +56,15 @@ KEEP = [
     "alarm_date", "cont_date", "cause_code", "cause_desc", "collection_method",
     "objective_code", "gis_acres", "complex_name", "complex_id", "src_row",
 ]
+# Every KEEP column not otherwise typed below is coerced to pandas "string"
+# (even when present-but-all-null) so the artifact schema never depends on
+# which optional fields a release happens to populate. collection_method and
+# objective_code are numeric codes in FRAP docs but stored as string until the
+# real dtype is confirmed (PROVISIONAL).
+STRING_COLS = [
+    "state", "agency", "unit_id", "fire_name", "inc_num", "irwin_id",
+    "collection_method", "objective_code", "complex_name", "complex_id",
+]
 
 
 def main() -> int:
@@ -74,6 +83,9 @@ def main() -> int:
     gdf = gdf.rename(columns=rename)
     if unrecognized:
         util.log(STAGE, f"unrecognized raw columns dropped: {unrecognized}")
+    recognized_dropped = sorted(set(rename.values()) - set(KEEP))
+    if recognized_dropped:
+        util.log(STAGE, f"recognized columns intentionally not carried forward: {recognized_dropped}")
     missing = REQUIRED - set(gdf.columns)
     if missing:
         raise ValueError(
@@ -85,10 +97,20 @@ def main() -> int:
     gdf["year"] = pd.to_numeric(gdf["year"], errors="coerce").astype("Int64")
     for c in ("alarm_date", "cont_date"):
         if c in gdf.columns:
-            gdf[c] = pd.to_datetime(gdf[c], errors="coerce").dt.tz_localize(None).dt.normalize()
+            parsed = pd.to_datetime(gdf[c], errors="coerce")
+            if getattr(parsed.dt, "tz", None) is not None:
+                # PROVISIONAL: dropping tz keeps the stored wall-clock time; if
+                # the real gdb turns out to carry tz-aware instants, decide the
+                # local-date policy explicitly (NOTES.md) before trusting this.
+                util.log(STAGE, f"WARNING: {c} is timezone-aware ({parsed.dt.tz}); "
+                                "stripping tz without conversion")
+                parsed = parsed.dt.tz_localize(None)
+            gdf[c] = parsed.dt.normalize()
     gdf["cause_code"] = pd.to_numeric(gdf["cause_code"], errors="coerce").astype("Int64")
     gdf["gis_acres"] = pd.to_numeric(gdf["gis_acres"], errors="coerce").astype("float64")
-    gdf["fire_name"] = gdf["fire_name"].astype("string")
+    for c in STRING_COLS:
+        if c in gdf.columns:
+            gdf[c] = gdf[c].astype("string")
     gdf["cause_desc"] = gdf["cause_code"].map(config.CAUSE_CODES).astype("string")
     n_unknown_cause = int((gdf["cause_desc"].isna() & gdf["cause_code"].notna()).sum())
     if n_unknown_cause:

@@ -30,6 +30,7 @@ def main() -> int:
     path = Path(config.GSOM_RAW_PATH)
     if not path.exists():
         raise FileNotFoundError(f"GSOM snapshot missing: {path} (run `make download`)")
+    util.verify_against_manifest(path)
     df = pd.read_csv(path)
     df.columns = [c.upper() for c in df.columns]
     missing = REQUIRED - set(df.columns)

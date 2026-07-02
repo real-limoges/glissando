@@ -303,6 +303,53 @@
   {
    "type": "Feature",
    "properties": {
+    "YEAR_": 2003,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "ZETA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": null,
+    "CONT_DATE": null,
+    "CAUSE": 14,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 50.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -121.005,
+       36.995
+      ],
+      [
+       -120.995,
+       36.995
+      ],
+      [
+       -120.995,
+       37.005
+      ],
+      [
+       -121.005,
+       37.005
+      ],
+      [
+       -121.005,
+       36.995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
     "YEAR_": 2002,
     "STATE": "CA",
     "AGENCY": "CDF",
@@ -341,6 +388,100 @@
       ],
       [
        -124.085,
+       37.995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "THETA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-12-05",
+    "CONT_DATE": "2001-12-05",
+    "CAUSE": 1,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 200.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -121.505,
+       39.495
+      ],
+      [
+       -121.495,
+       39.495
+      ],
+      [
+       -121.495,
+       39.505
+      ],
+      [
+       -121.505,
+       39.505
+      ],
+      [
+       -121.505,
+       39.495
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2002,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "IOTA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2002-07-04",
+    "CONT_DATE": "2002-07-04",
+    "CAUSE": 9,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 40.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -126.005,
+       37.995
+      ],
+      [
+       -125.995,
+       37.995
+      ],
+      [
+       -125.995,
+       38.005
+      ],
+      [
+       -126.005,
+       38.005
+      ],
+      [
+       -126.005,
        37.995
       ]
      ]

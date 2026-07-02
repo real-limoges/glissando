@@ -39,13 +39,27 @@ def main() -> int:
         gsom.rename(columns={"year": "alarm_year", "month": "alarm_month"}),
         on=["division", "alarm_year", "alarm_month"], how="left",
     )
-    assert len(merged) == len(fires), "join fanned out: climate tables not unique per division-month"
+    if len(merged) != len(fires):
+        raise ValueError(
+            f"join fanned out ({len(fires)} -> {len(merged)} rows): "
+            "climate tables are not unique per division-month"
+        )
     merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=fires.crs)
 
     joinable = merged["division"].notna() & merged["alarm_date"].notna()
     for col in CLIMDIV_COLS + GSOM_COLS:
         cov = merged.loc[joinable, col].notna().mean() if joinable.any() else float("nan")
         util.log(STAGE, f"coverage among joinable fires: {col} = {cov:.1%}")
+    # Zero coverage with joinable fires means the join keys are broken (wrong
+    # state code, format drift, ...) — that must fail, not ship an all-null
+    # artifact with exit code 0.
+    if joinable.any():
+        for cols, source in ((CLIMDIV_COLS, "nClimDiv"), (GSOM_COLS, "GSOM")):
+            if all(merged.loc[joinable, c].isna().all() for c in cols):
+                raise ValueError(
+                    f"no joinable fire received any {source} covariate — "
+                    "division/year/month join keys look broken"
+                )
     util.log(STAGE, f"{len(merged)} rows; joinable={int(joinable.sum())}, "
                     f"unjoinable (null division or alarm_date)={int((~joinable).sum())}")
     util.write_geoparquet(merged, config.INTERIM_DIR / OUT_PATH_NAME)

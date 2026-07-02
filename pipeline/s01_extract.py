@@ -26,6 +26,7 @@ def _resolve_source() -> tuple[str, str | None]:
     raw = Path(config.FRAP_RAW_PATH)
     if not raw.exists():
         raise FileNotFoundError(f"raw FRAP source missing: {raw} (run `make download`)")
+    util.verify_against_manifest(raw)
     if raw.suffix != ".zip":
         return str(raw), None
     src = f"zip://{raw}"

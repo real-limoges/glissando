@@ -57,11 +57,12 @@ CLIMDIV_BASE_URL = "https://www.ncei.noaa.gov/pub/data/cirs/climdiv/"
 # "climdiv-pdsidv-v1.0.0-20250605"). s06 discovers files in CLIMDIV_RAW_DIR by
 # these prefixes, so smoke fixtures and real downloads parse identically.
 CLIMDIV_ELEMENTS = {
-    # prefix -> (output column, missing-value sentinel)  [sentinels PROVISIONAL,
-    # from the climdiv README: pcpn -9.99, tavg -99.90, pdsi -99.99]
-    "climdiv-pdsidv": ("pdsi", -99.99),
-    "climdiv-tmpcdv": ("tavg_degf", -99.90),
-    "climdiv-pcpndv": ("precip_in", -9.99),
+    # prefix -> (output column, missing-value sentinel, element code expected
+    # in chars 5-6 of each record ID)  [sentinels and codes PROVISIONAL, from
+    # the climdiv README: pcpn=01 -9.99, tavg=02 -99.90, pdsi=05 -99.99]
+    "climdiv-pdsidv": ("pdsi", -99.99, "05"),
+    "climdiv-tmpcdv": ("tavg_degf", -99.90, "02"),
+    "climdiv-pcpndv": ("precip_in", -9.99, "01"),
 }
 CLIMDIV_PINNED_FILES: dict[str, str | None] = {
     "climdiv-pdsidv": None,  # TBD (blocked network)

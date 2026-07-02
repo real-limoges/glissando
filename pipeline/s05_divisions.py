@@ -32,6 +32,7 @@ def load_ca_divisions() -> gpd.GeoDataFrame:
     raw = Path(config.DIVISIONS_RAW_PATH)
     if not raw.exists():
         raise FileNotFoundError(f"division boundaries missing: {raw} (run `make download`)")
+    util.verify_against_manifest(raw)
     src = f"zip://{raw}" if raw.suffix == ".zip" else str(raw)
     div = gpd.read_file(src)
     cols = {c.upper(): c for c in div.columns}
@@ -62,8 +63,11 @@ def load_ca_divisions() -> gpd.GeoDataFrame:
 
 def assign_division(points: gpd.GeoDataFrame, divisions: gpd.GeoDataFrame) -> pd.DataFrame:
     """Map a point GeoDataFrame (EPSG:3310) to division / division_assigned_nearest."""
-    joined = gpd.sjoin(points, divisions, how="left", predicate="within")
-    # A point on a shared boundary can match twice; keep the lowest division.
+    # "intersects" (not "within") so a point exactly on a shared boundary
+    # still counts as inside rather than falling through to the nearest-
+    # division fallback; such a point matches both polygons, so keep the
+    # lowest division deterministically.
+    joined = gpd.sjoin(points, divisions, how="left", predicate="intersects")
     joined = joined.sort_values("division").groupby(level=0).first()
     out = pd.DataFrame(index=points.index)
     out["division"] = joined["division"].astype("Int64")

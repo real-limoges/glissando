@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 import geopandas as gpd
+import pyarrow.parquet as pq
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX = ROOT / "tests" / "fixtures" / "pipeline"
@@ -47,9 +48,13 @@ def main() -> int:
         gdf = gpd.read_parquet(art1)
         row = lambda name: gdf[gdf["fire_name_norm"] == name].iloc[0]
 
-        # EPSILON dropped (null geometry), one ALPHA dropped (duplicate).
-        assert len(gdf) == 6, f"expected 6 rows, got {len(gdf)}"
-        assert set(gdf["fire_name_norm"]) == {"ALPHA", "BETA", "GAMMA", "DELTA", "ZETA", "ETA"}
+        # EPSILON dropped (null geometry), one ALPHA dropped (near-duplicate,
+        # s03), one ZETA dropped (exact duplicate, s02).
+        assert len(gdf) == 8, f"expected 8 rows, got {len(gdf)}"
+        assert set(gdf["fire_name_norm"]) == {
+            "ALPHA", "BETA", "GAMMA", "DELTA", "ZETA", "ETA", "THETA", "IOTA"
+        }
+        assert (gdf["fire_name_norm"] == "ZETA").sum() == 1, "s02 exact-dup drop failed"
         assert gdf["fire_id"].is_unique and gdf["fire_id"].is_monotonic_increasing
 
         alpha = row("ALPHA")
@@ -59,7 +64,9 @@ def main() -> int:
         assert math.isclose(alpha["pdsi"], 1.07), alpha["pdsi"]
         assert math.isclose(alpha["tavg_degf"], 67.0), alpha["tavg_degf"]
         assert math.isclose(alpha["precip_in"], 0.7), alpha["precip_in"]
-        # GSOM fixture: division-1 stations report 3.0 and 5.0 in 2001-07
+        # GSOM fixture: division-1 stations report 3.0 and 5.0 in 2001-07;
+        # this also proves the out-of-state station's poison value (100.0 in
+        # 2001-07) was excluded by s07.
         assert math.isclose(alpha["awnd_ms"], 4.0), alpha["awnd_ms"]
         assert alpha["awnd_n_stations"] == 2
 
@@ -81,13 +88,28 @@ def main() -> int:
         eta = row("ETA")  # offshore -> nearest-division fallback
         assert eta["division"] == 1 and bool(eta["division_assigned_nearest"]) is True
 
-        # December is the missing-value sentinel in every climdiv fixture file.
-        assert (data := gdf[gdf["alarm_month"] == 12]).empty or data["pdsi"].isna().all()
+        theta = row("THETA")  # December alarm: the climdiv sentinel month
+        assert theta["division"] == 1 and theta["alarm_month"] == 12
+        assert all(map(math.isnan, (theta["pdsi"], theta["tavg_degf"],
+                                    theta["precip_in"], theta["awnd_ms"]))), \
+            "sentinel-month values must be null"
+
+        iota = row("IOTA")  # far offshore: beyond the nearest fallback
+        assert iota["division"] is None or str(iota["division"]) == "<NA>"
+        assert bool(iota["division_assigned_nearest"]) is False
+        assert math.isnan(iota["pdsi"]) and math.isnan(iota["awnd_ms"])
+
+        # Source-stable schema: optional string columns stay string-typed even
+        # when entirely null in the source (fixture leaves irwin_id/complex_*
+        # unpopulated).
+        schema = pq.read_schema(art1)
+        for c in ("irwin_id", "complex_name", "complex_id", "state", "agency"):
+            assert schema.field(c).type == "string", f"{c}: {schema.field(c).type}"
 
         qc = Path(tmp) / "run1" / "data" / "processed" / "s09_qc_report.md"
         assert qc.exists() and "Row counts by stage" in qc.read_text()
 
-    print(f"SMOKE OK: 6 rows, deterministic artifact sha256={h1}")
+    print(f"SMOKE OK: {len(gdf)} rows, deterministic artifact sha256={h1}")
     return 0
 
 

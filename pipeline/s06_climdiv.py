@@ -35,7 +35,7 @@ def _find_file(prefix: str) -> Path:
     return matches[0]
 
 
-def parse_element(path: Path, column: str, sentinel: float) -> pd.DataFrame:
+def parse_element(path: Path, column: str, sentinel: float, element_code: str) -> pd.DataFrame:
     rows = []
     for line in path.read_text().splitlines():
         if not line.strip():
@@ -43,11 +43,21 @@ def parse_element(path: Path, column: str, sentinel: float) -> pd.DataFrame:
         ident, values = line[:10], line[10:].split()
         if len(values) != 12:
             raise ValueError(f"{path.name}: expected 12 monthly values, got {len(values)}: {line!r}")
+        if ident[4:6] != element_code:
+            raise ValueError(
+                f"{path.name}: record element code {ident[4:6]!r} != expected "
+                f"{element_code!r} for {column} — wrong file pinned for this element?"
+            )
         state, division, year = int(ident[0:2]), int(ident[2:4]), int(ident[6:10])
         if state != config.CLIMDIV_STATE_CODE_CA:
             continue
         for month, v in enumerate(values, start=1):
             rows.append((division, year, month, float(v)))
+    if not rows:
+        raise ValueError(
+            f"{path.name}: no records for state code {config.CLIMDIV_STATE_CODE_CA} "
+            "(California) — file layout or state-code assumption is wrong"
+        )
     df = pd.DataFrame(rows, columns=["division", "year", "month", column])
     # Sentinels mark missing months (e.g. the current partial year).
     df.loc[np.isclose(df[column], sentinel), column] = np.nan
@@ -56,9 +66,10 @@ def parse_element(path: Path, column: str, sentinel: float) -> pd.DataFrame:
 
 def main() -> int:
     merged: pd.DataFrame | None = None
-    for prefix, (column, sentinel) in config.CLIMDIV_ELEMENTS.items():
+    for prefix, (column, sentinel, element_code) in config.CLIMDIV_ELEMENTS.items():
         path = _find_file(prefix)
-        df = parse_element(path, column, sentinel)
+        util.verify_against_manifest(path)
+        df = parse_element(path, column, sentinel, element_code)
         util.log(STAGE, f"{path.name}: {len(df)} CA division-months, "
                         f"{int(df[column].isna().sum())} missing")
         merged = df if merged is None else merged.merge(

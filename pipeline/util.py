@@ -26,6 +26,29 @@ def load_manifest() -> dict:
     return {"release": config.FRAP_RELEASE, "files": {}}
 
 
+def verify_against_manifest(path: Path) -> None:
+    """Verify a raw input against its MANIFEST.json pin before using it.
+
+    Matching is by filename; inputs without a manifest entry (e.g. smoke-test
+    fixtures, or a manifest that doesn't exist yet) are skipped — the manifest
+    only constrains files it has pinned.
+    """
+    if not config.MANIFEST_PATH.exists():
+        return
+    for name, entry in load_manifest()["files"].items():
+        if entry["filename"] == path.name:
+            actual = sha256_file(path)
+            if actual != entry["sha256"]:
+                raise ValueError(
+                    f"{path} does not match its MANIFEST.json pin "
+                    f"({name}: expected {entry['sha256']}, got {actual}); "
+                    "raw snapshot has drifted or is corrupted — re-download "
+                    "deliberately (delete the manifest entry first) instead of "
+                    "building from it"
+                )
+            return
+
+
 def record_in_manifest(name: str, path: Path, url: str, retrieved_at: str) -> None:
     manifest = load_manifest()
     manifest["files"][name] = {

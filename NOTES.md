@@ -40,8 +40,9 @@ PROVISIONAL until the real files are inspectable.
 - **D4 — Cleaning (s02).** Raw FRAP columns map to canonical snake_case via a
   tolerant COLMAP (handles the `YEAR_` trailing-underscore style); required
   columns missing ⇒ hard failure, unrecognized raw columns dropped with a log
-  line, optional canonical columns absent from the source created as all-null
-  so the output schema is source-stable. Invalid geometries repaired with
+  line, optional canonical columns absent from the source created as all-null,
+  and every optional column force-cast to pandas `string` (even
+  present-but-all-null ones) so the output schema is source-stable. Invalid geometries repaired with
   `make_valid` (keeping only the polygonal part); null/empty geometries and
   exact duplicate rows dropped. PROVISIONAL: COLMAP was written from FRAP docs
   for earlier releases, not the actual fire25_1 schema.
@@ -82,9 +83,33 @@ PROVISIONAL until the real files are inspectable.
   fixed column order, snappy parquet, no embedded timestamps. The smoke test
   runs the pipeline twice and asserts byte-identical artifacts; the same
   double-run check must be repeated on real data.
-- **D13 — What gets committed.** Code, docs, fixtures, `MANIFEST.json`, and
-  the QC report; raw/interim data and the parquet artifact are gitignored
-  (artifact is distributed out-of-band; its sha256 lives in the QC report).
+- **D13 — What gets committed.** Code, docs, fixtures, `MANIFEST.json`, the
+  QC report, and `s04_vertex_density.csv` (calibration evidence); raw/interim
+  data and the parquet artifact are gitignored (artifact is distributed
+  out-of-band; its sha256 lives in the QC report).
+- **D14 — Manifest is enforced, not advisory.** Stages verify each raw input's
+  sha256 against `MANIFEST.json` before reading it (files without an entry —
+  e.g. smoke fixtures — are exempt), and `download.py` refuses to silently
+  re-pin: a drifted local file or drifted upstream content is a hard error
+  telling the operator to delete the manifest entry deliberately.
+
+## Fresh-context audit (2026-07-02)
+
+A subagent with no build context audited the three commits (code, smoke
+rigor, determinism, docs). Verdict: no high-severity findings; determinism
+independently confirmed. All 6 medium + 11 low findings were fixed:
+schema stability for all-null string columns (→ D4), zero-climate-coverage
+runs now fail in s08 instead of shipping an all-null artifact, manifest
+verification + no-silent-re-pin (→ D14), climdiv element-code validation and
+empty-CA guard, `intersects` instead of `within` for boundary points in s05,
+bare `assert`s replaced with raises, tz-aware date warning in s02, GSOM
+manifest entry records the full query URL, download errors are collected
+rather than aborting on the first, the vacuous December-sentinel smoke
+assertion was replaced with a real fixture fire (THETA) plus new fixtures for
+null-division (IOTA), s02 exact-dup drop (ZETA twin), and an out-of-state
+poison-value GSOM station, `.gitignore` now actually commits the QC report
+D13 promised, and SCHEMA.md's date types / null policy / code-column dtypes
+were corrected.
 
 ## Session state (end of 2026-07-02 session)
 
@@ -95,9 +120,14 @@ PROVISIONAL until the real files are inspectable.
   synthetic fixtures under `tests/fixtures/pipeline/`, smoke runner
   `scripts/smoke_pipeline.py`, `requirements.txt` (pinned), this file,
   PROVENANCE.md, artifacts/SCHEMA.md.
-- `make smoke` is green: 6-row artifact, dedup/normalization/repair/
-  nearest-fallback/climate-join/missing-sentinel assertions all pass, and two
-  full runs produce byte-identical artifacts.
+- `make smoke` is green: 8-row artifact; assertions cover near-dedup, exact
+  dedup, name normalization, bow-tie repair, null-geometry drop, coarse flag,
+  nearest-division fallback, beyond-fallback null division, climate join
+  values, December sentinel month → null covariates, out-of-state station
+  exclusion, and string-typing of all-null optional columns; two full runs
+  produce byte-identical artifacts.
+- Fresh-context audit run; all findings fixed (see audit section above) and
+  re-verified by the strengthened smoke test.
 - `python -m pipeline.download` fails loudly (exit 1) with actionable errors
   while URLs are unresolved / network is blocked — by design.
 

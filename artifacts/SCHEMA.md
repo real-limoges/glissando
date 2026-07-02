@@ -32,14 +32,14 @@ data hosts when this skeleton was written (see NOTES.md).
 | `irwin_id` | string | IRWIN incident GUID where present. |
 | `complex_name` | string | Complex name, if part of a complex. |
 | `complex_id` | string | Complex ID, if part of a complex. |
-| `alarm_date` | date | Ignition/alarm date (null when unrecorded). |
-| `cont_date` | date | Containment date (null when unrecorded). |
+| `alarm_date` | timestamp | Ignition/alarm date, normalized to midnight (null when unrecorded). |
+| `cont_date` | timestamp | Containment date, normalized to midnight (null when unrecorded). |
 | `alarm_year` | Int64 | Year of `alarm_date` (join key). |
 | `alarm_month` | Int64 | Month of `alarm_date` (join key). |
 | `cause_code` | Int64 | FRAP cause code (table PROVISIONAL — NOTES.md D6). |
 | `cause_desc` | string | Decoded cause; null for codes outside the table. |
-| `collection_method` | Int64/string | FRAP `C_METHOD` — perimeter collection method code. **TBD: verify dtype on real data.** |
-| `objective_code` | Int64/string | FRAP `OBJECTIVE` code. **TBD: verify dtype on real data.** |
+| `collection_method` | string | FRAP `C_METHOD` — perimeter collection method code. Stored as string (**TBD: numeric in FRAP docs; revisit dtype once real data is inspectable**). |
+| `objective_code` | string | FRAP `OBJECTIVE` code. Stored as string (**TBD: same as above**). |
 | `gis_acres` | float64 | GIS-computed acreage as published by FRAP. |
 
 ## Geometry & metrics (computed, EPSG:3310)
@@ -54,7 +54,14 @@ data hosts when this skeleton was written (see NOTES.md).
 | `coarse_geometry` | bool | `vertices_per_km < COARSE_VERTICES_PER_KM` (threshold **TBD**, currently 0.5 placeholder). |
 | `centroid_lon` / `centroid_lat` | float64 | Centroid in EPSG:4326. |
 
-## Climate covariates (division-month of the alarm date; null when no division or alarm date)
+## Climate covariates
+
+Keyed to the division-month of the alarm date. Null when the fire has no
+division or no alarm date, **and also** when the division-month is absent
+from the source: nClimDiv sentinel months (e.g. the current partial year),
+years before nClimDiv coverage (pre-1895), months with no reporting AWND
+station, and anything before the GSOM pull window (1980-01-01) — so pre-1980
+fires always have null `awnd_ms`.
 
 | column | type | description |
 |---|---|---|

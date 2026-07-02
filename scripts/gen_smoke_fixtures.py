@@ -59,9 +59,20 @@ fires = {
         # ZETA: no alarm_date -> kept, climate covariates null
         {"type": "Feature", "properties": props("ZETA", 2003, None, 14, 50.0),
          "geometry": sq(-121.0, 37.0)},
+        # ZETA exact duplicate (identical attrs AND geometry): only s02's
+        # exact-dup drop can remove it — null alarm_date makes it ungroupable
+        # for s03's near-dup rule.
+        {"type": "Feature", "properties": props("ZETA", 2003, None, 14, 50.0),
+         "geometry": sq(-121.0, 37.0)},
         # ETA: just offshore west of division 1 -> nearest-division fallback
         {"type": "Feature", "properties": props("ETA", 2002, "2002-06-20", 14, 80.0),
          "geometry": sq(-124.08, 38.0)},
+        # THETA: December alarm -> hits the climdiv missing-value sentinel month
+        {"type": "Feature", "properties": props("THETA", 2001, "2001-12-05", 1, 200.0),
+         "geometry": sq(-121.5, 39.5)},
+        # IOTA: ~175 km offshore, beyond the 25 km nearest fallback -> null division
+        {"type": "Feature", "properties": props("IOTA", 2002, "2002-07-04", 9, 40.0),
+         "geometry": sq(-126.0, 38.0)},
     ],
 }
 (FIX / "firep_synthetic.geojson").write_text(json.dumps(fires, indent=1) + "\n")
@@ -91,9 +102,12 @@ for name, (code, sentinel) in ELEMENTS.items():
 # --- GSOM CSV: two stations in division 1, one in division 2 ---
 rows = ["STATION,DATE,LATITUDE,LONGITUDE,AWND"]
 station_months = [
-    ("USW0001", 38.5, -122.5, {"2001-06": 2.0, "2001-07": 3.0, "2002-06": 6.0}),
+    ("USW0001", 38.5, -122.5, {"2001-06": 2.0, "2001-07": 3.0, "2002-06": 6.0, "2002-07": 5.5}),
     ("USW0002", 39.0, -121.0, {"2001-06": 4.0, "2001-07": 5.0, "2002-06": 8.0}),
     ("USW0003", 33.5, -116.5, {"2001-07": 9.0, "2001-08": 7.5}),
+    # ~330 km outside every CA division: must be excluded by s07; the poison
+    # value would visibly corrupt any division-month mean it leaked into.
+    ("USW0004", 45.0, -120.0, {"2001-07": 100.0}),
 ]
 for sid, lat, lon, months in station_months:
     for date, awnd in months.items():
