@@ -32,9 +32,18 @@ def props(name, year, alarm, cause, acres, **kw):
     return p
 
 
-# ~1 km squares: 5 vertices / ~4 km perimeter ≈ 1.25 vertices/km, above the
-# coarse threshold; GAMMA's huge 4-vertex triangle stays far below it.
-sq = lambda lon, lat, d=0.005: rect(lon - d, lat - d, lon + d, lat + d)
+def sq(lon, lat, d=0.005, pts_per_edge=8):
+    """~1 km square densified to ~32 vertices over a ~4 km perimeter
+    (~8 vertices/km — comfortably above the coarse threshold of 3.0, the way
+    real digitized perimeters are); GAMMA's huge 4-vertex triangle stays far
+    below it."""
+    corners = [(lon - d, lat - d), (lon + d, lat - d), (lon + d, lat + d), (lon - d, lat + d)]
+    ring = []
+    for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
+        ring += [[round(x0 + (x1 - x0) * i / pts_per_edge, 6),
+                  round(y0 + (y1 - y0) * i / pts_per_edge, 6)] for i in range(pts_per_edge)]
+    ring.append(ring[0])
+    return {"type": "Polygon", "coordinates": [ring]}
 fires = {
     "type": "FeatureCollection",
     "features": [
