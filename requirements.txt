@@ -1,0 +1,11 @@
+# Python dependencies for the fire-perimeter data pipeline (pipeline/).
+# Pinned exactly for reproducibility of artifacts/fires_enriched.parquet.
+# The Rust crate (src/) is unrelated to these.
+geopandas==1.0.1
+pyogrio==0.10.0
+shapely==2.0.6
+pyproj==3.6.1
+pandas==2.2.3
+numpy==2.1.3
+pyarrow==18.1.0
+requests==2.32.3
