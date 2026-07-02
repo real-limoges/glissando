@@ -1,0 +1,351 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "ALPHA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-07-15",
+    "CONT_DATE": "2001-07-15",
+    "CAUSE": 1,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 1000.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -122.005,
+       37.995
+      ],
+      [
+       -121.995,
+       37.995
+      ],
+      [
+       -121.995,
+       38.005
+      ],
+      [
+       -122.005,
+       38.005
+      ],
+      [
+       -122.005,
+       37.995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "ALPHA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-07-15",
+    "CONT_DATE": "2001-07-15",
+    "CAUSE": 1,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 500.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -122.015,
+       38.004999999999995
+      ],
+      [
+       -122.00500000000001,
+       38.004999999999995
+      ],
+      [
+       -122.00500000000001,
+       38.015
+      ],
+      [
+       -122.015,
+       38.015
+      ],
+      [
+       -122.015,
+       38.004999999999995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": " beta ",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-08-02",
+    "CONT_DATE": "2001-08-02",
+    "CAUSE": 7,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 300.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -116.005,
+       32.995
+      ],
+      [
+       -115.995,
+       32.995
+      ],
+      [
+       -115.995,
+       33.005
+      ],
+      [
+       -116.005,
+       33.005
+      ],
+      [
+       -116.005,
+       32.995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2002,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "GAMMA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2002-06-10",
+    "CONT_DATE": "2002-06-10",
+    "CAUSE": 2,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 60000.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -123.0,
+       40.0
+      ],
+      [
+       -122.4,
+       40.0
+      ],
+      [
+       -122.7,
+       40.5
+      ],
+      [
+       -123.0,
+       40.0
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "DELTA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-07-20",
+    "CONT_DATE": "2001-07-20",
+    "CAUSE": 5,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 120.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -123.0,
+       40.8
+      ],
+      [
+       -122.9,
+       40.9
+      ],
+      [
+       -123.0,
+       40.9
+      ],
+      [
+       -122.9,
+       40.8
+      ],
+      [
+       -123.0,
+       40.8
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2001,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "EPSILON",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2001-09-01",
+    "CONT_DATE": "2001-09-01",
+    "CAUSE": 9,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 10.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": null
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2003,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "ZETA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": null,
+    "CONT_DATE": null,
+    "CAUSE": 14,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 50.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -121.005,
+       36.995
+      ],
+      [
+       -120.995,
+       36.995
+      ],
+      [
+       -120.995,
+       37.005
+      ],
+      [
+       -121.005,
+       37.005
+      ],
+      [
+       -121.005,
+       36.995
+      ]
+     ]
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "YEAR_": 2002,
+    "STATE": "CA",
+    "AGENCY": "CDF",
+    "UNIT_ID": "XXU",
+    "FIRE_NAME": "ETA",
+    "INC_NUM": "00000001",
+    "IRWINID": null,
+    "ALARM_DATE": "2002-06-20",
+    "CONT_DATE": "2002-06-20",
+    "CAUSE": 14,
+    "C_METHOD": 1,
+    "OBJECTIVE": 1,
+    "GIS_ACRES": 80.0,
+    "COMPLEX_NAME": null,
+    "Shape_Length": 1.0
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -124.085,
+       37.995
+      ],
+      [
+       -124.075,
+       37.995
+      ],
+      [
+       -124.075,
+       38.005
+      ],
+      [
+       -124.085,
+       38.005
+      ],
+      [
+       -124.085,
+       37.995
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}
