@@ -38,19 +38,13 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     let mut rng = Generator::new(4242);
     let n = 400;
     let x: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64 * 6.28).collect();
-    let y_vec: Vec<f64> = x
-        .iter()
-        .map(|&xi| xi.sin() + 0.1 * rng.normal())
-        .collect();
+    let y_vec: Vec<f64> = x.iter().map(|&xi| xi.sin() + 0.1 * rng.normal()).collect();
     let y = Array1::from_vec(y_vec);
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x.clone()));
 
     let formula = Formula::new()
-        .with_terms(
-            "mu",
-            vec![Term::smooth(Smooth::ps("x").n_splines(12))],
-        )
+        .with_terms("mu", vec![Term::smooth(Smooth::ps("x").n_splines(12))])
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
@@ -63,10 +57,7 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     // values must agree exactly with the corresponding full-data entries.
     let idx: Vec<usize> = (n / 3..2 * n / 3).collect();
     let mut sub = DataSet::new();
-    sub.insert_column(
-        "x",
-        Array1::from_vec(idx.iter().map(|&i| x[i]).collect()),
-    );
+    sub.insert_column("x", Array1::from_vec(idx.iter().map(|&i| x[i]).collect()));
     let sub_pred = model.predict(&sub, &family).unwrap();
 
     for (j, &i) in idx.iter().enumerate() {
@@ -99,10 +90,7 @@ fn random_effect_levels_are_stable_under_reordering() {
     data.insert_column("g", Array1::from_vec(g.clone()));
 
     let formula = Formula::new()
-        .with_terms(
-            "mu",
-            vec![Term::Intercept, Term::smooth(Smooth::re("g"))],
-        )
+        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::re("g"))])
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
@@ -138,10 +126,7 @@ fn random_effect_unseen_level_errors() {
     data.insert_column("g", Array1::from_vec(g));
 
     let formula = Formula::new()
-        .with_terms(
-            "mu",
-            vec![Term::Intercept, Term::smooth(Smooth::re("g"))],
-        )
+        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::re("g"))])
         .with_terms("sigma", vec![Term::Intercept]);
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
@@ -177,10 +162,7 @@ fn tensor_with_intercept_recovers_main_effects() {
     let formula = Formula::new()
         .with_terms(
             "mu",
-            vec![
-                Term::Intercept,
-                Term::smooth(Smooth::tensor("x1", "x2")),
-            ],
+            vec![Term::Intercept, Term::smooth(Smooth::tensor("x1", "x2"))],
         )
         .with_terms("sigma", vec![Term::Intercept]);
 
@@ -190,11 +172,7 @@ fn tensor_with_intercept_recovers_main_effects() {
 
     // R² of the fit against the noiseless truth must be high; the interaction-
     // only construction achieved essentially zero.
-    let truth: Vec<f64> = x1
-        .iter()
-        .zip(x2.iter())
-        .map(|(&a, &b)| f(a, b))
-        .collect();
+    let truth: Vec<f64> = x1.iter().zip(x2.iter()).map(|(&a, &b)| f(a, b)).collect();
     let mean_t = truth.iter().sum::<f64>() / n as f64;
     let ss_tot: f64 = truth.iter().map(|t| (t - mean_t) * (t - mean_t)).sum();
     let ss_res: f64 = truth

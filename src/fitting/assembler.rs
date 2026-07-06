@@ -681,7 +681,7 @@ mod tests {
             n_splines: 10,
             degree: 3,
             penalty_order: 2,
-                    range: None,
+            range: None,
         });
 
         let design = assemble_model_matrices(&data, n_obs, &[term]).unwrap();

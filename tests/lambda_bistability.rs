@@ -72,7 +72,8 @@ fn smooth_term() -> Term {
         col_name: "x".to_string(),
         n_splines: 15,
         degree: 3,
-        penalty_order: 2, range: None,
+        penalty_order: 2,
+        range: None,
     })
 }
 

@@ -502,7 +502,9 @@ mod tests {
 
     #[test]
     fn re_and_tensor_constructors() {
-        assert!(matches!(Smooth::re("g"), Smooth::RandomEffect { col_name, .. } if col_name == "g"));
+        assert!(
+            matches!(Smooth::re("g"), Smooth::RandomEffect { col_name, .. } if col_name == "g")
+        );
         match Smooth::tensor("a", "b") {
             Smooth::TensorProduct {
                 col_name_1,
