@@ -755,25 +755,44 @@ GAMLSS fits the joint model by cycling through distribution parameters one at a 
 for cycle in 0..max_iterations:
     all_converged = true
     for each parameter theta_k in family.parameters():
-        beta_k_old = beta_k
-        beta_k     = p_irls_step(theta_k | other params held fixed)
-        delta      = max_abs(beta_k - beta_k_old)
-        scale      = max(max_abs(beta_k), 1.0)   # floor at 1 for O(1) coefficients
+        eta_k_old = eta_k
+        eta_k     = p_irls_step(theta_k | other params held fixed)   # eta = X * beta
+        delta     = max_abs(eta_k - eta_k_old)
+        scale     = max(max_abs(eta_k), 1.0)   # floor at 1 for O(1) predictors
         if delta / scale >= tolerance:
             all_converged = false
-    if all_converged:
+    gd = global_deviance(all params)           # -2 * sum log f(y_i | theta_i)
+    if all_converged and abs(gd_prev - gd) < gd_tolerance:
         break
+    gd_prev = gd
 ```
 
-Source: `src/fitting/mod.rs`. The convergence criterion is **per-parameter relative**: each distribution parameter $\theta_k$ must independently satisfy
+Source: `src/fitting/mod.rs`. Convergence requires **two tests to pass together**:
 
-$$
-\frac{\|\beta_k^{(t+1)} - \beta_k^{(t)}\|_\infty}{\max(\|\beta_k^{(t+1)}\|_\infty,\, 1)} < \epsilon,
-$$
+1. **Per-parameter relative change of the linear predictor** $\eta_k = X_k\beta_k$:
 
-and all parameters must pass before the outer loop terminates. Using each parameter's own scale prevents a large-coefficient parameter (e.g. $\mu$ when data are un-normalized) from dominating the denominator and masking drift in a small-coefficient parameter (e.g. a log-scale $\sigma$ whose intercept is near 0). The floor of 1 in the denominator keeps the test equivalent to an absolute threshold when all coefficients are $O(1)$.
+   $$
+   \frac{\|\eta_k^{(t+1)} - \eta_k^{(t)}\|_\infty}{\max(\|\eta_k^{(t+1)}\|_\infty,\, 1)} < \epsilon
+   $$
 
-The active default is $\epsilon = 10^{-3}$, max iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_MAX_ITER` at `src/fitting/mod.rs:31-32`).
+   for every $k$. The test is in **fit space** rather than coefficient space:
+   penalized designs can carry fit-irrelevant coefficient ridges (a flat REML
+   valley where the per-cycle $\lambda$ re-optimization jitters between
+   fit-equivalent $(\lambda, \beta)$ pairs) along which $\beta$ never becomes
+   stationary even though the model — $\eta$, $\mu$, the deviance — already is.
+   Using each parameter's own scale prevents a large parameter (e.g. $\mu$ on
+   un-normalized data) from masking drift in a small one (e.g. a log-scale
+   $\sigma$ near 0); the floor of 1 keeps the test equivalent to an absolute
+   threshold for $O(1)$ predictors.
+
+2. **Absolute global-deviance change** $|GD^{(t)} - GD^{(t+1)}| <
+   \epsilon_{GD}$, the same convention as R gamlss's `c.crit` (an earlier
+   *relative* form scaled its slack with $|GD|$ and stopped large-deviance
+   fits far short of the optimum).
+
+The active defaults are $\epsilon = 10^{-3}$, $\epsilon_{GD} = 10^{-3}$, max
+iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_GD_TOLERANCE`,
+`DEFAULT_MAX_ITER` in `src/fitting/mod.rs`).
 
 ### 4.2 Inner P-IRLS Step (Fisher Scoring)
 
@@ -797,7 +816,29 @@ For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
 
 4. **Smoothing parameter selection** — GCV, REML, or Fellner–Schall (§§ 8, 8.2).
 
-Source: `src/fitting/scoring.rs:40-180`.
+5. **Step-halving on the penalized deviance** (FIT-1): the accepted update is
+   $\beta_k^{(t)} + \alpha\, d_k$ with $d_k = \hat\beta_k - \beta_k^{(t)}$ and
+   $\alpha \in \{1, \tfrac12, \tfrac14, \dots\}$ backtracked until
+
+   $$
+   GD(\beta_k^{(t)} + \alpha d_k) + \sum_j \lambda_j\, (\beta_k^{(t)} + \alpha
+   d_k)^T S_j (\beta_k^{(t)} + \alpha d_k)
+   $$
+
+   does not increase. The objective must be the **penalized** deviance: the
+   Fisher direction $d_k$ is an ascent direction for the penalized
+   log-likelihood only, and when the current $\beta$ is wigglier than the
+   penalized optimum (e.g. $\lambda$ grew across cycles) a raw-deviance line
+   search rejects every step and freezes the fit at a non-stationary point.
+   The penalty change along the path is evaluated in the cancellation-free
+   form $2\alpha\, d^T S_\lambda \beta + \alpha^2 d^T S_\lambda d$ so that a
+   clamp-ceiling $\lambda$ (~$e^{30}$) cannot swamp the comparison with
+   round-off. If the backtracking floor ($\alpha = 2^{-10}$) is reached with
+   the objective still increasing, the block update is **rejected** ($\alpha =
+   0$) rather than forced — accepting uphill micro-steps allows unbounded slow
+   divergence.
+
+Source: `src/fitting/scoring.rs`.
 
 ### 4.3 Working-Response Derivation
 
@@ -828,7 +869,7 @@ Cataloged here so the magic constants are auditable. All apply per observation, 
 | Symbol | Value | Where | Purpose |
 | --- | --- | --- | --- |
 | `MIN_WEIGHT` | $10^{-6}$ | `scoring.rs:28` | Floor on $w_i$ so the weight matrix stays positive definite; near-zero Fisher info would blow up $u/w$. Hits counted in `weight_floor_hits`. |
-| `MAX_STEP` | $20.0$ | `scoring.rs:32` | Clamps $u_i/w_i$ to $\pm 20$ in $\eta$-units. Prevents wild Newton steps from outliers. Hits counted in `step_cap_hits`. |
+| `MAX_STEP` | $10^{6}$ | `scoring.rs` | Clamps $u_i/w_i$ in $\eta$-units — a pure anti-overflow guard for degenerate score/information combinations. It must be **large**: a tight clamp (an earlier value of 20) silently biased the working response, because when many rows clip, the update direction is decided by the *count* of positive vs negative rows rather than the score-weighted aggregate — which can point the Fisher step uphill. Overshoot robustness is provided by the deviance-guarded step-halving instead. Hits counted in `step_cap_hits`. |
 | `MAX_ETA`, `MIN_ETA` | $\pm 30$ | `links.rs:10-12` | Clamps $\eta$ before applying the inverse log/logit link so $\exp(\eta)$ stays finite ($e^{30} \approx 10^{13}$). |
 | `MIN_POSITIVE` | $10^{-10}$ | `links.rs:8`, `diagnostics.rs:15` | Floor on parameters that must be strictly positive ($\sigma$, $\phi$, probabilities), and on variances before the square-root in residual computation. |
 
