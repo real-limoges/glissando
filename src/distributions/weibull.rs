@@ -1,7 +1,7 @@
 //! Weibull distribution for positive continuous data
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT
+    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -40,7 +40,7 @@ impl Distribution for Weibull {
         match param {
             "mu" => y.mean().expect("validate_inputs rejects empty y"),
             "sigma" => 1.0,
-            _  => 0.1,
+            _ => 0.1,
         }
     }
 
@@ -117,6 +117,4 @@ impl Distribution for Weibull {
             m * m * (g2 - g1 * g1)
         }))
     }
-
-
 }
