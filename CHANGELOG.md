@@ -67,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-penalty coefficient direction** (the system was structurally singular);
   the direction is removed with the same Householder transform used for
   centering, preserving `f(pc) = 0`.
+- **Rejected block updates keep their previous λ/covariance/EDF** — the
+  outer loop previously installed the rejected proposal's values alongside
+  the reverted coefficients, so SEs/GAIC described a state the model was
+  not in.
+- **Basin probes for the λ collapse/bound guard include per-coordinate
+  seeds**, rescuing anisotropic tensor corner traps (one margin pinned at
+  the ceiling while the true LAML optimum has it interior).
+- Prediction on a model whose stored coefficients no longer match the
+  rebuilt design (old serialized `te()`/`pc` bases) returns a typed
+  `GamlssError::Shape` with a migration hint instead of panicking.
 - Benchmark harness: mgcv `gammals` σ extraction now goes through the
   family's `logb` linkinv (the previous `exp(η₂/2)` read produced σ̂ ≈ 5–20
   for a true CV of 0.2–0.7 and a false parity failure);
