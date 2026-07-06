@@ -15,11 +15,19 @@
 # which is identical to glissando's StudentT::loglik_pointwise.
 
 suppressPackageStartupMessages({
-  library(arrow)
   library(gamlss)
   library(jsonlite)
   library(optparse)
 })
+
+# Parquet reader: prefer arrow, fall back to the dependency-free nanoparquet.
+read_parquet <- if (requireNamespace("arrow", quietly = TRUE)) {
+  arrow::read_parquet
+} else if (requireNamespace("nanoparquet", quietly = TRUE)) {
+  function(path) as.data.frame(nanoparquet::read_parquet(path))
+} else {
+  stop("need the 'arrow' or 'nanoparquet' package to read parquet input")
+}
 
 opts <- parse_args(OptionParser(option_list = list(
   make_option(c("--data"),     type = "character"),

@@ -11,11 +11,19 @@
 #     --output /path/to/mgcv_ocat.json
 
 suppressPackageStartupMessages({
-  library(arrow)
   library(mgcv)
   library(jsonlite)
   library(optparse)
 })
+
+# Parquet reader: prefer arrow, fall back to the dependency-free nanoparquet.
+read_parquet <- if (requireNamespace("arrow", quietly = TRUE)) {
+  arrow::read_parquet
+} else if (requireNamespace("nanoparquet", quietly = TRUE)) {
+  function(path) as.data.frame(nanoparquet::read_parquet(path))
+} else {
+  stop("need the 'arrow' or 'nanoparquet' package to read parquet input")
+}
 
 opts <- parse_args(OptionParser(option_list = list(
   make_option(c("--train"),         type = "character"),
