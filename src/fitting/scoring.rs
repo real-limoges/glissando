@@ -353,7 +353,18 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // still reflect a poor scale estimate, the early probe finds nothing
         // better, and a skip-once-confirmed rule then never re-probes at the
         // converged state where the interior basin actually wins.
-        if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
+        //
+        // Multi-penalty terms (anisotropic tensors) probe UNCONDITIONALLY: their
+        // LAML surface is intrinsically multimodal and spurious stationary
+        // points come in shapes no cheap detector reliably catches (λ at the
+        // ceiling, at the MIN_LAMBDA floor, or merely very large while the term
+        // EDF sits innocently above its null dimension). Single-penalty
+        // surfaces are unimodal-with-a-shelf, where the collapse/bound test is
+        // a sufficient and cheap trigger.
+        let multi_penalty = penalties.len() > 1;
+        if !penalties.is_empty()
+            && (multi_penalty || is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas))
+        {
             let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
                 lambda_cost(criterion, &target.x_matrix, &z, &w, penalties, lams)
             };
@@ -383,6 +394,36 @@ pub(super) fn step<D: Distribution + ?Sized>(
                         s[j] = restart[j];
                         seeds.push(Some(s));
                     }
+                }
+            }
+            // For one- and two-penalty terms, additionally seed from the best
+            // cell of a coarse log-λ grid around the cold-start heuristic.
+            // Gradient descent from ANY single seed can fall into a spurious
+            // stationary point of the multimodal anisotropic-tensor LAML
+            // surface (observed: a corner with one margin at the ceiling
+            // scoring 5 LAML units worse than the interior optimum, missed by
+            // every gradient-started probe on some datasets); a grid evaluation
+            // is derivative-free and cannot be captured by a basin boundary.
+            if best_lambdas.len() <= 2 {
+                let heur = super::solver::initial_log_lambda(&target.x_matrix, penalties);
+                let offsets: [f64; 7] = [-16.0, -12.0, -8.0, -4.0, 0.0, 4.0, 8.0];
+                let mut best_cell: Option<(f64, Array1<f64>)> = None;
+                let mut cell = Array1::zeros(best_lambdas.len());
+                let n_cells = offsets.len().pow(best_lambdas.len() as u32);
+                for idx in 0..n_cells {
+                    let mut rem = idx;
+                    for j in 0..best_lambdas.len() {
+                        cell[j] = (heur[j] + offsets[rem % offsets.len()]).exp();
+                        rem /= offsets.len();
+                    }
+                    if let Ok(c) = cost_of(&cell) {
+                        if best_cell.as_ref().is_none_or(|(bc, _)| c < *bc) {
+                            best_cell = Some((c, cell.clone()));
+                        }
+                    }
+                }
+                if let Some((_, cell)) = best_cell {
+                    seeds.push(Some(cell));
                 }
             }
             for seed in seeds {
