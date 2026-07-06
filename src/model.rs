@@ -34,6 +34,23 @@ fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Ar
         .collect()
 }
 
+/// Guard: the rebuilt design matrix must match the stored coefficient vector.
+/// A mismatch means the model was serialized under an older basis construction
+/// (e.g. a pre-fix tensor-product or point-constrained CR smooth whose column
+/// count changed); returning a typed error beats the shape panic `dot` raises.
+fn check_design_width(
+    param: &str,
+    n_cols: usize,
+    n_coefs: usize,
+) -> Result<(), GamlssError> {
+    if n_cols != n_coefs {
+        return Err(GamlssError::Shape(format!(
+            "parameter '{param}': rebuilt design matrix has {n_cols} columns but the stored              coefficient vector has {n_coefs} entries. This model was likely serialized by an              older glissando version whose basis construction differed (te() tensors and              pc-constrained CR splines changed dimension); refit the model to migrate it."
+        )));
+    }
+    Ok(())
+}
+
 impl GamlssModel {
     /// Fits a GAMLSS model with default configuration.
     ///
@@ -255,6 +272,11 @@ impl GamlssModel {
         for (param_name, fitted_param) in &self.models {
             let (x_matrix, _, _, _) =
                 assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            check_design_width(
+                param_name,
+                x_matrix.0.ncols(),
+                fitted_param.coefficients.0.len(),
+            )?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
             let link = family.default_link(param_name)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
@@ -286,6 +308,11 @@ impl GamlssModel {
         for (param_name, fitted_param) in &self.models {
             let (x_matrix, _, _, _) =
                 assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            check_design_width(
+                param_name,
+                x_matrix.0.ncols(),
+                fitted_param.coefficients.0.len(),
+            )?;
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
 
             let v = &fitted_param.covariance.0;
@@ -558,6 +585,11 @@ impl GamlssModel {
         for (param_name, fitted_param) in &self.models {
             let (x_matrix, _, _, _) =
                 assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            check_design_width(
+                param_name,
+                x_matrix.0.ncols(),
+                fitted_param.coefficients.0.len(),
+            )?;
 
             let beta_samples = fitting::sample_posterior_seeded(
                 &fitted_param.coefficients,

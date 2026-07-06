@@ -36,6 +36,15 @@ const MIN_WEIGHT: f64 = 1e-6;
 /// can point the Fisher step uphill (observed as ν → ∞ runaway on Student-t).
 /// Robustness against overshoot is the job of the deviance-guarded step-halving
 /// (FIT-1); neither mgcv nor gamlss clips the working response at all.
+///
+/// The value balances two failure modes: too TIGHT inverts step directions (a
+/// cap of 1e4 was tried and empirically re-broke Student-t ν recovery — early
+/// transient steps legitimately exceed it); too LOOSE lets a degenerate row
+/// (weight at the MIN_WEIGHT floor with an O(1) score, e.g. a quasi-separated
+/// binomial observation) inject a large pseudo-residual into the working
+/// response, distorting λ selection — a known, accepted exposure at 1e6 whose
+/// principled fix is evaluating the REML criterion on the true likelihood
+/// rather than the working (z, w) model.
 const MAX_STEP: f64 = 1e6;
 
 /// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
@@ -79,6 +88,11 @@ pub(super) struct Halved {
     pub mu: Array1<f64>,
     /// Number of halvings applied (`0` = the full Fisher step was accepted).
     pub hits: usize,
+    /// True when the backtracking floor was reached with the penalized deviance
+    /// still increasing and the whole block update was rejected (β unchanged).
+    /// The caller must then also keep the previous λ/covariance/EDF — the
+    /// full-step proposal's values describe a state that was never entered.
+    pub rejected: bool,
 }
 
 /// Backtrack a proposed block update on the PENALIZED global deviance, holding
@@ -149,6 +163,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
                 eta: eta_a,
                 mu: mu_a,
                 hits,
+                rejected: false,
             });
         }
         // At the backtracking floor the direction is uphill at every step size:
@@ -164,6 +179,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
                 eta: model.eta.clone(),
                 mu: model.mu.clone(),
                 hits,
+                rejected: true,
             });
         }
         alpha *= 0.5;
@@ -330,6 +346,13 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // null-space-optimal fit (a linear truth under an order-2 penalty) is
         // preserved — its collapse has the better marginal likelihood — while a
         // spuriously collapsed signal-bearing fit is repaired.
+        // The probe re-runs every cycle while the state stays suspicious. That
+        // costs two extra λ optimizations per cycle for a legitimately collapsed
+        // smooth, but gating it on "newly suspicious" was tried and lost real
+        // rescues: λ reaches the bound on cycle 1–2 while the working (z, w)
+        // still reflect a poor scale estimate, the early probe finds nothing
+        // better, and a skip-once-confirmed rule then never re-probes at the
+        // converged state where the interior basin actually wins.
         if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
             let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
                 lambda_cost(criterion, &target.x_matrix, &z, &w, penalties, lams)
@@ -337,15 +360,31 @@ pub(super) fn step<D: Distribution + ?Sized>(
             let mut winner = best_lambdas.clone();
             let mut winner_cost = cost_of(&winner)?;
 
-            // Probe two alternative basins and keep the best-scoring λ:
+            // Probe alternative basins and keep the best-scoring λ:
             //  1. the low-λ restart seed (below the high-λ collapse shelf);
             //  2. a fresh cold start (`initial_lambdas = None`), which explores
             //     the surface unanchored — warm-start history can pin λ in a
-            //     corner basin that a cold start correctly avoids (observed on
-            //     anisotropic tensor smooths, where the low-λ seed lands on a
-            //     different, worse stationary point than the cold start).
-            let seeds: [Option<Array1<f64>>; 2] =
-                [Some(restart_seed(&target.x_matrix, penalties)), None];
+            //     corner basin that a cold start correctly avoids;
+            //  3. for multi-penalty terms, PER-COORDINATE variants of the
+            //     incumbent with each bound-pinned λ_j individually dropped to
+            //     the restart level. Anisotropic tensor smooths develop corner
+            //     traps where one margin's λ sits at the ceiling while the true
+            //     LAML optimum has that margin interior — a geometry the
+            //     all-coordinates seeds (1) and (2) can both miss because they
+            //     descend into a different stationary point.
+            let restart = restart_seed(&target.x_matrix, penalties);
+            let mut seeds: Vec<Option<Array1<f64>>> = vec![Some(restart.clone()), None];
+            if best_lambdas.len() > 1 {
+                let hi = (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp();
+                let lo = (-super::solver::LOG_LAMBDA_CLAMP + 1e-6).exp();
+                for j in 0..best_lambdas.len() {
+                    if best_lambdas[j] >= hi || best_lambdas[j] <= lo {
+                        let mut s = best_lambdas.clone();
+                        s[j] = restart[j];
+                        seeds.push(Some(s));
+                    }
+                }
+            }
             for seed in seeds {
                 let candidate = run_opt(seed.as_ref())?;
                 let cost = cost_of(&candidate)?;

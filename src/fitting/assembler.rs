@@ -110,16 +110,16 @@ pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>,
     // Finite (min, max) of a column, for anchoring P-spline knot grids.
     let finite_range = |col: &str| -> Result<(f64, f64), GamlssError> {
         let x = get_col(data, col)?;
-        let lo = x
-            .iter()
-            .copied()
-            .filter(|v| v.is_finite())
-            .fold(f64::INFINITY, f64::min);
-        let hi = x
-            .iter()
-            .copied()
-            .filter(|v| v.is_finite())
-            .fold(f64::NEG_INFINITY, f64::max);
+        let (lo, hi) = crate::splines::finite_range(x);
+        // No finite values at all: storing (inf, -inf) on the term would fit a
+        // garbage unit-spaced knot grid silently and cannot round-trip through
+        // JSON. (The public fit path already rejects non-finite columns in
+        // validate_inputs; this guards internal callers.)
+        if !lo.is_finite() || !hi.is_finite() {
+            return Err(GamlssError::Input(format!(
+                "column '{col}' has no finite values; cannot anchor a spline basis"
+            )));
+        }
         Ok((lo, hi))
     };
     // Sorted distinct levels of a grouping column (sorted for determinism —

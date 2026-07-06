@@ -60,7 +60,10 @@ pub struct LogLink;
 
 impl Link for LogLink {
     fn link(&self, mu: f64) -> f64 {
-        mu.ln().max(MIN_ETA)
+        // Clamp both sides so link/inv_link round-trip consistently: inv_link
+        // caps η at MAX_ETA, so an uncapped ln(μ) for extreme μ would break
+        // g(g⁻¹(η)) = η at the top end.
+        mu.ln().clamp(MIN_ETA, MAX_ETA)
     }
     fn inv_link(&self, eta: f64) -> f64 {
         eta.min(MAX_ETA).exp()
@@ -85,7 +88,7 @@ pub struct FlooredLogLink {
 
 impl Link for FlooredLogLink {
     fn link(&self, mu: f64) -> f64 {
-        mu.max(self.floor).ln().max(MIN_ETA)
+        mu.max(self.floor).ln().clamp(MIN_ETA, MAX_ETA)
     }
     fn inv_link(&self, eta: f64) -> f64 {
         eta.min(MAX_ETA).exp().max(self.floor)

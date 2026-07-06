@@ -16,14 +16,13 @@ suppressPackageStartupMessages({
   library(optparse)
 })
 
-# Parquet reader: prefer arrow, fall back to the dependency-free nanoparquet.
-read_parquet <- if (requireNamespace("arrow", quietly = TRUE)) {
-  arrow::read_parquet
-} else if (requireNamespace("nanoparquet", quietly = TRUE)) {
-  function(path) as.data.frame(nanoparquet::read_parquet(path))
-} else {
-  stop("need the 'arrow' or 'nanoparquet' package to read parquet input")
-}
+# Shared helpers (parquet reader with arrow -> nanoparquet fallback).
+local({
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+  dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg[1]))) else "."
+  source(file.path(dir, "common.R"), local = FALSE)
+})
 
 opts <- parse_args(OptionParser(option_list = list(
   make_option(c("--train"),         type = "character"),

@@ -376,6 +376,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     eta: update.eta.clone(),
                     mu: update.mu.clone(),
                     hits: 0,
+                    rejected: false,
                 }
             };
 
@@ -427,13 +428,23 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             // EDF / λ keep the values `scoring::step` computed at the full step.
             // Near convergence α → 1 so those are evaluated at the right point —
             // matching how gamlss reports them at the converged step.
+            //
+            // When the whole block update was REJECTED (uphill at every α), the
+            // previous λ/covariance/EDF are kept too: the proposal's values
+            // describe a state that was never entered, and installing them
+            // would pair the old β with a covariance/EDF evaluated elsewhere —
+            // corrupting SEs, GAIC, and the collapse warnings. The only
+            // exception is the very first cycle, where there is no previous
+            // covariance yet; the proposal's is then the best available.
             model.beta = accepted.beta;
             model.eta = accepted.eta;
             model.mu = accepted.mu;
-            model.lambdas = update.lambdas;
-            model.covariance = Some(update.covariance);
-            model.edf = update.edf;
-            model.term_edf = update.term_edf;
+            if !accepted.rejected || model.covariance.is_none() {
+                model.lambdas = update.lambdas;
+                model.covariance = Some(update.covariance);
+                model.edf = update.edf;
+                model.term_edf = update.term_edf;
+            }
         }
 
         // FIT-2: global-deviance change after the full sweep. Require *both* the
