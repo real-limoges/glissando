@@ -28,9 +28,15 @@ use std::collections::HashMap;
 /// Lower bound for IRLS working weights, preventing division by near-zero.
 const MIN_WEIGHT: f64 = 1e-6;
 
-/// Cap on the per-element Fisher-scoring step `u/w` (in η units), guarding against
-/// huge updates from extreme score / small Fisher info combinations.
-const MAX_STEP: f64 = 20.0;
+/// Cap on the per-element Fisher-scoring step `u/w` (in η units). This is a pure
+/// anti-overflow guard for degenerate score/information combinations — NOT a
+/// robustness device. It was previously 20.0, which silently biased the working
+/// response: when many rows clip, the update direction is decided by the *count*
+/// of positive vs negative rows instead of the score-weighted aggregate, which
+/// can point the Fisher step uphill (observed as ν → ∞ runaway on Student-t).
+/// Robustness against overshoot is the job of the deviance-guarded step-halving
+/// (FIT-1); neither mgcv nor gamlss clips the working response at all.
+const MAX_STEP: f64 = 1e6;
 
 /// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
 /// step is accepted regardless so the loop always makes progress.
@@ -50,8 +56,13 @@ pub(super) struct Update {
     pub edf: f64,
     /// Per-term EDF, summing to `edf`.
     pub term_edf: Vec<f64>,
-    /// Max |Δβ|; drives the outer-loop convergence check.
+    /// Max |Δβ|; reported in diagnostics (`final_change`).
     pub max_diff: f64,
+    /// Max |Δη| of the full-step proposal; drives the outer-loop convergence
+    /// check. Measured in fit space rather than coefficient space so that
+    /// movement along fit-irrelevant coefficient ridges (e.g. a flat REML
+    /// valley where λ jitters but X·β is unchanged) cannot block convergence.
+    pub eta_max_change: f64,
     pub eta_change: f64,
     pub lambda_change: f64,
     /// Observations whose working weight `w` was clamped at `MIN_WEIGHT`.
@@ -102,12 +113,27 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
         let mu_a = eta_a.mapv(|e| link.inv_link(e));
         let gd_a = global_deviance_with(family, y, prior_weights, models, param, &mu_a)?;
 
-        // Accept on no-increase (small slack absorbs round-off), or at the floor.
-        if gd_a <= gd0 + 1e-8 || alpha <= min_alpha {
+        // Accept on no-increase (small slack absorbs round-off).
+        if gd_a <= gd0 + 1e-8 {
             return Ok(Halved {
                 beta: Coefficients(beta_a),
                 eta: eta_a,
                 mu: mu_a,
+                hits,
+            });
+        }
+        // At the backtracking floor the direction is uphill at every step size:
+        // *reject* the block update (α = 0) instead of forcing a bad micro-step.
+        // Accepting used to let a wrong-direction proposal creep the parameter a
+        // little further uphill every cycle — an unbounded slow divergence (the
+        // ν → ∞ runaway). Rejection keeps the previous state, preserving the
+        // monotone-descent guarantee exactly; if the block is genuinely at its
+        // optimum the full step is tiny and this branch is never reached.
+        if alpha <= min_alpha {
+            return Ok(Halved {
+                beta: model.beta.clone(),
+                eta: model.eta.clone(),
+                mu: model.mu.clone(),
                 hits,
             });
         }
@@ -299,7 +325,9 @@ pub(super) fn step<D: Distribution + ?Sized>(
         .iter()
         .map(|x| x.abs())
         .fold(0.0_f64, |a, b| a.max(b));
-    let eta_change = (&new_eta - &target.eta).mapv(f64::abs).sum();
+    let eta_abs_diff = (&new_eta - &target.eta).mapv(f64::abs);
+    let eta_max_change = eta_abs_diff.iter().copied().fold(0.0_f64, f64::max);
+    let eta_change = eta_abs_diff.sum();
     let lambda_change = (&best_lambdas - &target.lambdas).mapv(f64::abs).sum();
 
     Ok(Update {
@@ -311,6 +339,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         edf,
         term_edf,
         max_diff,
+        eta_max_change,
         eta_change,
         lambda_change,
         weight_floor_hits,
@@ -567,6 +596,7 @@ mod tests {
             edf: 0.0,
             term_edf: vec![0.0],
             max_diff: 0.0,
+            eta_max_change: 0.0,
             eta_change: 0.0,
             lambda_change: 0.0,
             weight_floor_hits: 0,

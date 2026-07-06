@@ -20,11 +20,19 @@
 # smoothing criterion.
 
 suppressPackageStartupMessages({
-  library(arrow)
   library(mgcv)
   library(jsonlite)
   library(optparse)
 })
+
+# Parquet reader: prefer arrow, fall back to the dependency-free nanoparquet.
+read_parquet <- if (requireNamespace("arrow", quietly = TRUE)) {
+  arrow::read_parquet
+} else if (requireNamespace("nanoparquet", quietly = TRUE)) {
+  function(path) as.data.frame(nanoparquet::read_parquet(path))
+} else {
+  stop("need the 'arrow' or 'nanoparquet' package to read parquet input")
+}
 
 opts <- parse_args(OptionParser(option_list = list(
   make_option(c("--data"),     type = "character"),
@@ -380,14 +388,16 @@ fit_gamma_sigma_smooth <- function(df, output) {
   start <- Sys.time()
   m <- gam(list(y ~ 1, ~ s(x, bs = "ps", k = 20)), data = df, family = gammals())
   # gammals linear predictors (predict type="link"):
-  #   η₁ = log(μ)                — log link for mean
-  #   η₂ = log(CV²) = 2·log(CV) — mgcv uses log-squared-CV, so CV = exp(η₂/2)
-  # glissando σ = CV, so sigma_hat = exp(η₂/2) = sqrt(exp(η₂)).
-  # Note: fitted(m) returns only the first column (μ) for some mgcv versions;
-  # predict(type="link") always returns a 2-column matrix for two-formula models.
+  #   η₁ = log(μ)  — "identity" link on the log-mean, so exp(η₁) = E[Y].
+  #   η₂ — the SCALE predictor goes through gammals' `logb` link, NOT a plain
+  #        log: θ = log(φ) = b + log(1 + exp(η₂)) with b = −7 by default.
+  #        Treating η₂ as log(φ) directly (the previous code) produced σ̂ in the
+  #        5–20 range for a true CV of 0.2–0.7. Use the family's own linkinv to
+  #        recover θ = log(φ); glissando's σ = CV = sqrt(φ) = exp(θ/2).
   lp        <- predict(m, type = "link")
-  mu_hat    <- exp(lp[, 1])           # log link → E[Y]
-  sigma_hat <- exp(lp[, 2] / 2.0)    # log-CV² link → CV (glissando's σ)
+  mu_hat    <- exp(lp[, 1])                       # log-mean → E[Y]
+  theta     <- m$family$linfo[[2]]$linkinv(lp[, 2])  # log(φ) via logb linkinv
+  sigma_hat <- exp(theta / 2.0)                   # φ = CV² → σ = CV
 
   se_pred <- tryCatch(predict(m, type = "link", se.fit = TRUE), error = function(e) NULL)
   se_eta_out <- if (!is.null(se_pred) && is.matrix(se_pred$se.fit)) {

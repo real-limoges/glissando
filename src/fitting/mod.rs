@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
-/// Default relative tolerance on the global-deviance change (FIT-2).
+/// Default absolute tolerance on the global-deviance change (FIT-2).
 const DEFAULT_GD_TOLERANCE: f64 = 1e-3;
 
 /// How close a smooth term's EDF must sit to its penalty null-space dimension
@@ -83,7 +83,8 @@ pub struct FitConfig {
     /// raw (unguarded) full-step behaviour.
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub step_halving: bool,
-    /// Relative tolerance on the global-deviance change between cycles (FIT-2).
+    /// Absolute tolerance on the global-deviance change between cycles (FIT-2),
+    /// in deviance units — the same convention as R gamlss's `c.crit`.
     /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
@@ -142,9 +143,9 @@ pub struct FitDiagnostics {
     /// cycle ran (e.g. `max_iterations == 0`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance: Option<f64>,
-    /// Relative global-deviance change at the final cycle,
-    /// `|GD_{c−1} − GD_c| / (|GD_c| + 0.1)` (FIT-2). `None` on the first cycle
-    /// (no previous deviance) or if no cycle ran.
+    /// Absolute global-deviance change at the final cycle,
+    /// `|GD_{c−1} − GD_c|` (FIT-2; same units as gamlss's `c.crit`). `None` on
+    /// the first cycle (no previous deviance) or if no cycle ran.
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance_change: Option<f64>,
 }
@@ -378,31 +379,32 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 }
             };
 
-            // Per-parameter relative convergence check.
+            // Per-parameter relative convergence check, in FIT SPACE (η = X·β).
             //
-            // The previous (global) test divided the max β-change across *all*
-            // parameters by the max |β| across *all* parameters.  When one parameter
-            // (e.g. mu) has large coefficients while another (e.g. log-scale sigma)
-            // has small ones, the shared denominator is dominated by mu's scale and
-            // the loop could declare convergence while sigma is still drifting.
+            // A coefficient-space (Δβ) test is vulnerable to false negatives on
+            // penalized models: when the smoothing objective has a flat valley,
+            // the per-cycle λ re-optimization can jitter between fit-equivalent
+            // (λ, β) pairs whose linear predictors are identical — β moves along
+            // a fit-irrelevant ridge forever and Δβ never passes, even though
+            // the model (η, μ, deviance) is fully stationary. Measuring the
+            // change of η instead is invariant to such ridges; combined with the
+            // global-deviance test below this is strictly stronger than gamlss's
+            // deviance-only criterion.
             //
-            // Fix: each parameter is checked against its own |β| scale.  The floor of
-            // 1.0 keeps the test equivalent to an absolute threshold when all
-            // coefficients are O(1) (normalised data).
-            //
-            // The Δβ test uses the full-step `update`: as the fit approaches the
-            // optimum the score → 0, so the full step (and `max_diff`) → 0 and
-            // step-halving accepts α = 1. Far from the optimum a large full step
-            // keeps this test conservative (won't declare convergence), which is
-            // exactly when the GD test below is the one that should decide.
-            let param_beta_scale = update
-                .beta
-                .0
+            // Each parameter is checked against its own |η| scale, with a floor
+            // of 1.0 so the test is equivalent to an absolute threshold when the
+            // linear predictor is O(1). The test uses the full-step `update`: as
+            // the fit approaches the optimum the score → 0, so the full step
+            // → 0 and step-halving accepts α = 1. Far from the optimum a large
+            // full step keeps this test conservative, which is exactly when the
+            // GD test below is the one that should decide.
+            let param_eta_scale = update
+                .eta
                 .iter()
                 .copied()
                 .map(f64::abs)
                 .fold(1.0_f64, f64::max);
-            if update.max_diff / param_beta_scale >= config.tolerance {
+            if update.eta_max_change / param_eta_scale >= config.tolerance {
                 all_converged = false;
             }
 
@@ -436,12 +438,19 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 
         // FIT-2: global-deviance change after the full sweep. Require *both* the
         // Δβ test and the GD test to agree before declaring convergence.
+        //
+        // The change is measured in ABSOLUTE deviance units, matching R gamlss's
+        // `c.crit` (default 0.001). A relative test (|ΔGD|/|GD|) was used
+        // previously, but its slack scales with the deviance magnitude: at
+        // GD ≈ 4000 it declared convergence while the fit was still improving
+        // by ~4 deviance units per cycle — far short of the optimum that gamlss
+        // (absolute criterion) reaches on the same data.
         let gd = global_deviance(family, y, prior_weights, &models)?;
-        let gd_rel = (gd_prev - gd).abs() / (gd.abs() + 0.1);
-        let gd_converged = cycle > 0 && gd_rel < config.gd_tolerance;
+        let gd_abs_change = (gd_prev - gd).abs();
+        let gd_converged = cycle > 0 && gd_abs_change < config.gd_tolerance;
 
         final_deviance = Some(gd);
-        final_deviance_change = if cycle > 0 { Some(gd_rel) } else { None };
+        final_deviance_change = if cycle > 0 { Some(gd_abs_change) } else { None };
         gd_prev = gd;
 
         final_iteration = cycle + 1;

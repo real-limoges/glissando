@@ -161,11 +161,16 @@ impl Distribution for Binomial {
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => {
-                // y is counts; convert to a probability via the first trial count.
-                // `validate_inputs` rejects empty `y`, so the `unwrap_or` is unreachable
-                // on the public path.
-                let n = self.n_trials[0];
-                let p = y.mean().unwrap_or(n / 2.0) / n;
+                // y is counts; pool across observations as Σy/Σn so heterogeneous
+                // per-observation trial counts don't bias the seed (`n_trials[0]`
+                // alone is wrong when trials vary by row).
+                let total_y: f64 = y.sum();
+                let total_n: f64 = if self.n_trials.len() == 1 {
+                    self.n_trials[0] * y.len() as f64
+                } else {
+                    self.n_trials.sum()
+                };
+                let p = total_y / total_n.max(MIN_POSITIVE);
                 // Clamp away from {0, 1} so the IRLS loop has a well-conditioned start.
                 p.clamp(0.1, 0.9)
             }
