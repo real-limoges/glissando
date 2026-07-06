@@ -258,6 +258,7 @@ mod poisson;
 mod structural;
 mod student_t;
 mod truncated;
+mod weibull;
 
 pub use bccg::BCCG;
 pub use bcpe::BCPE;
@@ -274,6 +275,7 @@ pub use ocat::Ocat;
 pub use poisson::Poisson;
 pub use student_t::StudentT;
 pub use truncated::Truncated;
+pub use weibull::Weibull;
 
 /// Construct a stateless distribution from its name (e.g. for WASM JSON I/O).
 ///
