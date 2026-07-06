@@ -5,7 +5,7 @@
 
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
-    apply_cr_pc_constraint, cr_knots, create_basis_matrix, create_cr_basis_matrix,
+    apply_cr_pc_constraint, cr_knots, create_basis_matrix_with_range, create_cr_basis_matrix,
     create_cr_penalty_matrix, create_penalty_matrix, kronecker_product, row_kronecker_into,
     sum_to_zero_basis,
 };
@@ -66,7 +66,18 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
             ..
         } => {
             // null(S₁⊗I + I⊗S₂) = null(S₁) ⊗ null(S₂); the dimensions multiply.
-            margin(*penalty_order_1, *n_splines_1) * margin(*penalty_order_2, *n_splines_2)
+            // The tensor is centered with ONE sum-to-zero constraint on the full
+            // basis (mgcv te() semantics), which removes exactly the constant
+            // direction — a member of the product null space — so subtract 1
+            // (not one per margin as the `margin` helper would).
+            let d1 = (*penalty_order_1).min(*n_splines_1);
+            let d2 = (*penalty_order_2).min(*n_splines_2);
+            let base = d1 * d2;
+            if centered && *n_splines_1 * *n_splines_2 >= 2 {
+                base.saturating_sub(1)
+            } else {
+                base
+            }
         }
         // CR penalty null space = constants + linear = dim 2.
         // When `pc` is set it replaces centering (one constraint → dim 1).
@@ -96,6 +107,32 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
 /// knots are embedded in `FittedParameter::terms` and replayed verbatim at
 /// predict time, guaranteeing that the fit and predict bases are identical.
 pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>, GamlssError> {
+    // Finite (min, max) of a column, for anchoring P-spline knot grids.
+    let finite_range = |col: &str| -> Result<(f64, f64), GamlssError> {
+        let x = get_col(data, col)?;
+        let lo = x
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f64::INFINITY, f64::min);
+        let hi = x
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f64::NEG_INFINITY, f64::max);
+        Ok((lo, hi))
+    };
+    // Sorted distinct levels of a grouping column (sorted for determinism —
+    // first-occurrence order would make the coefficient layout depend on row
+    // order of the training data).
+    let sorted_levels = |col: &str| -> Result<Vec<String>, GamlssError> {
+        let x = get_col(data, col)?;
+        let mut levels: Vec<String> = x.iter().map(|v| v.to_string()).collect();
+        levels.sort();
+        levels.dedup();
+        Ok(levels)
+    };
+
     terms
         .iter()
         .map(|term| match term {
@@ -111,6 +148,54 @@ pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>,
                     k: *k,
                     pc: *pc,
                     knots: cr_knots(x, *k),
+                }))
+            }
+            Term::Smooth(Smooth::PSpline1D {
+                col_name,
+                n_splines,
+                degree,
+                penalty_order,
+                range: None,
+            }) => Ok(Term::Smooth(Smooth::PSpline1D {
+                col_name: col_name.clone(),
+                n_splines: *n_splines,
+                degree: *degree,
+                penalty_order: *penalty_order,
+                range: Some(finite_range(col_name)?),
+            })),
+            Term::Smooth(Smooth::TensorProduct {
+                col_name_1,
+                n_splines_1,
+                penalty_order_1,
+                col_name_2,
+                n_splines_2,
+                penalty_order_2,
+                degree,
+                range_1,
+                range_2,
+            }) if range_1.is_none() || range_2.is_none() => {
+                Ok(Term::Smooth(Smooth::TensorProduct {
+                    col_name_1: col_name_1.clone(),
+                    n_splines_1: *n_splines_1,
+                    penalty_order_1: *penalty_order_1,
+                    col_name_2: col_name_2.clone(),
+                    n_splines_2: *n_splines_2,
+                    penalty_order_2: *penalty_order_2,
+                    degree: *degree,
+                    range_1: Some(match range_1 {
+                        Some(r) => *r,
+                        None => finite_range(col_name_1)?,
+                    }),
+                    range_2: Some(match range_2 {
+                        Some(r) => *r,
+                        None => finite_range(col_name_2)?,
+                    }),
+                }))
+            }
+            Term::Smooth(Smooth::RandomEffect { col_name, levels }) if levels.is_empty() => {
+                Ok(Term::Smooth(Smooth::RandomEffect {
+                    col_name: col_name.clone(),
+                    levels: sorted_levels(col_name)?,
                 }))
             }
             other => Ok(other.clone()),
@@ -130,9 +215,10 @@ fn assemble_smooth(
             n_splines,
             degree,
             penalty_order,
+            range,
         } => {
             let x_col = get_col(data, col_name)?;
-            let basis = create_basis_matrix(x_col, *n_splines, *degree);
+            let basis = create_basis_matrix_with_range(x_col, *n_splines, *degree, *range);
             let penalty = create_penalty_matrix(*n_splines, *penalty_order);
 
             if apply_constraint && *n_splines >= 2 {
@@ -185,74 +271,90 @@ fn assemble_smooth(
             n_splines_2,
             penalty_order_2,
             degree,
+            range_1,
+            range_2,
         } => {
             let x1 = get_col(data, col_name_1)?;
-            let b1_raw = create_basis_matrix(x1, *n_splines_1, *degree);
-            let s1_raw = create_penalty_matrix(*n_splines_1, *penalty_order_1);
+            let b1 = create_basis_matrix_with_range(x1, *n_splines_1, *degree, *range_1);
+            let s1 = create_penalty_matrix(*n_splines_1, *penalty_order_1);
 
             let x2 = get_col(data, col_name_2)?;
-            let b2_raw = create_basis_matrix(x2, *n_splines_2, *degree);
-            let s2_raw = create_penalty_matrix(*n_splines_2, *penalty_order_2);
+            let b2 = create_basis_matrix_with_range(x2, *n_splines_2, *degree, *range_2);
+            let s2 = create_penalty_matrix(*n_splines_2, *penalty_order_2);
 
-            // Apply sum-to-zero to each marginal independently when an Intercept is
-            // also on the parameter — the row-Kronecker of two partition-of-unity
-            // bases is itself partition-of-unity, so without this the tensor
-            // smooth makes [1 | B] rank-deficient too.
-            let (b1, s1, k1) = if apply_constraint && *n_splines_1 >= 2 {
-                let z1 = sum_to_zero_basis(*n_splines_1);
-                let b1 = b1_raw.dot(&z1);
-                let s1 = z1.t().dot(&s1_raw).dot(&z1);
-                let k1 = *n_splines_1 - 1;
-                (b1, s1, k1)
-            } else {
-                (b1_raw, s1_raw, *n_splines_1)
-            };
-            let (b2, s2, k2) = if apply_constraint && *n_splines_2 >= 2 {
-                let z2 = sum_to_zero_basis(*n_splines_2);
-                let b2 = b2_raw.dot(&z2);
-                let s2 = z2.t().dot(&s2_raw).dot(&z2);
-                let k2 = *n_splines_2 - 1;
-                (b2, s2, k2)
-            } else {
-                (b2_raw, s2_raw, *n_splines_2)
-            };
-
-            let n_coeffs_total = k1 * k2;
-            let mut basis = Array2::<f64>::zeros((n_obs, n_coeffs_total));
+            let (k1, k2) = (*n_splines_1, *n_splines_2);
+            let n_full = k1 * k2;
+            let mut basis = Array2::<f64>::zeros((n_obs, n_full));
             for i in 0..n_obs {
                 row_kronecker_into(b1.row(i), b2.row(i), basis.row_mut(i));
             }
 
             // Anisotropic penalties: S1⊗I2 for x1 direction, I1⊗S2 for x2 direction.
-            let i_k1 = Array2::<f64>::eye(k1);
-            let i_k2 = Array2::<f64>::eye(k2);
+            let penalty_1 = kronecker_product(&s1, &Array2::<f64>::eye(k2));
+            let penalty_2 = kronecker_product(&Array2::<f64>::eye(k1), &s2);
 
-            let penalty_1 = kronecker_product(&s1, &i_k2);
-            let penalty_2 = kronecker_product(&i_k1, &s2);
-            Ok((
-                basis,
-                vec![PenaltyMatrix(penalty_1), PenaltyMatrix(penalty_2)],
-            ))
+            // When an Intercept shares the parameter, apply ONE sum-to-zero
+            // constraint to the FULL tensor basis (removing only the overall
+            // constant), transforming both penalties with the same Z — exactly
+            // mgcv's te() treatment (k1·k2 − 1 coefficients). Centering each
+            // *marginal* before the Kronecker (the previous behaviour) removes
+            // every function of the form f(x1)·1 and 1·g(x2), i.e. both main
+            // effects — silently reducing te() to a ti()-style pure interaction
+            // that cannot represent additive structure.
+            if apply_constraint && n_full >= 2 {
+                let z = sum_to_zero_basis(n_full);
+                let basis_c = basis.dot(&z);
+                let p1_c = z.t().dot(&penalty_1).dot(&z);
+                let p2_c = z.t().dot(&penalty_2).dot(&z);
+                Ok((basis_c, vec![PenaltyMatrix(p1_c), PenaltyMatrix(p2_c)]))
+            } else {
+                Ok((
+                    basis,
+                    vec![PenaltyMatrix(penalty_1), PenaltyMatrix(penalty_2)],
+                ))
+            }
         }
 
-        Smooth::RandomEffect { col_name } => {
+        Smooth::RandomEffect { col_name, levels } => {
             // Ridge-penalized indicators: equivalent to alpha ~ N(0, 1/lambda).
             let group_var = get_col(data, col_name)?;
 
-            let mut group_to_id: HashMap<String, usize> = HashMap::new();
-            for val in group_var.iter() {
-                let key: String = val.to_string();
-                let next_id = group_to_id.len();
-                group_to_id.entry(key).or_insert(next_id);
-            }
+            // Column layout comes from the levels resolved at FIT time (stored on
+            // the term), so prediction maps each group to the same coefficient it
+            // was fitted with. Rebuilding the map from the incoming data (the old
+            // behaviour) silently misaligned columns whenever the prediction rows
+            // presented groups in a different first-occurrence order or omitted a
+            // group. Legacy models (empty `levels`, pre-dating the field) fall
+            // back to first-occurrence order to reproduce their fitted layout.
+            let group_to_id: HashMap<String, usize> = if levels.is_empty() {
+                let mut m = HashMap::new();
+                for val in group_var.iter() {
+                    let key: String = val.to_string();
+                    let next_id = m.len();
+                    m.entry(key).or_insert(next_id);
+                }
+                m
+            } else {
+                levels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| (l.clone(), i))
+                    .collect()
+            };
 
             let n_groups = group_to_id.len();
             let mut basis = Array2::<f64>::zeros((n_obs, n_groups));
 
             for (i, val) in group_var.iter().enumerate() {
                 let key: String = val.to_string();
-                if let Some(&group_id) = group_to_id.get(&key) {
-                    basis[[i, group_id]] = 1.0;
+                match group_to_id.get(&key) {
+                    Some(&group_id) => basis[[i, group_id]] = 1.0,
+                    None => {
+                        return Err(GamlssError::Input(format!(
+                            "random-effect column '{col_name}' has level '{key}' that was \
+                             not present in the training data"
+                        )))
+                    }
                 }
             }
 
@@ -377,6 +479,7 @@ mod tests {
             n_splines: 10,
             degree: 3,
             penalty_order: 2,
+                    range: None,
         });
 
         let (mm, _, _, _) = assemble_model_matrices(&data, n_obs, &[term]).unwrap();

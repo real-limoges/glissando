@@ -23,7 +23,7 @@ fn make_formula_with_smooth(n_params: usize) -> Formula {
         col_name: "x".to_string(),
         n_splines: 10,
         degree: 3,
-        penalty_order: 2,
+        penalty_order: 2, range: None,
     });
     f.add_terms("mu".to_string(), vec![Term::Intercept, smooth]);
     for k in 1..n_params {

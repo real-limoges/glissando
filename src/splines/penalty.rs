@@ -10,20 +10,25 @@ pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f6
         return Array2::<f64>::zeros((n_splines, n_splines));
     }
 
-    let mut d_matrix = Array2::<f64>::zeros((n_rows_d, n_splines));
-    match order {
-        1 => {
-            for i in 0..n_rows_d {
-                d_matrix[[i, i]] = 1.0;
-                d_matrix[[i, i + 1]] = -1.0;
-            }
+    // General order-d difference coefficients: convolve [1, -1] with itself d
+    // times, giving the alternating binomial row (1, -d, ..., ±1) — identical to
+    // R's diff(diag(k), differences = d). The previous code special-cased orders
+    // 1 and 2 and silently reused the order-2 row (with the wrong number of
+    // rows) for anything higher.
+    let mut coef = vec![1.0_f64];
+    for _ in 0..order {
+        let mut next = vec![0.0; coef.len() + 1];
+        for (k, &c) in coef.iter().enumerate() {
+            next[k] += c;
+            next[k + 1] -= c;
         }
-        _ => {
-            for i in 0..n_rows_d {
-                d_matrix[[i, i]] = 1.0;
-                d_matrix[[i, i + 1]] = -2.0;
-                d_matrix[[i, i + 2]] = 1.0;
-            }
+        coef = next;
+    }
+
+    let mut d_matrix = Array2::<f64>::zeros((n_rows_d, n_splines));
+    for i in 0..n_rows_d {
+        for (j, &c) in coef.iter().enumerate() {
+            d_matrix[[i, i + j]] = c;
         }
     }
     d_matrix.t().dot(&d_matrix)
