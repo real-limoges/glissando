@@ -37,7 +37,9 @@ impl Draw for Generator {
 fn pspline_prediction_is_invariant_to_prediction_range() {
     let mut rng = Generator::new(4242);
     let n = 400;
-    let x: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64 * 6.28).collect();
+    let x: Vec<f64> = (0..n)
+        .map(|i| i as f64 / (n - 1) as f64 * std::f64::consts::TAU)
+        .collect();
     let y_vec: Vec<f64> = x.iter().map(|&xi| xi.sin() + 0.1 * rng.normal()).collect();
     let y = Array1::from_vec(y_vec);
     let mut data = DataSet::new();
@@ -145,7 +147,9 @@ fn random_effect_unseen_level_errors() {
 fn tensor_with_intercept_recovers_main_effects() {
     let mut rng = Generator::new(2718);
     let n = 900;
-    let x1: Vec<f64> = (0..n).map(|_| rng.uniform() * 6.28).collect();
+    let x1: Vec<f64> = (0..n)
+        .map(|_| rng.uniform() * std::f64::consts::TAU)
+        .collect();
     let x2: Vec<f64> = (0..n).map(|_| rng.uniform()).collect();
     // Purely additive truth — zero interaction.
     let f = |a: f64, b: f64| a.sin() + 2.0 * (b - 0.5) * (b - 0.5);

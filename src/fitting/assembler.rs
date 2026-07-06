@@ -96,15 +96,15 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
     }
 }
 
-/// Resolve `CrSpline1D` knots from training data once, returning an owned
-/// `Vec<Term>` with every term's knots filled in.
+/// Resolve every term's data-dependent state from the training data once,
+/// returning an owned `Vec<Term>`: CR-spline quantile knots, P-spline and
+/// tensor knot ranges, and random-effect level lists.
 ///
-/// All other terms are cloned unchanged.  `CrSpline1D` terms with already-
-/// populated knots are also cloned unchanged — this is a no-op when the model
-/// is used for prediction (the stored terms already carry their knots).
+/// Terms whose state is already populated are cloned unchanged, so the
+/// function is a no-op at predict time (stored terms carry their state).
 ///
-/// This must be called before [`assemble_model_matrices`] so the resulting
-/// knots are embedded in `FittedParameter::terms` and replayed verbatim at
+/// This must be called before [`assemble_model_matrices`] so the resolved
+/// state is embedded in `FittedParameter::terms` and replayed verbatim at
 /// predict time, guaranteeing that the fit and predict bases are identical.
 pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>, GamlssError> {
     // Finite (min, max) of a column, for anchoring P-spline knot grids.
@@ -333,12 +333,12 @@ fn assemble_smooth(
             let group_var = get_col(data, col_name)?;
 
             // Column layout comes from the levels resolved at FIT time (stored on
-            // the term), so prediction maps each group to the same coefficient it
-            // was fitted with. Rebuilding the map from the incoming data (the old
-            // behaviour) silently misaligned columns whenever the prediction rows
-            // presented groups in a different first-occurrence order or omitted a
-            // group. Legacy models (empty `levels`, pre-dating the field) fall
-            // back to first-occurrence order to reproduce their fitted layout.
+            // the term), so prediction maps each group to the coefficient it was
+            // fitted with; a map rebuilt from the incoming data would silently
+            // misalign columns whenever prediction rows present groups in a
+            // different first-occurrence order or omit a group. Legacy models
+            // (empty `levels`, pre-dating the field) fall back to
+            // first-occurrence order to reproduce their fitted layout.
             let group_to_id: HashMap<String, usize> = if levels.is_empty() {
                 let mut m = HashMap::new();
                 for val in group_var.iter() {

@@ -121,23 +121,46 @@ $$
 I_\mu = \mathbb{E}\left[\frac{w}{\sigma^2}\right] = \frac{\nu + 1}{\sigma^2(\nu + 3)}
 $$
 
-In practice, we use the observed information (plug in $w$ directly).
+The working weight uses this expected information (the same convention as
+gamlss `TF()`), not the observed per-row weight $w/\sigma^2$: the two agree
+only at $z^2 = 3$, and a data-dependent weight changes the PWLS subproblem —
+hence $\lambda$ selection, EDF, and standard errors — relative to the
+reference implementation.
 
 #### For $\sigma$ (log link):
 $$
 I_{\log(\sigma)} = \frac{2\nu}{\nu + 3}
 $$
 
-#### For $\nu$ (log link):
+#### For $\nu$ (log link)
+
+Lange, Little & Taylor (1989), identical to gamlss `TF()`'s `d2ldv2`:
+
 $$
-I_{\log(\nu)} = \frac{\nu^2}{4}\left[\psi'\left(\frac{\nu}{2}\right) - \psi'\left(\frac{\nu+1}{2}\right) + \frac{2(\nu+3)}{\nu(\nu+1)}\right]
+I_{\log(\nu)} = \frac{\nu^2}{4}\left[\psi'\left(\frac{\nu}{2}\right) - \psi'\left(\frac{\nu+1}{2}\right) - \frac{2(\nu+5)}{\nu(\nu+1)(\nu+3)}\right]
 $$
 
-where $\psi'(x)$ is the trigamma function.
+where $\psi'(x)$ is the trigamma function. The rational term is a small
+correction: $I_{\log(\nu)}$ decays like $O(1/\nu)$, so a sign or degree error
+here inflates the weight by orders of magnitude and effectively freezes
+$\nu$ at its starting value (an earlier implementation used
+$+2(\nu+3)/(\nu(\nu+1))$, ~50× too large at $\nu = 5$). The formula is
+validated against a Monte-Carlo estimate of $\mathbb{E}[(\nu\,\partial\ell/\partial\nu)^2]$.
 
 ### Numerical Considerations
 
 1. **Minimum $\nu$**: $\nu > 2$ is enforced to ensure finite variance, via a *floored log link* on $\nu$ ($\eta = \log\nu$, $\nu = \max(e^\eta, 2)$). The optimizer can explore the heavy-tail region without the variance $\sigma^2\nu/(\nu-2)$ becoming undefined; the floor never binds when the true $\nu$ is well above 2. See `FlooredLogLink` in `src/distributions/links.rs`.
+
+   Where the floor binds, $d\nu/d\eta = 0$ and the score must not be forwarded
+   blindly. The implementation applies a KKT-style aggregate projection: if the
+   score summed over the pinned rows is $\leq 0$, the constrained optimum is at
+   the boundary and those rows are frozen ($u = 0$, so the block reports a zero
+   step and the outer loop converges); if it is $> 0$ the full chain rule is
+   forwarded so $\nu$ can re-enter the interior. Forwarding a negative
+   aggregate walks $\eta_\nu$ downward indefinitely; a per-row one-sided
+   projection instead biases the aggregate upward and produces a lift-off /
+   fall-back limit cycle at the boundary. The single summed score is exact for
+   an intercept-only $\eta_\nu$ (the standard usage).
 2. **Minimum $\sigma$**: Enforce $\sigma \geq 10^{-6}$ to prevent division by zero
 3. **Weight clamping**: The denominator $\nu + z^2$ should be $\geq 10^{-10}$
 4. **Information positivity**: Ensure $I_{\log(\nu)} \geq 10^{-6}$
@@ -250,14 +273,24 @@ $$
 \frac{\partial \ell}{\partial \eta_\sigma} = \frac{2}{\sigma^2}\left[\psi\left(\frac{1}{\sigma^2}\right) + 2\log(\sigma) - \log\left(\frac{y}{\mu}\right) + \frac{y}{\mu} - 1\right]
 $$
 
-Fisher information involves trigamma $\psi'(x) = \frac{d^2}{dx^2}\log\Gamma(x)$:
+Fisher information involves trigamma $\psi'(x) = \frac{d^2}{dx^2}\log\Gamma(x)$.
+On the natural scale $I_\sigma = \frac{4}{\sigma^6}\psi'(\alpha) - \frac{4}{\sigma^4}$,
+so on the $\eta_\sigma$ scale ($\times\,\sigma^2$):
 $$
-I_{\eta_\sigma} = \frac{4}{\sigma^4}\psi'\left(\frac{1}{\sigma^2}\right) - \frac{2}{\sigma^2}
+I_{\eta_\sigma} = \frac{4}{\sigma^4}\psi'\left(\frac{1}{\sigma^2}\right) - \frac{4}{\sigma^2}
 $$
+
+This matches gamlss `GA`'s `d2ldd2` and the Monte-Carlo check
+$\mathbb{E}[u_{\eta_\sigma}^2]$. Since $\psi'(1/\sigma^2) > \sigma^2$ for all
+$\sigma > 0$, the expression is strictly positive, with limit
+$I_{\eta_\sigma} \to 2$ as $\sigma \to 0$ (the Gaussian-like regime). An
+earlier implementation used $-2/\sigma^2$ for the second term, inflating the
+weight roughly five-fold at $\sigma = 0.5$ and over-damping every $\sigma$
+update.
 
 **Implementation**:
 $$
-u_\sigma = \frac{2}{\sigma^2}\left[\psi(\alpha) + 2\log(\sigma) - \log(y/\mu) + y/\mu - 1\right], \quad w_\sigma = \frac{4}{\sigma^4}\psi'(\alpha) - \frac{2}{\sigma^2}
+u_\sigma = \frac{2}{\sigma^2}\left[\psi(\alpha) + 2\log(\sigma) - \log(y/\mu) + y/\mu - 1\right], \quad w_\sigma = \frac{4}{\sigma^4}\psi'(\alpha) - \frac{4}{\sigma^2}
 $$
 
 ---
@@ -319,24 +352,30 @@ $$
 
 Let $\eta_\sigma = \log(\sigma)$ and $r = 1/\sigma$.
 
-Score with respect to $\sigma$:
+Differentiating with respect to $r$ first,
 $$
-\frac{\partial \ell}{\partial \sigma} = -\frac{1}{\sigma^2}\left[\psi(y + r) - \psi(r) - \log(1+\sigma\mu) + \frac{y - \mu}{1+\sigma\mu}\right]
+\frac{\partial \ell}{\partial r} = \psi(y + r) - \psi(r) - \log(1+\sigma\mu) + \frac{\mu - y}{r+\mu},
+$$
+then $\frac{\partial \ell}{\partial \eta_\sigma} = \sigma\,\frac{\partial \ell}{\partial \sigma} = -\frac{1}{\sigma}\frac{\partial \ell}{\partial r}$ (since $r = 1/\sigma$):
+$$
+\frac{\partial \ell}{\partial \eta_\sigma} = -\frac{1}{\sigma}\left[\psi(y + r) - \psi(r) - \log(1+\sigma\mu) + \frac{\mu - y}{r+\mu}\right]
 $$
 
-Chain rule for log link:
+**Working weight** — the exact expected information has no closed form (it
+involves $\mathbb{E}[\psi'(Y + r)]$), so the squared-score convention of
+gamlss `NBI` (`d2ldd2 = -dldd^2`) is used:
 $$
-\frac{\partial \ell}{\partial \eta_\sigma} = \sigma \cdot \frac{\partial \ell}{\partial \sigma} = -\frac{1}{\sigma}\left[\psi(y + r) - \psi(r) - \log(1+\sigma\mu) + \frac{y - \mu}{1+\sigma\mu}\right]
+w_{\eta_\sigma} = u_{\eta_\sigma}^2 \quad (\text{floored at } 10^{-6})
 $$
 
-Fisher information (using approximation):
-$$
-I_{\eta_\sigma} = \frac{1}{\sigma^2}\psi'(r)
-$$
+An earlier implementation used the partial expected-information approximation
+$\psi'(r)/\sigma^2$, which drops same-order terms, behaves like $1/\sigma$
+near the Poisson boundary (over-damping $\sigma$ updates), and does not track
+the gamlss oracle's $\lambda$/EDF selection for $\sigma$ smooths.
 
 **Implementation**:
 $$
-u_\sigma = -\frac{1}{\sigma}\left[\psi(y + 1/\sigma) - \psi(1/\sigma) - \log(1+\sigma\mu) + \frac{y - \mu}{1+\sigma\mu}\right], \quad w_\sigma = \frac{\psi'(1/\sigma)}{\sigma^2}
+u_\sigma = -\frac{1}{\sigma}\left[\psi(y + 1/\sigma) - \psi(1/\sigma) - \log(1+\sigma\mu) + \frac{\mu - y}{1/\sigma+\mu}\right], \quad w_\sigma = \max(u_\sigma^2,\ 10^{-6})
 $$
 
 ---
@@ -402,15 +441,22 @@ $$
 
 Fisher information:
 $$
-I_{\eta_\phi} = \phi^2\left[\psi'(\phi) - \mu^2\psi'(\alpha) - (1-\mu)^2\psi'(\beta)\right]
+I_{\eta_\phi} = \phi^2\left[\mu^2\psi'(\alpha) + (1-\mu)^2\psi'(\beta) - \psi'(\phi)\right]
 $$
+
+The bracket is $-\partial^2\ell/\partial\phi^2$; the sign convention matters
+because $\psi'$ is decreasing and convex, which makes
+$\mu^2\psi'(\mu\phi) + (1-\mu)^2\psi'((1-\mu)\phi) > \psi'(\phi)$ for all
+$\mu \in (0,1)$, $\phi > 0$ — so $I_{\eta_\phi}$ is strictly positive as an
+information must be. (An earlier version wrote the bracket negated and relied
+on an absolute value.)
 
 **Implementation**:
 $$
 u_\phi = \phi\left[\psi(\phi) - \mu\psi(\mu\phi) - (1-\mu)\psi((1-\mu)\phi) + \mu\log(y) + (1-\mu)\log(1-y)\right]
 $$
 $$
-w_\phi = \phi^2\left[\psi'(\phi) - \mu^2\psi'(\mu\phi) - (1-\mu)^2\psi'((1-\mu)\phi)\right]
+w_\phi = \phi^2\left[\mu^2\psi'(\mu\phi) + (1-\mu)^2\psi'((1-\mu)\phi) - \psi'(\phi)\right]
 $$
 
 ---
@@ -868,10 +914,10 @@ Cataloged here so the magic constants are auditable. All apply per observation, 
 
 | Symbol | Value | Where | Purpose |
 | --- | --- | --- | --- |
-| `MIN_WEIGHT` | $10^{-6}$ | `scoring.rs:28` | Floor on $w_i$ so the weight matrix stays positive definite; near-zero Fisher info would blow up $u/w$. Hits counted in `weight_floor_hits`. |
+| `MIN_WEIGHT` | $10^{-6}$ | `scoring.rs` | Floor on $w_i$ so the weight matrix stays positive definite; near-zero Fisher info would blow up $u/w$. Hits counted in `weight_floor_hits`. |
 | `MAX_STEP` | $10^{6}$ | `scoring.rs` | Clamps $u_i/w_i$ in $\eta$-units — a pure anti-overflow guard for degenerate score/information combinations. It must be **large**: a tight clamp (an earlier value of 20) silently biased the working response, because when many rows clip, the update direction is decided by the *count* of positive vs negative rows rather than the score-weighted aggregate — which can point the Fisher step uphill. Overshoot robustness is provided by the deviance-guarded step-halving instead. Hits counted in `step_cap_hits`. |
-| `MAX_ETA`, `MIN_ETA` | $\pm 30$ | `links.rs:10-12` | Clamps $\eta$ before applying the inverse log/logit link so $\exp(\eta)$ stays finite ($e^{30} \approx 10^{13}$). |
-| `MIN_POSITIVE` | $10^{-10}$ | `links.rs:8`, `diagnostics.rs:15` | Floor on parameters that must be strictly positive ($\sigma$, $\phi$, probabilities), and on variances before the square-root in residual computation. |
+| `MAX_ETA`, `MIN_ETA` | $\pm 30$ | `links.rs` | Clamps $\eta$ before applying the inverse log/logit link so $\exp(\eta)$ stays finite ($e^{30} \approx 10^{13}$). |
+| `MIN_POSITIVE` | $10^{-10}$ | `links.rs`, `diagnostics.rs` | Floor on parameters that must be strictly positive ($\sigma$, $\phi$, probabilities), and on variances before the square-root in residual computation. |
 
 Persistent non-zero `weight_floor_hits` or `step_cap_hits` at convergence signals model misspecification or ill-conditioned data; transient hits in early iterations are normal.
 
@@ -899,7 +945,7 @@ $$
 
 When `prior_weights = None`, the formula reduces to $W = \mathrm{diag}(\mathrm{safe\_w}_i)$, identical to the unweighted case.
 
-Source: `src/fitting/scoring.rs:61-141` (`step`).
+Source: `src/fitting/scoring.rs` (`step`).
 
 ---
 
@@ -916,7 +962,7 @@ $$
 $$
 \tau_j = \min(x) + (j - p)\,\Delta, \qquad \Delta = \frac{\max(x) - \min(x)}{k - p}, \quad j = 0, \ldots, k+p.
 $$
-This places $\tau_p = \min(x)$ and $\tau_k = \max(x)$, with $p$ extra knots extending beyond each end of the data range. Source: `src/splines.rs` (`select_knots`).
+This places $\tau_p = \min(x)$ and $\tau_k = \max(x)$, with $p$ extra knots extending beyond each end of the data range. The anchoring range $(\min x, \max x)$ is resolved **once from the training data** and stored on the term (`PSpline1D::range`, `TensorProduct::range_1/2`), so prediction on a grid, a subset, or out-of-range points is evaluated on the *training* knot grid — re-deriving the range from the prediction data (the previous behavior) silently applied the coefficients to a different basis. Source: `src/splines/pspline.rs` (`select_knots`, `create_basis_matrix_with_range`), `src/fitting/assembler.rs` (`resolve_terms`).
 
 The **Cox–de Boor recursion** evaluates the basis stably (Piegl & Tiller 1997, Algorithm A2.2). Let $i$ be the **knot span** — the index satisfying $\tau_i \le x < \tau_{i+1}$, clamped to $[p, k-1]$. Initialize $N_0 = 1$. Then for $j = 1, \ldots, p$:
 
@@ -935,7 +981,7 @@ $$
 
 At the end of iteration $j$, $N_0, \ldots, N_j$ hold the $j+1$ non-zero degree-$j$ basis values at $x$. **Critical implementation note:** $\mathrm{left}[j]$ and $\mathrm{right}[j]$ must be computed *once, before the inner $r$-loop*, so that the full arrays $\mathrm{left}[1..j]$ and $\mathrm{right}[1..j]$ remain valid when the inner loop reads $\mathrm{left}[j-r]$ and $\mathrm{right}[r+1]$. Computing them inside the $r$-loop overwrites earlier slots and produces wrong interior basis values for degree $\ge 3$ (the endpoint functions are unaffected but the middle ones are wrong; both the correct and the broken form still satisfy partition-of-unity, so property-only tests do not catch the error).
 
-After the full degree-$p$ pass, $N_0, \ldots, N_p$ are the $p+1$ non-zero values at $x$; they map to columns $[i-p, i]$ of the basis matrix. Source: `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `find_knot_span`).
+After the full degree-$p$ pass, $N_0, \ldots, N_p$ are the $p+1$ non-zero values at $x$; they map to columns $[i-p, i]$ of the basis matrix. Source: `src/splines/pspline.rs` (`create_basis_matrix_with_range`, `evaluate_basis_functions_into`, `find_knot_span`).
 
 Properties:
 
@@ -947,7 +993,7 @@ Properties:
 
 Partition-of-unity creates a rank deficiency when the model has both an intercept and a smooth term: the column vector $\mathbf{1}_n$ lies in the column space of $B$, so the design matrix $[\mathbf{1}_n \mid B]$ is column-rank-deficient. To restore identifiability, the smooth is reparameterized through an orthonormal basis of the subspace orthogonal to $\mathbf{1}_k$.
 
-The implementation uses a **Householder reflector** (`src/splines.rs:1-39`). Choose
+The implementation uses a **Householder reflector** (`src/splines/`). Choose
 $$
 v = \mathbf{1}_k + \sqrt{k}\, e_1
 $$
@@ -1005,11 +1051,15 @@ $$
 $$
 $S^{(1)}$ penalizes roughness in the $x_1$ direction at every $x_2$ slice; $S^{(2)}$ vice versa. Choosing two $\lambda$'s lets the GCV/REML routine pick different smoothness for each margin (Wood 2017, §5.6).
 
-The sum-to-zero constraint of §5.1 is applied **per margin** before the Kronecker product when an intercept is present:
+When an intercept is present, **one** sum-to-zero constraint (§5.1) is applied to the **full** tensor basis, transforming both penalties with the same $Z \in \mathbb{R}^{k_1 k_2 \times (k_1 k_2 - 1)}$:
 $$
-B_{1,\mathrm{new}} = B_1 Z_1,\;\; B_{2,\mathrm{new}} = B_2 Z_2,\;\; S^{(1)} = (Z_1^T S_1 Z_1) \otimes I_{k_2 - 1},\;\; S^{(2)} = I_{k_1 - 1} \otimes (Z_2^T S_2 Z_2).
+B_{\mathrm{new}} = B Z, \qquad S^{(j)}_{\mathrm{new}} = Z^T S^{(j)} Z, \quad j = 1, 2.
 $$
-Source: `src/fitting/assembler.rs:44-102`, `src/splines.rs:8-41`.
+This is mgcv's `te()` treatment ($k_1 k_2 - 1$ coefficients) and removes exactly the constant function — the only direction collinear with the intercept, since the row-Kronecker of two partition-of-unity bases is itself partition-of-unity ($B\,\mathbf{1}_{k_1 k_2} = \mathbf{1}_n$).
+
+Centering each **margin** before the Kronecker product ($B_1 Z_1 \otimes_{\text{row}} B_2 Z_2$) is *not* equivalent: the product of two constant-free marginal spaces excludes every function of the form $f(x_1)\cdot 1$ and $1\cdot g(x_2)$ — both main effects — leaving a pure-interaction (`ti()`-style) smooth that cannot represent additive structure. An earlier implementation made exactly this error. Consequence of the correct construction: the penalty null space after centering has dimension $d_1 d_2 - 1$ (e.g. $3$ for order-2 margins, matching mgcv), and a formula combining `te(x1, x2)` with a separate main effect of $x_1$ on the same parameter is rank-deficient — use a pure-interaction decomposition for that, as in mgcv.
+
+Source: `src/fitting/assembler.rs` (`assemble_smooth`), `src/splines/reparam.rs`.
 
 ### Random Effect Penalty
 
@@ -1026,7 +1076,13 @@ is equivalent to the Bayesian random-intercept prior $\alpha_g \sim N(0, 1/\lamb
 $$
 Z_{\mathrm{new}} = Z\,Z_{\mathrm{c}} \in \mathbb{R}^{n \times (G-1)}, \qquad Z_{\mathrm{c}}^T I_G Z_{\mathrm{c}} = I_{G-1}.
 $$
-Source: `src/fitting/assembler.rs:103-126`.
+
+The group-to-column map is resolved **once at fit time** (levels sorted for
+determinism) and stored on the term, so prediction maps each group to the
+coefficient it was fitted with regardless of the row order or group subset of
+the new data; an unseen level at predict time is an error (mgcv factor
+semantics). Source: `src/fitting/assembler.rs` (`resolve_terms`,
+`assemble_smooth`).
 
 ---
 
@@ -1290,7 +1346,7 @@ This avoids forming the full $p \times p$ products when $S_{\text{block}} \ll p$
 
 ### 8.2 REML / Laplace-Approximate Marginal Likelihood
 
-GCV is one option for picking the smoothing parameters; the default `criterion` in `FitConfig` is `Reml` (see `src/fitting/mod.rs:43-54`). REML in this setting is the Laplace-approximate marginal likelihood (LAML) of Wood (2011), evaluated at the working PWLS step. The selector is exposed as a three-variant enum:
+GCV is one option for picking the smoothing parameters; the default `criterion` in `FitConfig` is `Reml` (see `src/fitting/mod.rs`). REML in this setting is the Laplace-approximate marginal likelihood (LAML) of Wood (2011), evaluated at the working PWLS step. The selector is exposed as a three-variant enum:
 
 ```rust
 pub enum SmoothingCriterion { Gcv, Reml /* default */, FellnerSchall }
@@ -1310,7 +1366,7 @@ where $|\,\cdot\,|_+$ denotes the **pseudo-determinant** — the product of stri
 
 $\log|X^T W X + S_\lambda|$ is computed via `log_det_robust` (see §8.1): Cholesky on the fast path; symmetric eigensolver fallback for near-PD matrices with tiny negative floating-point pivots (common for evenly-spaced B-spline designs), clamping eigenvalues to $10^{-300}$ before the log so the REML optimizer naturally avoids degenerate $\lambda$ regions instead of crashing.
 
-Source: `src/fitting/solver.rs:170-250` (`RemlCost`); `src/linalg.rs` (`log_det_robust`).
+Source: `src/fitting/solver.rs` (`RemlCost`); `src/linalg.rs` (`log_det_robust`).
 
 #### Pseudo-determinant via grouped block eigendecomposition
 
@@ -1342,13 +1398,27 @@ Source: `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`)
 From Wood (2011, §3) the gradient with respect to $\log \lambda_j$ is
 $$
 \frac{\partial (-V_r)}{\partial \log \lambda_j}
-= \tfrac{1}{2}\,\lambda_j\,\mathrm{tr}\!\bigl(V\, S_j\bigr)
+= \tfrac{1}{2}\,\lambda_j\,\hat\beta^T S_j\, \hat\beta
 \;-\;\tfrac{1}{2}\,\lambda_j\,\mathrm{tr}\!\bigl(S_\lambda^+\, S_j\bigr)
-\;-\;\tfrac{1}{2}\,\lambda_j\,\hat\beta^T S_j\, \hat\beta / \hat\sigma^2
+\;+\;\tfrac{1}{2}\,\lambda_j\,\mathrm{tr}\!\bigl(V\, S_j\bigr)
 $$
-with $V = (X^T W X + S_\lambda)^{-1}$. The implementation evaluates this analytically and feeds it to L-BFGS; final $\log\lambda$ values are clamped to $[-\mathtt{LOG\_LAMBDA\_CLAMP}, \mathtt{LOG\_LAMBDA\_CLAMP}] = [-30, 30]$ to keep $\lambda \in [e^{-30}, e^{30}]$.
+with $V = (X^T W X + S_\lambda)^{-1}$ (working scale $\varphi = 1$; the noise
+scale enters through $W$). The implementation evaluates this analytically,
+validates it against central finite differences in `reml_tests`, and feeds it
+to L-BFGS; final $\log\lambda$ values are clamped to
+$[-\mathtt{LOG\_LAMBDA\_CLAMP}, \mathtt{LOG\_LAMBDA\_CLAMP}] = [-30, 30]$.
 
-Source: `src/fitting/solver.rs:214-303`.
+**Fellner–Schall polish.** L-BFGS with a Moré–Thuente line search can stall at
+a warm-start-dependent, non-stationary point when the LAML surface has flat
+ridges (several smooths collapsing onto their null space with $\lambda$ at the
+clamp ceiling). The resulting per-cycle $\lambda$ jitter prevents the outer RS
+loop from ever seeing a stationary $\eta$. `run_optimization_reml` therefore
+polishes the L-BFGS output with the deterministic Fellner–Schall fixed point
+(§8.3) on the same target and keeps whichever $\lambda$ scores better, so the
+polish can never worsen the fit; a linear-algebra failure inside the polish
+falls back to the L-BFGS result.
+
+Source: `src/fitting/solver.rs`.
 
 ### 8.3 Fellner–Schall Multiplicative Fixed Point
 
@@ -1378,17 +1448,21 @@ The tolerance is set at $10^{-4}$ (rather than the looser $10^{-3}$) because the
 - **REML** (default): preferred for stability; the Laplace-approximate marginal likelihood is asymptotically equivalent to true REML for the working PWLS model, and tends to undersmooth less than GCV at moderate sample sizes.
 - **FellnerSchall**: same target as REML but with a deterministic multiplicative update — no L-BFGS, no line search. Fast and well-behaved for well-conditioned problems; can stall if the numerator drifts to its floor.
 
-### 8.4 Collapse-Guarded Restart
+### 8.4 Basin Probes (Collapse and Corner Guards)
 
-Across all three criteria the $\lambda$-objective ($-V_r$ or the GCV score) for a single P-spline is **unimodal** in $\log\lambda$, with a single interior optimum, but it flattens into a near-horizontal **shelf** at large $\lambda$ where the smooth has been driven entirely onto its penalty null space (effective degrees of freedom $\to$ the null dimension; for an order-2 penalty after centering, a straight line). On that shelf the gradient $\approx 0$ and, for Fellner–Schall, $\hat\beta^T S_j \hat\beta \to 0$ so the multiplicative ratio explodes upward — both optimizers can become **stuck** there. Because the floating-point reduction order of the dense linear algebra is not deterministic under OpenBLAS, a borderline step can occasionally tip onto the shelf, producing a rare, nondeterministic **collapse** of an otherwise-recoverable smooth.
+For a **single** P-spline, the $\lambda$-objective ($-V_r$ or the GCV score) is unimodal in $\log\lambda$ with one interior optimum, but it flattens into a near-horizontal **shelf** at large $\lambda$ where the smooth has been driven entirely onto its penalty null space (EDF $\to$ null dimension; for an order-2 penalty after centering, a straight line). On the shelf the gradient $\approx 0$ and, for Fellner–Schall, $\hat\beta^T S_j \hat\beta \to 0$ so the multiplicative ratio explodes upward — either optimizer can become stuck there.
 
-The selector guards against this in `src/fitting/scoring.rs::step`. After the warm-started optimization and PWLS solve, any smooth term whose EDF has fallen to within `EDF_COLLAPSE_SLACK` $=0.5$ of its null dimension is treated as *collapsed*; the optimizer is then re-run once from a deliberately small seed,
-$$
-\lambda_{\text{restart}} \;=\; \exp\!\bigl(\log\lambda_{\text{cold}} - \mathtt{RESTART\_LOG\_OFFSET}\bigr), \qquad \mathtt{RESTART\_LOG\_OFFSET}=8,
-$$
-where $\log\lambda_{\text{cold}}$ is the scale-aware trace-ratio cold start (`initial_log_lambda`). This seed sits well below both the interior optimum and the shelf, so a gradient/fixed-point step descends into the unimodal interior optimum. The incumbent and the restart are then compared by their **actual objective value** (`lambda_cost`), and the lower one is kept. Comparing objectives is what makes the guard safe in both directions: a genuinely null-space-optimal fit (e.g. a strictly linear truth under an order-2 penalty) has the *better* marginal likelihood at the collapsed $\lambda$, so its collapse is **preserved**; only a spuriously collapsed, signal-bearing smooth — where the interior fit has the better objective — is repaired. The guard fires only when a collapse is detected, so well-behaved fits are untouched. Source: `src/fitting/scoring.rs` (`step`), `src/fitting/solver.rs` (`restart_seed`, `lambda_cost`, `RESTART_LOG_OFFSET`).
+For **multi-penalty** terms (the anisotropic tensor penalty $\lambda_1 S_1\!\otimes\!I + \lambda_2 I\!\otimes\!S_2$) the surface is genuinely **multimodal**: spurious stationary points appear as *corners* — one margin's $\lambda$ pinned at the clamp ceiling or the $\lambda$ floor while the true optimum has it interior — and they come in shapes no cheap detector reliably catches (observed on real data: a corner with $\mathrm{EDF} = 16.0$ scoring 5 LAML units worse than the interior optimum at $\mathrm{EDF} = 20.6$, which matches mgcv's selection). Gradient descent from any single seed can be captured by a basin boundary.
 
-**Determinism and the root cause.** The *trigger* for a spurious collapse is the nondeterministic reduction order of multi-threaded OpenBLAS: the $\lambda$-objective itself is unimodal, so a deterministic fit has no second basin to fall into. This repo therefore pins BLAS to a single thread for all of its own `cargo` runs (`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1` in `.cargo/config.toml`), which makes the dense linear algebra reproducible. Under single-thread BLAS the control cases (`mu_smooth_recovers_nonlinear_mean_control`, `sigma_smooth_recovers_nonlinear_scale`) recover the interior optimum on **every** repeat (collapse rate $0/20$, $\mathrm{corr}\approx 0.9999$ with zero spread — see `tests/lambda_bistability.rs`), so the smooth-recovery tests are gated deterministically in CI rather than left flaky. The collapse-guarded restart above is retained as **defense-in-depth**: it costs nothing on well-behaved fits and still protects any future multi-threaded or otherwise nondeterministic execution path where the tipping could reappear.
+The selector in `src/fitting/scoring.rs::step` therefore probes alternative basins and keeps the $\lambda$ with the best objective value (`lambda_cost`):
+
+1. **Trigger.** Single-penalty terms probe when a smooth's EDF has fallen to within `EDF_COLLAPSE_SLACK` $= 0.5$ of its null dimension, or when any $\lambda$ sits at the $\log\lambda$ clamp bounds. Multi-penalty terms probe **unconditionally on every cycle** — their multimodality is intrinsic, and a "probe only when suspicious" gate was tried and lost real rescues (the early probes run against unconverged working weights; a skip-once-confirmed rule then never re-probes at the converged state where the rescue is decidable).
+2. **Seeds.** (a) A low-$\lambda$ restart seed $\exp(\log\lambda_{\text{cold}} - \mathtt{RESTART\_LOG\_OFFSET})$ with offset $8$, below both the interior optimum and the shelf; (b) a fresh cold start from the trace-ratio heuristic; (c) per-coordinate variants of the incumbent with each bound-pinned $\lambda_j$ individually dropped to the restart level — the targeted escape for tensor corners; (d) for terms with $\leq 2$ penalties, L-BFGS started from the best cell of a coarse $7^k$ grid of $\log\lambda$ offsets $\{-16,-12,\dots,+8\}$ around the cold start. The grid evaluation is derivative-free, so it cannot be captured by a basin boundary.
+3. **Acceptance.** Every candidate (and the incumbent) is scored by the actual criterion value; the minimum wins. This makes the guard safe in both directions: a genuinely null-space-optimal fit (a strictly linear truth under an order-2 penalty) has the *better* marginal likelihood at the collapsed $\lambda$ and is preserved; only a spuriously collapsed or corner-trapped fit — where another basin scores better — is repaired.
+
+Source: `src/fitting/scoring.rs` (`step`), `src/fitting/solver.rs` (`restart_seed`, `lambda_cost`, `initial_log_lambda`, `RESTART_LOG_OFFSET`).
+
+**Determinism.** One historical *trigger* for spurious single-smooth collapse is the nondeterministic reduction order of multi-threaded OpenBLAS. This repo pins BLAS to a single thread for its own `cargo` runs (`OPENBLAS_NUM_THREADS=1`, `OMP_NUM_THREADS=1` in `.cargo/config.toml`), making the dense linear algebra reproducible; under single-thread BLAS the recovery control cases collapse in $0/20$ repeats (`tests/lambda_bistability.rs`). The basin probes above are retained as defense-in-depth for multi-threaded execution paths, and are the *primary* (not defensive) mechanism for multi-penalty terms.
 
 ---
 
@@ -1454,14 +1528,15 @@ The RS algorithm requires starting values for all parameters. Default initializa
    - Gaussian: $\bar{y}$ (sample mean)
    - Student-t: $\mathrm{median}(y)$ — a robust location seed. The sample mean is pulled by the heavy tails, biasing the first robustifying weights $w = (\nu+1)/(\nu+z^2)$.
    - Poisson/Gamma/NB: $\bar{y}$ (then apply log link)
-   - Binomial: $\bar{y}/n$ (sample proportion)
+   - Binomial: $\sum_i y_i / \sum_i n_i$ — pooled across observations so per-row trial counts do not bias the seed — clamped to $(0.1, 0.9)$
    - Beta: $\bar{y}$ (sample mean, clamped to $(0.1, 0.9)$)
 
 2. **$\sigma$**:
    - Gaussian: $s_y$ (sample std dev)
    - Student-t: $1.4826 \cdot \mathrm{MAD}(y)$ — the MAD-to-$\sigma$ consistency factor for a normal core. A raw sample SD overestimates the scale under heavy tails. Floored at $10^{-4}$ (falling back to $1.0$).
    - Gamma: $\hat\sigma_0 = s_y / \bar{y}$ (sample CV), clamped to $[0.05, 10.0]$. $\sigma$ parameterizes the coefficient of variation, not the raw SD; a raw-SD start makes REML over-penalize the $\sigma$ smooth on the first RS iteration and warm-start into a full-collapse trap.
-   - NB/Beta: 1.0
+   - NB: the method-of-moments overdispersion estimate $(s_y^2 - \bar{y})/\bar{y}^2$, clamped to $[0.1, 10.0]$ (falling back to $0.5$ when undefined, e.g. $n = 1$). $\sigma$ is the overdispersion coefficient of $\mathrm{Var} = \mu + \sigma\mu^2$, so a raw-SD start is on the wrong scale entirely — often $10$–$30\times$ too large for count data.
+   - Beta: 1.0
 
 3. **$\nu$** (Student-t): $5.0$ — a fixed moderate seed, deliberately **not** a sample-kurtosis estimate. For a regression model the *marginal* kurtosis of $y$ reflects the spread of the mean structure rather than the noise tails, so inverting $\kappa = 6/(\nu-4)$ biases $\nu$; in the multi-smooth weighted case this biased seed tipped the optimizer into a degenerate over-smoothed basin. $5$ sits well clear of the $\nu > 2$ finite-variance boundary. Source: `StudentT::initial_value` in `src/distributions/student_t.rs`.
 
@@ -1603,10 +1678,10 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | --- | --- |
 | Backfitting outer loop with per-parameter convergence (§4.1) | `src/fitting/mod.rs` (`fit_gamlss`) |
 | P-IRLS inner step (§4.2) | `src/fitting/scoring.rs` (`step`) |
-| `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs:28,32` |
+| `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs,32` |
 | Prior / observation weights (§4.5) | `src/fitting/scoring.rs` (`step`) |
-| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs:8-12` |
-| `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
+| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs` |
+| `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs` |
 | Gaussian derivatives (§1.1) | `src/distributions/gaussian.rs` |
 | Student-t derivatives (§1.2) | `src/distributions/student_t.rs` |
 | Poisson derivatives (§1.3) | `src/distributions/poisson.rs` |
@@ -1619,9 +1694,9 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Distribution trait (§1) | `src/distributions/mod.rs` |
 | CDF / PDF / quantile / `is_discrete` trait methods (§1.10) | `src/distributions/mod.rs` + per-family files |
 | `discrete_quantile` bracket+bisection (§1.10) | `src/distributions/mod.rs` (`discrete_quantile`) |
-| B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
-| Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs` (`sum_to_zero_basis`) |
-| Difference penalty matrix (§5) | `src/splines.rs` (`create_penalty_matrix`) |
+| B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines/pspline.rs` (`create_basis_matrix_with_range`, `evaluate_basis_functions_into`, `select_knots`) |
+| Sum-to-zero Householder $Z$ (§5.1) | `src/splines/reparam.rs` (`sum_to_zero_basis`) |
+| Difference penalty matrix (§5) | `src/splines/` (`create_penalty_matrix`) |
 | Tensor product assembly (§5) | `src/fitting/assembler.rs` |
 | Random effect assembly (§5) | `src/fitting/assembler.rs` |
 | Block-sparse penalty (§5.1) | `src/fitting/assembler.rs`, `src/types/newtypes.rs` |
@@ -1637,7 +1712,7 @@ A reverse index from mathematical concept to the canonical implementation, for c
 | Penalty grouped pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`) |
 | Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs` (`run_optimization_fellner_schall`) |
 | `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs` |
-| Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs:31-32` |
+| Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs` |
 | Diagnostics (AIC/BIC/EDF/residuals, §11) | `src/fitting/diagnostics.rs` |
 
 ---

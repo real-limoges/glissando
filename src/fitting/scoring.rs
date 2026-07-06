@@ -28,23 +28,22 @@ use std::collections::HashMap;
 /// Lower bound for IRLS working weights, preventing division by near-zero.
 const MIN_WEIGHT: f64 = 1e-6;
 
-/// Cap on the per-element Fisher-scoring step `u/w` (in η units). This is a pure
-/// anti-overflow guard for degenerate score/information combinations — NOT a
-/// robustness device. It was previously 20.0, which silently biased the working
-/// response: when many rows clip, the update direction is decided by the *count*
-/// of positive vs negative rows instead of the score-weighted aggregate, which
-/// can point the Fisher step uphill (observed as ν → ∞ runaway on Student-t).
-/// Robustness against overshoot is the job of the deviance-guarded step-halving
-/// (FIT-1); neither mgcv nor gamlss clips the working response at all.
+/// Cap on the per-element Fisher-scoring step `u/w` (in η units): a pure
+/// anti-overflow guard for degenerate score/information combinations, NOT a
+/// robustness device — overshoot control is the job of the deviance-guarded
+/// step-halving (FIT-1), and neither mgcv nor gamlss clips the working
+/// response at all.
 ///
-/// The value balances two failure modes: too TIGHT inverts step directions (a
-/// cap of 1e4 was tried and empirically re-broke Student-t ν recovery — early
-/// transient steps legitimately exceed it); too LOOSE lets a degenerate row
-/// (weight at the MIN_WEIGHT floor with an O(1) score, e.g. a quasi-separated
-/// binomial observation) inject a large pseudo-residual into the working
-/// response, distorting λ selection — a known, accepted exposure at 1e6 whose
-/// principled fix is evaluating the REML criterion on the true likelihood
-/// rather than the working (z, w) model.
+/// The value must sit between two failure modes. Too tight inverts step
+/// directions: when many rows clip, the update direction is decided by the
+/// *count* of positive vs negative rows instead of the score-weighted
+/// aggregate, which can point the Fisher step uphill (caps ≤ 1e4 break
+/// Student-t ν recovery — legitimate transient steps exceed them). Too loose
+/// lets a degenerate row (weight at the MIN_WEIGHT floor with an O(1) score,
+/// e.g. a quasi-separated binomial observation) inject a large pseudo-residual
+/// that distorts λ selection — an accepted exposure at 1e6 whose principled
+/// fix is a REML criterion on the true likelihood rather than the working
+/// (z, w) model.
 const MAX_STEP: f64 = 1e6;
 
 /// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
@@ -163,12 +162,10 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
             });
         }
         // At the backtracking floor the direction is uphill at every step size:
-        // *reject* the block update (α = 0) instead of forcing a bad micro-step.
-        // Accepting used to let a wrong-direction proposal creep the parameter a
-        // little further uphill every cycle — an unbounded slow divergence (the
-        // ν → ∞ runaway). Rejection keeps the previous state, preserving the
-        // monotone-descent guarantee exactly; if the block is genuinely at its
-        // optimum the full step is tiny and this branch is never reached.
+        // *reject* the block update (α = 0). Forcing a micro-step instead would
+        // creep the parameter uphill every cycle — an unbounded slow divergence.
+        // Rejection preserves the monotone-descent guarantee exactly; a block at
+        // its optimum has a tiny full step and never reaches this branch.
         if alpha <= min_alpha {
             return Ok(Halved {
                 beta: model.beta.clone(),
@@ -342,13 +339,12 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // null-space-optimal fit (a linear truth under an order-2 penalty) is
         // preserved — its collapse has the better marginal likelihood — while a
         // spuriously collapsed signal-bearing fit is repaired.
-        // The probe re-runs every cycle while the state stays suspicious. That
-        // costs two extra λ optimizations per cycle for a legitimately collapsed
-        // smooth, but gating it on "newly suspicious" was tried and lost real
-        // rescues: λ reaches the bound on cycle 1–2 while the working (z, w)
-        // still reflect a poor scale estimate, the early probe finds nothing
-        // better, and a skip-once-confirmed rule then never re-probes at the
-        // converged state where the interior basin actually wins.
+        // The probe re-runs every cycle while the state stays suspicious, at the
+        // cost of extra λ optimizations for a legitimately collapsed smooth.
+        // Do not gate it on "newly suspicious": λ reaches a bound on cycle 1–2
+        // while the working (z, w) still reflect a poor scale estimate, the
+        // early probe finds nothing better, and a skip-once-confirmed rule then
+        // never re-probes at the converged state where the rescue is decidable.
         //
         // Multi-penalty terms (anisotropic tensors) probe UNCONDITIONALLY: their
         // LAML surface is intrinsically multimodal and spurious stationary

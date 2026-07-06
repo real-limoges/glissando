@@ -2,29 +2,23 @@
 
 use ndarray::{Array1, Array2};
 
-/// Create a B-spline basis matrix for the given data.
-///
-/// Constructs an (n_obs × n_splines) matrix where each row contains the
-/// B-spline basis function values evaluated at that observation's x value.
-/// Uses clamped knots with interior knots placed at data quantiles.
-///
-/// # Arguments
-/// * `x` - Covariate values (n_obs length)
-/// * `n_splines` - Number of basis functions (typically 10-20)
-/// * `degree` - Polynomial degree (typically 3 for cubic splines)
-#[cfg_attr(not(test), allow(dead_code))] // convenience wrapper; production paths pass an explicit range
+/// Test-only wrapper deriving the knot range from `x` itself. Production paths
+/// must pass the range resolved at fit time (`create_basis_matrix_with_range`),
+/// so this is compiled out of non-test builds to make that unrepresentable.
+#[cfg(test)]
 pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     create_basis_matrix_with_range(x, n_splines, degree, None)
 }
 
-/// Like [`create_basis_matrix`], but anchoring the uniform knot grid to an
-/// explicit `(min, max)` range instead of the range of `x` itself.
+/// B-spline basis matrix: `(n_obs × n_splines)`, row `i` holding the basis
+/// values at `x[i]` on the uniform knot grid anchored to `range`.
 ///
 /// The fitter resolves each P-spline's training range once and stores it on the
 /// term; prediction passes it back here so new data — a grid, a subset, a
-/// single point — is evaluated on the *training* basis. Without this, the knots
-/// silently followed the prediction data's range and the coefficients were
-/// applied to a different basis.
+/// single point — is evaluated on the *training* basis. `None` derives the
+/// range from `x` (fit-time resolution and tests only). Without the stored
+/// range, the knots silently followed the prediction data's range and the
+/// coefficients were applied to a different basis.
 pub(crate) fn create_basis_matrix_with_range(
     x: &Array1<f64>,
     n_splines: usize,
@@ -68,21 +62,6 @@ pub(crate) fn create_basis_matrix_with_range(
     basis_matrix
 }
 
-/// Equally-spaced knots extended `degree` beyond the data range (the Eilers–Marx
-/// P-spline layout).
-///
-/// A difference penalty (`create_penalty_matrix`) only approximates a roughness
-/// penalty on the fitted function when the knots are **equally spaced** — so the
-/// P-spline penalty and the basis must share that assumption. We place
-/// `safe_n_splines + degree + 1` uniform knots with spacing
-/// `dx = (max − min) / (safe_n_splines − degree)` such that `t[degree] = min` and
-/// `t[safe_n_splines] = max`, leaving `degree` knots beyond each end. Over the
-/// data range the B-spline basis is then full-support (partition-of-unity holds),
-/// which keeps the sum-to-zero reparameterization valid. This matches mgcv's
-/// `bs="ps"` construction.
-///
-/// Knots depend only on the data range (`min`, `max`) and `(n_splines, degree)`,
-/// so prediction rebuilds an identical basis deterministically.
 /// Finite `(min, max)` of a column, ignoring NaN/±∞. Returns
 /// `(INFINITY, NEG_INFINITY)` when no finite values exist — callers that
 /// persist the range must reject that case (see `resolve_terms`).
@@ -99,6 +78,18 @@ pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
     )
 }
 
+/// Equally-spaced knots extended `degree` beyond the anchoring range (the
+/// Eilers–Marx P-spline layout).
+///
+/// A difference penalty (`create_penalty_matrix`) only approximates a roughness
+/// penalty on the fitted function when the knots are **equally spaced** — so the
+/// P-spline penalty and the basis must share that assumption. We place
+/// `safe_n_splines + degree + 1` uniform knots with spacing
+/// `dx = (max − min) / (safe_n_splines − degree)` such that `t[degree] = min` and
+/// `t[safe_n_splines] = max`, leaving `degree` knots beyond each end. Over the
+/// anchoring range the B-spline basis is then full-support (partition-of-unity
+/// holds), which keeps the sum-to-zero reparameterization valid. This matches
+/// mgcv's `bs="ps"` construction.
 fn select_knots(
     x: &Array1<f64>,
     n_splines: usize,
