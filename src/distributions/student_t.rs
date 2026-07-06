@@ -55,7 +55,7 @@ impl Distribution for StudentT {
     /// the SD overestimates the scale `σ`. Instead:
     /// - `μ` = median(y),
     /// - `σ` = 1.4826·MAD(y) (the MAD-to-σ consistency factor for a normal core),
-    /// - `ν` = [`NU_INIT`] (a fixed moderate seed; see its doc for why a kurtosis
+    /// - `ν` = `NU_INIT` = 5 (a fixed moderate seed; see its doc for why a kurtosis
     ///   estimate is avoided).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
@@ -161,10 +161,10 @@ impl Distribution for StudentT {
         // Expected Fisher information for ν (Lange–Little–Taylor 1989; identical to
         // gamlss TF's d2ldv2):
         //   I_ν = ¼·[ψ'(ν/2) − ψ'((ν+1)/2) − 2(ν+5)/(ν(ν+1)(ν+3))].
-        // Verified against Monte-Carlo E[(ν·dl/dν)²]. The previous expression used
-        // +2(ν+3)/(ν(ν+1)) for the rational term, inflating the weight ~50× at ν=5
-        // (and worse for larger ν) — which froze ν near its seed and over-penalized
-        // everything downstream of it.
+        // Verified against Monte-Carlo E[(ν·dl/dν)²]. The rational term is a small
+        // correction to a near-cancellation: I_ν decays like O(1/ν³), so a sign or
+        // degree error there inflates the weight by orders of magnitude and
+        // effectively freezes ν at its seed.
         let t1 = trigamma_batch(&nu_half);
         let t2 = trigamma_batch(&nu_plus_1_half);
         let t3: Array1<f64> =

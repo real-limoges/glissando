@@ -34,7 +34,7 @@ impl Distribution for Gamma {
         }
     }
 
-    /// Gamma σ is the coefficient of variation CV = SD(Y)/E[Y], not the raw SD.
+    /// Gamma σ is the coefficient of variation `CV = SD(Y)/E(Y)`, not the raw SD.
     /// The default `initial_value` returns `y.std()`, which is wildly wrong for
     /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
     /// A bad σ_init causes REML to over-penalize the σ smooth on the first RS
