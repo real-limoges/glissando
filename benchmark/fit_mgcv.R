@@ -366,7 +366,9 @@ fit_gaussian_heteroskedastic <- function(df, output) {
     coefficients = list(mu = unname(coef(m))[1:2]),
     fitted_mu    = as.list(unname(mu_hat)),
     fitted_sigma = as.list(unname(sigma_hat)),
-    edf          = list(),   # not gated: gaulss σ-link differs from glissando's
+    # Coefficients 1:2 belong to the μ predictor (y ~ x), 3:4 to the σ
+    # predictor (~ x); both are unpenalized so each EDF is exactly 2.
+    edf          = list(mu = sum(m$edf[1:2]), sigma = sum(m$edf[3:4])),
     log_likelihood = as.numeric(stats::logLik(m)),
     aic          = AIC(m),
     sp           = sp_list(m),

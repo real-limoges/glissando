@@ -28,7 +28,7 @@ const REML_RANK_TOL_EPS: f64 = 1e-8;
 /// Clamp on |log λ| applied to REML's optimized output before exponentiation.
 /// Wide enough that no real solution is constrained; narrow enough to keep
 /// L-BFGS from wandering into numerically pathological regions.
-const LOG_LAMBDA_CLAMP: f64 = 30.0;
+pub(super) const LOG_LAMBDA_CLAMP: f64 = 30.0;
 
 /// Decades (in natural-log λ) below the cold-start heuristic to seed the
 /// collapse-guarded restart. The cold start sits *past* the interior LAML
@@ -1158,5 +1158,56 @@ mod reml_tests {
                 "REML's global optimum IS near-collapse — NOT an optimizer bug"
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod diag_tensor_tests {
+    use super::*;
+    use crate::fitting::assembler::{assemble_model_matrices, resolve_terms};
+    use crate::terms::{Smooth, Term};
+    use crate::types::DataSet;
+
+    #[test]
+    #[ignore = "TEMP diagnostic"]
+    fn diag_tensor13_lambda_surface() {
+        let txt = std::fs::read_to_string("/tmp/claude-0/-home-user-glissando/f7210943-0cc0-539b-9bee-32d76d5afd3f/scratchpad/tensor13.csv").unwrap();
+        let (mut yv, mut x1, mut x2) = (vec![], vec![], vec![]);
+        for (i, line) in txt.lines().enumerate() {
+            if i == 0 { continue; }
+            let f: Vec<f64> = line.split(',').map(|v| v.parse().unwrap()).collect();
+            yv.push(f[0]); x1.push(f[1]); x2.push(f[2]);
+        }
+        let n = yv.len();
+        let mut data = DataSet::new();
+        data.insert_column("x1", Array1::from_vec(x1));
+        data.insert_column("x2", Array1::from_vec(x2));
+        let terms = resolve_terms(&[Term::Smooth(Smooth::TensorProduct {
+            col_name_1: "x1".into(), n_splines_1: 8, penalty_order_1: 2,
+            col_name_2: "x2".into(), n_splines_2: 8, penalty_order_2: 2, degree: 3,
+            range_1: None, range_2: None })], &data).unwrap();
+        let (xm, ps, _, _) = assemble_model_matrices(&data, n, &terms).unwrap();
+        let z = Array1::from_vec(yv);
+        let sigma_hat = 0.2905_f64; // from the converged fit
+        let w = Array1::from_elem(n, 1.0 / (sigma_hat * sigma_hat));
+
+        let cost_at = |l1: f64, l2: f64| -> f64 {
+            lambda_cost(SmoothingCriterion::Reml, &xm, &z, &w, &ps, &arr1(&[l1, l2])).unwrap()
+        };
+        eprintln!("corner (1e-10, 1.07e13): {:.4}", cost_at(1e-10, 1.068e13));
+        for &l2 in &[1.0, 10.0, 100.0, 300.0, 1000.0] {
+            eprintln!("(1e-10, {l2:>7.0}): {:.4}", cost_at(1e-10, l2));
+        }
+        // What do the optimizers do from cold start / restart seed?
+        let cold = initial_log_lambda(&xm, &ps);
+        eprintln!("cold-start log lambdas: {:?}", cold.to_vec());
+        let from_cold = run_optimization_reml(&xm, &z, &w, &ps, None).unwrap();
+        eprintln!("L-BFGS from cold: {:?} cost {:.4}", from_cold.to_vec(), cost_at(from_cold[0], from_cold[1]));
+        let seed = restart_seed(&xm, &ps);
+        eprintln!("restart seed: {:?}", seed.to_vec());
+        let from_restart = run_optimization_reml(&xm, &z, &w, &ps, Some(&seed)).unwrap();
+        eprintln!("L-BFGS from restart: {:?} cost {:.4}", from_restart.to_vec(), cost_at(from_restart[0], from_restart[1]));
+        let fs = run_optimization_fellner_schall(&xm, &z, &w, &ps, Some(&seed)).unwrap();
+        eprintln!("F-S from restart: {:?} cost {:.4}", fs.to_vec(), cost_at(fs[0], fs[1]));
     }
 }
