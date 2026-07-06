@@ -75,7 +75,8 @@ fn make_formula() -> Formula {
             col_name: col.to_string(),
             n_splines: 20,
             degree: 3,
-            penalty_order: 2, range: None,
+            penalty_order: 2,
+            range: None,
         })
     };
     Formula::new().with_terms(

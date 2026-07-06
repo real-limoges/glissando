@@ -89,8 +89,8 @@ impl Distribution for Gamma {
         // expression is strictly positive; the MIN_WEIGHT floor guards round-off only.
         let psi_prime_alpha = trigamma_batch(&alpha);
         let sigma_sq_sq = sigma_sq.mapv(|s2| s2 * s2);
-        let w_sigma = ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 4.0 / &sigma_sq)
-            .mapv(|v| v.max(MIN_WEIGHT));
+        let w_sigma =
+            ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 4.0 / &sigma_sq).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),

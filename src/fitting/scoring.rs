@@ -132,11 +132,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     let (pen_cross, pen_dir) = {
         let mut cross = 0.0_f64; // dᵀ·S_λ·β₀
         let mut quad = 0.0_f64; // dᵀ·S_λ·d
-        for (s_j, &lam) in model
-            .penalty_matrices
-            .iter()
-            .zip(proposed.lambdas.iter())
-        {
+        for (s_j, &lam) in model.penalty_matrices.iter().zip(proposed.lambdas.iter()) {
             let s_d = s_j.0.dot(&dir);
             cross += lam * s_d.dot(&model.beta.0);
             quad += lam * s_d.dot(&dir);
@@ -435,11 +431,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
                 }
             }
 
-            if winner
-                .iter()
-                .zip(best_lambdas.iter())
-                .any(|(a, b)| a != b)
-            {
+            if winner.iter().zip(best_lambdas.iter()).any(|(a, b)| a != b) {
                 let (rb, rc, re, rte) = fit_and_terms(&winner)?;
                 (winner, rb, rc, re, rte)
             } else {

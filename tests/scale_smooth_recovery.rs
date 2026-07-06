@@ -78,7 +78,8 @@ fn sigma_smooth_recovers_nonlinear_scale() {
                 col_name: "x".to_string(),
                 n_splines: 15,
                 degree: 3,
-                penalty_order: 2, range: None,
+                penalty_order: 2,
+                range: None,
             }),
         ],
     );
@@ -147,7 +148,8 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
                 col_name: "x".to_string(),
                 n_splines: 15,
                 degree: 3,
-                penalty_order: 2, range: None,
+                penalty_order: 2,
+                range: None,
             }),
         ],
     );
@@ -206,7 +208,8 @@ fn recovered_curve_does_not_warn() {
                 col_name: "x".to_string(),
                 n_splines: 15,
                 degree: 3,
-                penalty_order: 2, range: None,
+                penalty_order: 2,
+                range: None,
             }),
         ],
     );
@@ -249,7 +252,8 @@ fn mu_smooth_recovers_nonlinear_mean_control() {
                 col_name: "x".to_string(),
                 n_splines: 15,
                 degree: 3,
-                penalty_order: 2, range: None,
+                penalty_order: 2,
+                range: None,
             }),
         ],
     );

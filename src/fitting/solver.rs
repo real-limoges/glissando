@@ -386,12 +386,16 @@ pub(crate) fn run_optimization_reml(
     // Best-effort: a linear-algebra failure inside the polish (e.g. an
     // eigensolver hiccup at a degenerate λ) falls back to the L-BFGS result
     // rather than failing the whole fit.
-    let polished =
-        match run_optimization_fellner_schall(x_model, z, w, penalty_matrices, Some(&lbfgs_lambdas))
-        {
-            Ok(p) => p,
-            Err(_) => return Ok(lbfgs_lambdas),
-        };
+    let polished = match run_optimization_fellner_schall(
+        x_model,
+        z,
+        w,
+        penalty_matrices,
+        Some(&lbfgs_lambdas),
+    ) {
+        Ok(p) => p,
+        Err(_) => return Ok(lbfgs_lambdas),
+    };
     let lbfgs_cost = lambda_cost(
         SmoothingCriterion::Reml,
         x_model,
@@ -1160,4 +1164,3 @@ mod reml_tests {
         );
     }
 }
-

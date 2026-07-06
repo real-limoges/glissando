@@ -19,7 +19,7 @@ edf:
   sigma: "1.0000e0"
 lambdas:
   mu:
-    - "1.4662e7"
+    - "1.5e7"
   sigma: []
 log_likelihood: "-1.5852e2"
 aic: "3.2304e2"
