@@ -154,7 +154,7 @@ fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
             n_splines: *n_splines,
             degree: *degree,
             penalty_order: *penalty_order,
-            range: Some(finite_range(get_col(data, col_name)?)),
+            range: Some(finite_range(get_col(data, col_name)?, col_name)?),
         })),
         Term::Smooth(Smooth::TensorProduct {
             col_name_1,
@@ -177,11 +177,11 @@ fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
                 degree: *degree,
                 range_1: Some(match range_1 {
                     Some(r) => *r,
-                    None => finite_range(get_col(data, col_name_1)?),
+                    None => finite_range(get_col(data, col_name_1)?, col_name_1)?,
                 }),
                 range_2: Some(match range_2 {
                     Some(r) => *r,
-                    None => finite_range(get_col(data, col_name_2)?),
+                    None => finite_range(get_col(data, col_name_2)?, col_name_2)?,
                 }),
             }))
         }
@@ -215,18 +215,19 @@ fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
 
 /// Finite `(min, max)` of a column, for anchoring a P-spline's uniform knot
 /// grid to the training-data range so the fit and predict bases coincide.
-fn finite_range(x: &Array1<f64>) -> (f64, f64) {
-    let lo = x
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(f64::INFINITY, f64::min);
-    let hi = x
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(f64::NEG_INFINITY, f64::max);
-    (lo, hi)
+///
+/// Errors when the column has no finite values: storing `(inf, -inf)` on the
+/// term would silently fit a garbage unit-spaced knot grid and cannot round-trip
+/// through JSON. (The public fit path already rejects non-finite columns in
+/// `validate_inputs`; this guards internal callers.)
+fn finite_range(x: &Array1<f64>, col: &str) -> Result<(f64, f64), GamlssError> {
+    let (lo, hi) = crate::splines::finite_range(x);
+    if !lo.is_finite() || !hi.is_finite() {
+        return Err(GamlssError::Input(format!(
+            "column '{col}' has no finite values; cannot anchor a spline basis"
+        )));
+    }
+    Ok((lo, hi))
 }
 
 /// Sorted distinct string levels of a grouping column (sorted for determinism —

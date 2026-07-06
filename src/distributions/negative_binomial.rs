@@ -47,7 +47,13 @@ impl Distribution for NegativeBinomial {
                 let m = y.mean().expect("validate_inputs rejects empty y");
                 let v = y.std(1.0).powi(2);
                 let mom = (v - m) / (m * m).max(MIN_POSITIVE);
-                mom.clamp(0.1, 10.0)
+                // n = 1 gives std(ddof=1) = NaN; fall back to a moderate seed
+                // rather than letting NaN poison the whole fit.
+                if mom.is_finite() {
+                    mom.clamp(0.1, 10.0)
+                } else {
+                    0.5
+                }
             }
             _ => 0.1,
         }

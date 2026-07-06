@@ -134,6 +134,14 @@ impl Distribution for StudentT {
         // (u = 0) so the block reports a zero step and the loop converges; if it
         // is > 0 the fit should re-enter the interior — forward the full chain
         // rule so the aggregate pull is preserved.
+        //
+        // Scope: the single summed score is the exact KKT test only when η_ν is
+        // an intercept (the standard TF usage, and all this crate's ν formulas
+        // in practice). Under a covariate/smooth model on ν the pinned rows
+        // load on different coefficients and a per-coefficient projected
+        // gradient X'g⁺ would be needed; derivatives() has no design-matrix
+        // access, so that refinement belongs in the scoring layer if ν
+        // covariates become a supported pattern.
         let pinned_tol = NU_FLOOR * (1.0 + 1e-9);
         let pinned_score: f64 = nu
             .iter()

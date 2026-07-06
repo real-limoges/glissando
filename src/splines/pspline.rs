@@ -83,6 +83,22 @@ pub(crate) fn create_basis_matrix_with_range(
 ///
 /// Knots depend only on the data range (`min`, `max`) and `(n_splines, degree)`,
 /// so prediction rebuilds an identical basis deterministically.
+/// Finite `(min, max)` of a column, ignoring NaN/±∞. Returns
+/// `(INFINITY, NEG_INFINITY)` when no finite values exist — callers that
+/// persist the range must reject that case (see `resolve_terms`).
+pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
+    (
+        x.iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f64::INFINITY, f64::min),
+        x.iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f64::NEG_INFINITY, f64::max),
+    )
+}
+
 fn select_knots(
     x: &Array1<f64>,
     n_splines: usize,
@@ -91,16 +107,7 @@ fn select_knots(
 ) -> Vec<f64> {
     let (min_val, max_val) = match range {
         Some((lo, hi)) => (lo, hi),
-        None => (
-            x.iter()
-                .copied()
-                .filter(|v| v.is_finite())
-                .fold(f64::INFINITY, f64::min),
-            x.iter()
-                .copied()
-                .filter(|v| v.is_finite())
-                .fold(f64::NEG_INFINITY, f64::max),
-        ),
+        None => finite_range(x),
     };
 
     let safe_n_splines = n_splines.max(degree + 1);
