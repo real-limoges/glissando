@@ -121,7 +121,7 @@ pub enum Smooth {
     /// whose null space is spanned by constants and linear functions (rank k-2).
     CrSpline1D {
         col_name: String,
-        /// mgcv default: 6.
+        /// glissando default: 6 (mgcv's own bs="cr" default is k = 10).
         k: usize,
         /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` for
         /// concessions dollars). When set, replaces the sum-to-zero centering
@@ -156,7 +156,7 @@ impl Smooth {
     pub const DEFAULT_DEGREE: usize = 3;
     /// Default difference-penalty order (2 ⇒ penalize curvature).
     pub const DEFAULT_PENALTY_ORDER: usize = 2;
-    /// Default CR-spline knot count (matches mgcv's `bs="cr"` default).
+    /// Default CR-spline knot count (glissando default; mgcv's `bs="cr"` default is 10).
     pub const DEFAULT_CR_K: usize = 6;
 
     /// 1D P-spline on `col_name` with default basis size / degree / penalty order.

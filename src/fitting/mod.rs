@@ -5,7 +5,7 @@
 //!
 //! 1. Compute score (u) and Fisher information (w) from the distribution
 //! 2. Form working response: z = η + u/w
-//! 3. Optimize smoothing parameters (λ) via GCV using L-BFGS
+//! 3. Optimize smoothing parameters (λ) via the configured criterion (REML default)
 //! 4. Solve penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z
 //! 5. Update linear predictor: η = X·β
 //!

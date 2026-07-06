@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — solver convergence & mgcv/gamlss parity
+
+- **Working-response clipping no longer inverts the Fisher step.** The
+  per-element `u/w` clip was tightened from a robustness device (±20) to a pure
+  anti-overflow guard (±1e6). At ±20, whenever many rows clipped, the update
+  direction was decided by the count of positive vs negative rows instead of
+  the score-weighted aggregate — observed as an unbounded ν → ∞ runaway on
+  Student-t fits that could never converge. Overshoot control is the job of
+  the deviance-guarded step-halving.
+- **Step-halving rejects uphill steps at the backtracking floor** instead of
+  accepting a micro-step, restoring the exact monotone-descent guarantee and
+  eliminating slow one-way drift.
+- **The global-deviance convergence test is now absolute** (gamlss `c.crit`
+  semantics, default 0.001 deviance units). The previous relative test scaled
+  its slack with |GD| and declared convergence while large-deviance fits were
+  still improving several units per cycle.
+- **Outer-loop convergence is measured in fit space (max |Δη|)** instead of
+  coefficient space, so λ jitter along fit-equivalent ridges (flat REML
+  valleys) can no longer block convergence (fixed a permanent 2-cycle on
+  tensor smooths).
+- **REML λ optimization is polished with a deterministic Fellner–Schall pass**,
+  fixing L-BFGS stalls at warm-start-dependent non-stationary points (a
+  weighted 5-smooth fit went from 200 cycles/67 s without convergence to 7
+  cycles/5 s).
+- **StudentT**: expected information for ν corrected to the
+  Lange–Little–Taylor / gamlss `TF()` formula (was ~50× too large at ν = 5,
+  freezing ν near its seed); μ working weight now uses the expected
+  information `(ν+1)/((ν+3)σ²)` like gamlss `TF()`; the ν ≥ 2 floor now uses a
+  KKT-style aggregate projection (frozen at the boundary when the summed score
+  points outward) instead of drifting η indefinitely. A Student-t oracle case
+  now converges in 13 cycles to the gamlss optimum with the deviance matching
+  to 4 decimals.
+- **Gamma**: σ Fisher weight corrected to `(4/σ⁴)ψ′(1/σ²) − 4/σ²` (was
+  `−2/σ²`, ~5× inflated); derivatives clamp y to the support.
+- **NegativeBinomial**: σ working weight switched to gamlss `NBI`'s
+  squared-score convention; σ seeded from the method-of-moments
+  overdispersion estimate instead of `sd(y)`.
+- **Beta**: φ information formula sign corrected (was rescued by `abs()`).
+- **Binomial**: initial μ pooled as `Σy/Σn` under per-observation trials.
+- **`te()` with an intercept can now represent main effects.** The tensor
+  basis gets ONE sum-to-zero constraint on the full k₁k₂ basis (mgcv `te()`
+  semantics, k₁k₂ − 1 coefficients, both penalties transformed with the same
+  Z). Previously each marginal was centered before the Kronecker product,
+  which excluded all `f(x1)` and `g(x2)` main effects — silently making
+  `te()` a pure-interaction (`ti()`-style) smooth.
+- **P-spline / tensor knot grids and random-effect level maps are resolved at
+  fit time and stored on the term** (`PSpline1D::range`,
+  `TensorProduct::range_1/2`, `RandomEffect::levels` — all `serde(default)`,
+  so previously serialized models still load). Prediction replays the
+  training basis; it used to re-derive knots/levels from the *prediction*
+  data, corrupting grid/subset/reordered-group predictions. Unseen
+  random-effect levels at predict time are now an error (mgcv factor
+  semantics).
+- **`create_penalty_matrix` supports any difference order** (alternating
+  binomial stencil, identical to R `diff(diag(k), differences = d)`);
+  `order ≥ 3` silently produced a truncated order-2 penalty before.
+- **CR splines with a point constraint (`pc`) no longer carry a zero-design,
+  zero-penalty coefficient direction** (the system was structurally singular);
+  the direction is removed with the same Householder transform used for
+  centering, preserving `f(pc) = 0`.
+- Benchmark harness: mgcv `gammals` σ extraction now goes through the
+  family's `logb` linkinv (the previous `exp(η₂/2)` read produced σ̂ ≈ 5–20
+  for a true CV of 0.2–0.7 and a false parity failure);
+  `gaussian_heteroskedastic` is now compared against mgcv `gaulss` (it had no
+  oracle); R scripts fall back to the dependency-free `nanoparquet` reader
+  when `arrow` is missing; per-fit 600 s timeout in `orchestrate.py`.
+
 ### Added
 
 - `impl Display for GamlssModel` produces an R-style summary block (convergence

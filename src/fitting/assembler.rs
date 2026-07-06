@@ -251,7 +251,20 @@ fn assemble_smooth(
             if let Some(pc_val) = pc {
                 // pc replaces centering: pin f(pc_val) = 0, skip sum_to_zero.
                 apply_cr_pc_constraint(&mut basis, knots, *pc_val);
-                Ok((basis, vec![PenaltyMatrix(penalty)]))
+                // The pc-shifted basis maps the coefficient direction 1_k to the
+                // zero function (B_pc·1 = 1·(1 − Σb_j(pc)) = 0) while S·1 = 0 too,
+                // so keeping all k columns leaves a zero-design, zero-penalty
+                // direction and X'WX + λS is singular. Drop that direction with
+                // the same Householder null-space transform used for centering;
+                // f(pc) = 0 is preserved for every β in the reduced space.
+                if *k >= 2 {
+                    let z = sum_to_zero_basis(*k);
+                    let basis_c = basis.dot(&z);
+                    let penalty_c = z.t().dot(&penalty).dot(&z);
+                    Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+                } else {
+                    Ok((basis, vec![PenaltyMatrix(penalty)]))
+                }
             } else if apply_constraint && *k >= 2 {
                 // Same sum-to-zero reparameterization as PSpline1D.
                 let z = sum_to_zero_basis(*k);

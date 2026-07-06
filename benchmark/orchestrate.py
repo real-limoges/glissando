@@ -279,7 +279,7 @@ def gen_b2_weighted(rng, n):
 SCENARIOS: list[Scenario] = [
     # ── Original scenarios (seeds stable) ─────────────────────────────────
     Scenario("gaussian_linear",          False, True,  None,   gen_gaussian_linear),
-    Scenario("gaussian_heteroskedastic", False, False, None,   gen_gaussian_heteroskedastic),
+    Scenario("gaussian_heteroskedastic", False, True,  None,   gen_gaussian_heteroskedastic),
     Scenario("gaussian_smooth",          True,  True,  None,   gen_gaussian_smooth),
     Scenario("gaussian_multiple",        False, True,  None,   gen_gaussian_multiple),
     Scenario("gaussian_large",           False, True,  10_000, gen_gaussian_linear),
