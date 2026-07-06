@@ -6,7 +6,7 @@
 //! 1. Snapshot every parameter on the response scale.
 //! 2. Ask the family for score `u` and Fisher information `w` on the η-scale.
 //! 3. Form the working response `z = η + u/w` (with weight floor and step clamp).
-//! 4. Optimize smoothing parameters λ via GCV (warm-started from the previous step).
+//! 4. Optimize smoothing parameters λ via the configured criterion (warm-started from the previous step).
 //! 5. Solve penalized weighted least squares for `(β, V, EDF)`.
 //!
 //! `step` returns an [`Update`] describing the new state plus convergence and

@@ -298,10 +298,15 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
     }
 }
 
-/// Returns true for scale-smooth LSS scenarios (gaulss / gammals) where we
-/// also gate on fitted_sigma.
+/// Returns true for scale-modeling LSS scenarios (gaulss / gammals) where we
+/// also gate on fitted_sigma. `gaussian_heteroskedastic` is linear in both μ
+/// and log σ but compared against gaulss, so its σ curve is gated too (gaulss's
+/// logb σ-link differs from glissando's log link by the b = 0.01 offset, well
+/// inside the 5% band).
 fn is_scale_smooth_scenario(name: &str) -> bool {
-    name == "gaussian_sigma_smooth" || name == "gamma_sigma_smooth"
+    name == "gaussian_sigma_smooth"
+        || name == "gamma_sigma_smooth"
+        || name == "gaussian_heteroskedastic"
 }
 
 #[test]

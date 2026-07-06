@@ -339,6 +339,43 @@ fit_random_effect <- function(df, output) {
   )
 }
 
+# Heteroskedastic Gaussian: mean AND log-scale both linear in x, via gaulss.
+# gaulss linear predictors: η₁ = μ (identity); η₂ goes through the logb link
+# (τ = 1/σ = b + exp(η₂), b = 0.01), so σ = 1/linkinv(η₂). Only μ coefficients
+# are emitted — the σ model lives on a different link scale than glissando's
+# log σ, so coefficient-level σ comparison is not meaningful, but fitted_mu /
+# fitted_sigma / log-likelihood / SE[μ] all are.
+fit_gaussian_heteroskedastic <- function(df, output) {
+  start <- Sys.time()
+  m <- gam(list(y ~ x, ~ x), data = df, family = gaulss())
+  fv        <- fitted(m)
+  mu_hat    <- fv[, 1]
+  sigma_hat <- 1.0 / fv[, 2]
+
+  se_pred <- tryCatch(predict(m, type = "link", se.fit = TRUE), error = function(e) NULL)
+  se_eta_out <- if (!is.null(se_pred) && is.matrix(se_pred$se.fit)) {
+    list(mu = as.list(unname(se_pred$se.fit[, 1])))
+  } else {
+    list()
+  }
+
+  result <- list(
+    converged    = gam_converged(m),
+    iterations   = if (!is.null(m$outer.info$iter)) as.integer(m$outer.info$iter) else 0L,
+    fit_time_ms  = elapsed_ms(start),
+    coefficients = list(mu = unname(coef(m))[1:2]),
+    fitted_mu    = as.list(unname(mu_hat)),
+    fitted_sigma = as.list(unname(sigma_hat)),
+    edf          = list(),   # not gated: gaulss σ-link differs from glissando's
+    log_likelihood = as.numeric(stats::logLik(m)),
+    aic          = AIC(m),
+    sp           = sp_list(m),
+    se_eta       = se_eta_out,
+    error        = NA
+  )
+  write_json(result, output, auto_unbox = TRUE, pretty = TRUE, na = "null")
+}
+
 # ─── Scale-smooth fitters (LSS families) ─────────────────────────────────────
 
 # Gaussian location-scale smooth (gaulss).
@@ -508,6 +545,7 @@ fit_b2_weighted_studentt <- function(df, output) {
 
 dispatch <- list(
   gaussian_linear           = fit_gaussian_linear,
+  gaussian_heteroskedastic  = fit_gaussian_heteroskedastic,
   gaussian_multiple         = fit_gaussian_multiple,
   gaussian_large            = fit_gaussian_large,
   gaussian_smooth           = fit_gaussian_smooth,
