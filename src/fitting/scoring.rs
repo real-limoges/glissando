@@ -81,15 +81,19 @@ pub(super) struct Halved {
     pub hits: usize,
 }
 
-/// Backtrack a proposed block update on the global deviance, holding the other
-/// parameters fixed (FIT-1).
+/// Backtrack a proposed block update on the PENALIZED global deviance, holding
+/// the other parameters fixed (FIT-1).
 ///
 /// The Fisher-scoring direction `d_k = β_new − β_old` is an ascent direction for
-/// the penalized log-likelihood, hence a descent direction for the global
-/// deviance restricted to block `k`. Starting at the full step `α = 1` and
-/// halving until the deviance does not increase is therefore guaranteed to
-/// terminate, and turns each cycle into a monotone descent — taming the overshoot
-/// that diverges on heavy-tailed / skew families.
+/// the **penalized** log-likelihood, i.e. a descent direction for
+/// `GD_pen(β) = GD(μ(β)) + Σ_j λ_j·βᵀS_jβ` — NOT for the raw deviance. When the
+/// current β is wigglier than the penalized optimum β*(λ) (e.g. λ grew across
+/// cycles), every move toward β*(λ) legitimately *raises* the raw deviance;
+/// backtracking on raw GD then rejects the step at every α and the fit freezes
+/// at a non-stationary point (observed as a permanent poisson-smooth
+/// non-convergence). Backtracking on `GD_pen` — evaluated at the *proposed*
+/// step's λ so the objective is consistent along the α-path — restores the
+/// guaranteed-descent property that makes halving terminate.
 ///
 /// Returns the accepted step; `hits` is the number of halvings (`0` = full step).
 pub(super) fn step_halving<D: Distribution + ?Sized>(
@@ -102,9 +106,33 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     min_alpha: f64,
 ) -> Result<Halved, GamlssError> {
     let model = &models[param];
-    let gd0 = global_deviance(family, y, prior_weights, models)?; // GD at α = 0
     let dir = &proposed.beta.0 - &model.beta.0; // d_k
     let (x, link) = (&model.x_matrix.0, &model.link);
+
+    // Penalty CHANGE along the path, in cancellation-free form:
+    //   Δpen(α) = (β₀+αd)ᵀS_λ(β₀+αd) − β₀ᵀS_λβ₀ = 2α·dᵀS_λβ₀ + α²·dᵀS_λd.
+    // Evaluating the two quadratic forms separately and subtracting loses all
+    // significance when λ is huge (e.g. a correctly collapsed smooth with λ at
+    // the clamp ceiling ~1e13): the round-off noise of βᵀS_λβ dwarfs the true
+    // difference and every step gets spuriously rejected.
+    let (pen_cross, pen_dir) = {
+        let mut cross = 0.0_f64; // dᵀ·S_λ·β₀
+        let mut quad = 0.0_f64; // dᵀ·S_λ·d
+        for (s_j, &lam) in model
+            .penalty_matrices
+            .iter()
+            .zip(proposed.lambdas.iter())
+        {
+            let s_d = s_j.0.dot(&dir);
+            cross += lam * s_d.dot(&model.beta.0);
+            quad += lam * s_d.dot(&dir);
+        }
+        (cross, quad)
+    };
+
+    let gd0 = global_deviance(family, y, prior_weights, models)?;
+    // Round-off slack proportional to the deviance scale.
+    let slack = 1e-8 * (1.0 + gd0.abs());
 
     let (mut alpha, mut hits) = (1.0_f64, 0usize);
     loop {
@@ -112,9 +140,10 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
         let eta_a = x.dot(&beta_a);
         let mu_a = eta_a.mapv(|e| link.inv_link(e));
         let gd_a = global_deviance_with(family, y, prior_weights, models, param, &mu_a)?;
+        let delta_pen = 2.0 * alpha * pen_cross + alpha * alpha * pen_dir;
 
-        // Accept on no-increase (small slack absorbs round-off).
-        if gd_a <= gd0 + 1e-8 {
+        // Accept on no-increase of the penalized deviance.
+        if gd_a - gd0 + delta_pen <= slack {
             return Ok(Halved {
                 beta: Coefficients(beta_a),
                 eta: eta_a,
@@ -277,6 +306,17 @@ pub(super) fn step<D: Distribution + ?Sized>(
             .any(|(l, &e)| l.is_smooth && e <= l.null_dim as f64 + super::EDF_COLLAPSE_SLACK)
     };
 
+    // A λ pinned at (or beyond) the log-clamp bounds is the multi-penalty
+    // analogue of a collapsed term: for a tensor smooth, one margin can be
+    // driven to the ceiling while the term's TOTAL EDF still sits far above its
+    // null-space dimension, so the EDF test alone cannot see it. A pinned λ is
+    // never a genuine interior optimum — it deserves the same restart probe.
+    let lambda_at_bound = |lambdas: &Array1<f64>| -> bool {
+        let hi = (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp();
+        let lo = (-super::solver::LOG_LAMBDA_CLAMP + 1e-6).exp();
+        lambdas.iter().any(|&l| l >= hi || l <= lo)
+    };
+
     let best_lambdas = run_opt(Some(&target.lambdas))?;
     let (best_lambdas, new_beta, cov_matrix, edf, term_edf) = {
         let (beta, cov, edf, term_edf) = fit_and_terms(&best_lambdas)?;
@@ -290,27 +330,38 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // null-space-optimal fit (a linear truth under an order-2 penalty) is
         // preserved — its collapse has the better marginal likelihood — while a
         // spuriously collapsed signal-bearing fit is repaired.
-        if !penalties.is_empty() && is_collapsed(&term_edf) {
-            let restart_lambdas = run_opt(Some(&restart_seed(&target.x_matrix, penalties)))?;
-            let incumbent_cost = lambda_cost(
-                criterion,
-                &target.x_matrix,
-                &z,
-                &w,
-                penalties,
-                &best_lambdas,
-            )?;
-            let restart_cost = lambda_cost(
-                criterion,
-                &target.x_matrix,
-                &z,
-                &w,
-                penalties,
-                &restart_lambdas,
-            )?;
-            if restart_cost < incumbent_cost {
-                let (rb, rc, re, rte) = fit_and_terms(&restart_lambdas)?;
-                (restart_lambdas, rb, rc, re, rte)
+        if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
+            let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
+                lambda_cost(criterion, &target.x_matrix, &z, &w, penalties, lams)
+            };
+            let mut winner = best_lambdas.clone();
+            let mut winner_cost = cost_of(&winner)?;
+
+            // Probe two alternative basins and keep the best-scoring λ:
+            //  1. the low-λ restart seed (below the high-λ collapse shelf);
+            //  2. a fresh cold start (`initial_lambdas = None`), which explores
+            //     the surface unanchored — warm-start history can pin λ in a
+            //     corner basin that a cold start correctly avoids (observed on
+            //     anisotropic tensor smooths, where the low-λ seed lands on a
+            //     different, worse stationary point than the cold start).
+            let seeds: [Option<Array1<f64>>; 2] =
+                [Some(restart_seed(&target.x_matrix, penalties)), None];
+            for seed in seeds {
+                let candidate = run_opt(seed.as_ref())?;
+                let cost = cost_of(&candidate)?;
+                if cost < winner_cost {
+                    winner_cost = cost;
+                    winner = candidate;
+                }
+            }
+
+            if winner
+                .iter()
+                .zip(best_lambdas.iter())
+                .any(|(a, b)| a != b)
+            {
+                let (rb, rc, re, rte) = fit_and_terms(&winner)?;
+                (winner, rb, rc, re, rte)
             } else {
                 (best_lambdas, beta, cov, edf, term_edf)
             }

@@ -10,7 +10,7 @@
 use glissando::distributions::{
     Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
-use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, SmoothingCriterion, Term};
+use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
 use serde::Serialize;
@@ -934,14 +934,11 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
-    // Use GCV for this heavily-weighted 5-smooth model: the REML criterion's
-    // landscape for weak smooths (x2-x5, amplitudes 0.1-0.4) is very flat with
-    // a near-degenerate optimum, causing L-BFGS and F-S to overshoot to the
-    // lambda ceiling.  GCV gives finite lambdas that better match mgcv.
-    let config = FitConfig {
-        criterion: SmoothingCriterion::Gcv,
-        ..Default::default()
-    };
+    // REML, matching mgcv's method="REML" on the same model. (This scenario
+    // previously used GCV as a workaround for L-BFGS stalling on the flat LAML
+    // ridges of the weak smooths; the Fellner-Schall polish fixed that, and
+    // GCV's different criterion diverged visibly from mgcv at some seeds.)
+    let config = FitConfig::default();
     match GamlssModel::fit_with_config(&data, &y, Some(&weights), &formula, &family, config) {
         Ok(model) => build_result(
             start,

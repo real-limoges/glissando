@@ -13,13 +13,13 @@ coefficients:
     - "8.8542e1"
     - "1.2834e2"
   sigma:
-    - "-9.7954e-2"
+    - "-9.7953e-2"
 edf:
   mu: "2.0000e0"
   sigma: "1.0000e0"
 lambdas:
   mu:
-    - "9.5985e6"
+    - "1.4662e7"
   sigma: []
 log_likelihood: "-1.5852e2"
 aic: "3.2304e2"
