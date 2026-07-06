@@ -238,7 +238,7 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -325,7 +325,7 @@ fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
                     col_name: "x".to_string(),
                     n_splines: 20,
                     degree: 3,
-                    penalty_order: 2,
+                    penalty_order: 2, range: None,
                 }),
             ],
         );
@@ -397,7 +397,7 @@ fn fit_tensor_smooth(df: &DataFrame) -> FitResult {
                 col_name_2: "x2".to_string(),
                 n_splines_2: 8,
                 penalty_order_2: 2,
-                degree: 3,
+                degree: 3, range_1: None, range_2: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -434,7 +434,7 @@ fn fit_random_effect(df: &DataFrame) -> FitResult {
                     col_name: "x".to_string(),
                 },
                 Term::Smooth(Smooth::RandomEffect {
-                    col_name: "g".to_string(),
+                    col_name: "g".to_string(), levels: vec![],
                 }),
             ],
         )
@@ -492,7 +492,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
             col_name: "x".to_string(),
             n_splines: 20,
             degree: 3,
-            penalty_order: 2,
+            penalty_order: 2, range: None,
         })],
     );
 
@@ -559,7 +559,7 @@ fn fit_binomial_smooth(df: &DataFrame) -> FitResult {
             col_name: "x".to_string(),
             n_splines: 20,
             degree: 3,
-            penalty_order: 2,
+            penalty_order: 2, range: None,
         })],
     );
 
@@ -626,7 +626,7 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -664,7 +664,7 @@ fn fit_gamma_sigma_smooth(df: &DataFrame) -> FitResult {
                     col_name: "x".to_string(),
                     n_splines: 20,
                     degree: 3,
-                    penalty_order: 2,
+                    penalty_order: 2, range: None,
                 }),
             ],
         );
@@ -733,7 +733,7 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept])
@@ -806,7 +806,7 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -875,7 +875,7 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })],
         )
         .with_terms("phi", vec![Term::Intercept]);
@@ -912,7 +912,7 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
             col_name: col.to_string(),
             n_splines: 20,
             degree: 3,
-            penalty_order: 2,
+            penalty_order: 2, range: None,
         })
     };
 
@@ -971,7 +971,7 @@ fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
             col_name: col.to_string(),
             n_splines: 20,
             degree: 3,
-            penalty_order: 2,
+            penalty_order: 2, range: None,
         })
     };
 

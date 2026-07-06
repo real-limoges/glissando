@@ -12,14 +12,32 @@ use ndarray::{Array1, Array2};
 /// * `x` - Covariate values (n_obs length)
 /// * `n_splines` - Number of basis functions (typically 10-20)
 /// * `degree` - Polynomial degree (typically 3 for cubic splines)
+#[cfg_attr(not(test), allow(dead_code))] // convenience wrapper; production paths pass an explicit range
 pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
+    create_basis_matrix_with_range(x, n_splines, degree, None)
+}
+
+/// Like [`create_basis_matrix`], but anchoring the uniform knot grid to an
+/// explicit `(min, max)` range instead of the range of `x` itself.
+///
+/// The fitter resolves each P-spline's training range once and stores it on the
+/// term; prediction passes it back here so new data — a grid, a subset, a
+/// single point — is evaluated on the *training* basis. Without this, the knots
+/// silently followed the prediction data's range and the coefficients were
+/// applied to a different basis.
+pub(crate) fn create_basis_matrix_with_range(
+    x: &Array1<f64>,
+    n_splines: usize,
+    degree: usize,
+    range: Option<(f64, f64)>,
+) -> Array2<f64> {
     let n_obs = x.len();
 
     if n_splines <= degree {
         return Array2::<f64>::zeros((n_obs, n_splines));
     }
 
-    let knots = select_knots(x, n_splines, degree);
+    let knots = select_knots(x, n_splines, degree, range);
     let mut basis_matrix = Array2::<f64>::zeros((n_obs, n_splines));
 
     let mut basis_buf = vec![0.0; degree + 1];
@@ -65,17 +83,25 @@ pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usi
 ///
 /// Knots depend only on the data range (`min`, `max`) and `(n_splines, degree)`,
 /// so prediction rebuilds an identical basis deterministically.
-fn select_knots(x: &Array1<f64>, n_splines: usize, degree: usize) -> Vec<f64> {
-    let min_val = x
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(f64::INFINITY, f64::min);
-    let max_val = x
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .fold(f64::NEG_INFINITY, f64::max);
+fn select_knots(
+    x: &Array1<f64>,
+    n_splines: usize,
+    degree: usize,
+    range: Option<(f64, f64)>,
+) -> Vec<f64> {
+    let (min_val, max_val) = match range {
+        Some((lo, hi)) => (lo, hi),
+        None => (
+            x.iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .fold(f64::INFINITY, f64::min),
+            x.iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .fold(f64::NEG_INFINITY, f64::max),
+        ),
+    };
 
     let safe_n_splines = n_splines.max(degree + 1);
     let num_total_knots = safe_n_splines + degree + 1;
@@ -181,7 +207,7 @@ mod tests {
         // spacing is what makes the difference penalty a valid roughness penalty.
         let x = Array1::linspace(0.0, 4.0, 200);
         let (n_splines, degree) = (15usize, 3usize);
-        let knots = select_knots(&x, n_splines, degree);
+        let knots = select_knots(&x, n_splines, degree, None);
 
         assert_eq!(knots.len(), n_splines + degree + 1);
         assert!(
@@ -210,7 +236,7 @@ mod tests {
     #[test]
     fn knots_handle_constant_x_without_nan() {
         let x = Array1::from_elem(10, 2.5);
-        let knots = select_knots(&x, 8, 3);
+        let knots = select_knots(&x, 8, 3, None);
         assert!(knots.iter().all(|k| k.is_finite()));
     }
 

@@ -69,7 +69,7 @@ fn make_formula(intercept_only: bool) -> Formula {
                 col_name: col.to_string(),
                 n_splines: 20,
                 degree: 3,
-                penalty_order: 2,
+                penalty_order: 2, range: None,
             })
         };
         formula.add_terms(

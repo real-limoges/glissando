@@ -99,7 +99,7 @@ fn test_tensor_product_complexity() {
             col_name_2: "x2".to_string(),
             n_splines_2: 5,
             penalty_order_2: 2,
-            degree: 3,
+            degree: 3, range_1: None, range_2: None,
         })],
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
