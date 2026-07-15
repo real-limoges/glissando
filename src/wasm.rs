@@ -50,6 +50,9 @@ impl WasmGamlssModel {
         Ok(WasmGamlssModel { model, family })
     }
 
+    /// Fit with an explicit config JSON. Beyond the algorithm knobs, `config_json`
+    /// accepts `"links"` to override a parameter's link by name, e.g.
+    /// `{"links": {"mu": "probit"}}` (see [`crate::json`] for the accepted names).
     #[wasm_bindgen(js_name = "fitWithConfig")]
     pub fn fit_with_config(
         y_json: &str,

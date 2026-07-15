@@ -13,13 +13,14 @@
 
 pub(crate) mod assembler;
 pub mod diagnostics;
+pub mod mixture;
 mod scoring;
 pub mod selection;
 mod solver;
 
-use self::assembler::{assemble_model_matrices, resolve_terms};
+use self::assembler::{assemble_model_matrices, resolve_terms, AssembledDesign};
 
-use super::distributions::{Distribution, Link};
+use super::distributions::{link_from_name, Distribution, Link};
 use super::error::GamlssError;
 use super::terms::{Smooth, Term};
 use super::types::*;
@@ -64,6 +65,24 @@ pub enum SmoothingCriterion {
     FellnerSchall,
 }
 
+/// How the fitter treats rows carrying a missing (non-finite) value in the
+/// response or any formula-referenced column (DATA-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum NaAction {
+    /// Drop any row with a missing value in `y` or a referenced column before
+    /// fitting — R's `na.omit`, and the default. Weights and every model column
+    /// are masked together so the design, working response, and weights stay
+    /// aligned.
+    #[default]
+    DropRows,
+    /// Reject the fit with [`GamlssError`](crate::GamlssError) if any model
+    /// variable is non-finite (the historical behaviour). Use when a missing
+    /// value should be a hard error rather than silently dropped.
+    Fail,
+}
+
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -88,6 +107,48 @@ pub struct FitConfig {
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
     pub gd_tolerance: f64,
+    /// Per-parameter link overrides, keyed by distribution-parameter name
+    /// (e.g. `"mu" → "probit"`). Empty (the default) uses each family's
+    /// [`default_link`](crate::distributions::Distribution::default_link). Names are
+    /// validated against [`link_from_name`](crate::distributions::link_from_name) at
+    /// fit time, so an unknown link yields [`GamlssError::Input`]. Build ergonomically
+    /// with [`with_link`](FitConfig::with_link) / [`with_links`](FitConfig::with_links).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub links: IndexMap<String, String>,
+    /// How to treat rows with a missing (non-finite) value in `y` or a referenced
+    /// column. Default: [`NaAction::DropRows`] (R's `na.omit`). Set to
+    /// [`NaAction::Fail`] to reject such inputs instead.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub na_action: NaAction,
+}
+
+impl FitConfig {
+    /// Choose how missing values are handled, returning `self` for chaining:
+    /// `FitConfig::default().with_na_action(NaAction::Fail)`.
+    #[must_use]
+    pub fn with_na_action(mut self, na_action: NaAction) -> Self {
+        self.na_action = na_action;
+        self
+    }
+
+    /// Override the link for a single distribution parameter, returning `self` for
+    /// chaining: `FitConfig::default().with_link("mu", "probit")`.
+    #[must_use]
+    pub fn with_link(mut self, param: impl Into<String>, link: impl Into<String>) -> Self {
+        self.links.insert(param.into(), link.into());
+        self
+    }
+
+    /// Override the links for several parameters at once, returning `self` for chaining.
+    #[must_use]
+    pub fn with_links<K: Into<String>, V: Into<String>>(
+        mut self,
+        links: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
+        self.links
+            .extend(links.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
 }
 
 #[cfg(feature = "serde")]
@@ -115,6 +176,8 @@ impl Default for FitConfig {
             criterion: SmoothingCriterion::default(),
             step_halving: true,
             gd_tolerance: DEFAULT_GD_TOLERANCE,
+            links: IndexMap::new(),
+            na_action: NaAction::default(),
         }
     }
 }
@@ -186,6 +249,12 @@ pub struct FittedParameter {
     /// `terms`. Column order matches `coefficients` and the design matrix.
     #[cfg_attr(feature = "serde", serde(default))]
     pub term_blocks: Vec<(String, usize, usize)>,
+    /// Canonical name of an *overridden* link (see
+    /// [`FitConfig::links`]), or `None` when the family default was used. `None`
+    /// re-derives the link via `default_link()` at predict time, so models fitted
+    /// before this field existed deserialize unchanged.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub link: Option<String>,
 }
 
 pub(super) struct FittingParameter {
@@ -201,6 +270,12 @@ pub(super) struct FittingParameter {
     /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
     /// `inv_link` passes per Fisher-scoring step.
     pub(super) mu: Array1<f64>,
+    /// Fixed per-row offset entering the linear predictor as `η = X·β + offset`
+    /// (DATA-3). All-zeros unless the parameter's formula carries a
+    /// [`Term::Offset`](crate::Term::Offset). The PWLS solver stays offset-unaware:
+    /// the working response it sees is `z − offset`, and `η` is reconstructed as
+    /// `X·β + offset` afterwards.
+    pub(super) offset: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
     pub(super) edf: f64,
@@ -275,10 +350,21 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // Resolve CrSpline1D knots once from training data so they are stored in
         // FittedParameter::terms and replayed verbatim at predict time.
         let terms = resolve_terms(formula_terms, data)?;
-        let link = family.default_link(param_name)?;
+        // Honor a per-parameter link override from the config; otherwise the
+        // family's canonical default. The chosen link name is persisted into the
+        // FittedParameter so predict reconstructs the *same* link.
+        let link = match config.links.get(&param_name_str) {
+            Some(name) => link_from_name(name)?,
+            None => family.default_link(param_name)?,
+        };
 
-        let (x_model, penalty_matrices, total_coeffs, term_layouts) =
-            assemble_model_matrices(data, n_obs, &terms)?;
+        let AssembledDesign {
+            x: x_model,
+            penalties: penalty_matrices,
+            n_coeffs: total_coeffs,
+            layouts: term_layouts,
+            offset,
+        } = assemble_model_matrices(data, n_obs, &terms)?;
 
         let response_scale_start = family.initial_value(param_name, y);
         let eta_start = link.link(response_scale_start);
@@ -286,15 +372,15 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // Seed the intercept coefficient so the first IRLS step starts near
         // η = link(initial μ). `beta[0]` is only the intercept when the leading
         // term is `Term::Intercept`; for a smooth-only or leading-Linear formula
-        // we leave β = 0 and η = 0, which is consistent with X·β and IRLS will
-        // move us from there.
+        // we leave β = 0 and η = X·β, which IRLS will move from there. The fixed
+        // `offset` is always added: η = X·β + offset (DATA-3).
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
         let intercept_leads = matches!(terms.first(), Some(Term::Intercept));
         let eta = if intercept_leads && total_coeffs > 0 {
             beta.0[0] = eta_start;
-            Array1::from_elem(n_obs, eta_start)
+            Array1::from_elem(n_obs, eta_start) + &offset
         } else {
-            Array1::zeros(n_obs)
+            offset.clone()
         };
         let mu = eta.mapv(|e| link.inv_link(e));
         let lambdas = if penalty_matrices.is_empty() {
@@ -319,6 +405,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 beta,
                 eta,
                 mu,
+                offset,
                 lambdas,
                 covariance: None,
                 edf: 0.0,
@@ -495,6 +582,10 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             })
             .collect();
 
+        // Persist the link name only when the user overrode it; a default-link
+        // parameter stays `None` so predict re-derives via `default_link`.
+        let link = config.links.get(&name).cloned();
+
         let fitted_param = FittedParameter {
             coefficients: model.beta,
             covariance,
@@ -506,6 +597,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             edf: model.edf,
             term_edf: model.term_edf,
             term_blocks,
+            link,
         };
         final_results.insert(name, fitted_param);
     }

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · zero-inflated &amp; Tweedie implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b></p>
+  <h1>glissando <span class="sub">· zero-inflated &amp; Tweedie</span></h1>
+  <p class="lede">Implements <span class="id">DIST-5</span> (zero-inflated / zero-adjusted), <span class="id">DIST-7</span> (<b style="color:#fff">Tweedie</b> — the marquee zero-inflated continuous case), and <span class="id">DIST-6</span> (Ocat beyond 5 categories). Grouped because they share one idea: a response that is <b style="color:#fff">a mixture of an atom and a base distribution</b> — an exact spike of zeros (or zeros-and-ones) sitting on top of a count or continuous part.</p>
+  <p class="lede"><b style="color:#fff">The good news:</b> these need <em>no new fitting machinery</em>. The mixing probability is just another distribution parameter with its own linear predictor, and the Rigby-Stasinopoulos loop already fits one predictor per parameter — exactly how <code>Ocat</code> fits its threshold parameters today. Read the shipped Box-Cox family (<code>src/distributions/bccg.rs</code> / <code>bct.rs</code> / <code>bcpe.rs</code>) for the trait template — the worked example of every <code>Distribution</code> method; this guide covers the mixture-specific seams.</p>
+
+  <h2 class="part">Shared spine — atom + base, fitted as extra parameters</h2>
+  <div class="ns">
+    <p>A zero-inflated / zero-adjusted family declares its mixing probability as an extra entry in <code>parameters()</code> with a logit link — e.g. ZIP is <code>["mu","sigma"]</code> where μ is the Poisson rate (log link) and σ is the structural-zero probability (logit link). The fitting loop fits a full <code>Xβ</code> predictor for <em>each</em>; the only new code is the family's own <code>derivatives</code> / <code>loglik_pointwise</code>. This is the same multi-predictor pattern <code>ocat.rs</code> uses for its <code>delta_k</code> thresholds — "no new machinery is needed beyond what already drives the RS update for scalar parameters" (<code>ocat.rs:9</code>).</p>
+    <p>The log-likelihood branches on the atom. For <b>zero-inflation</b> (counts, mixture of a point mass at 0 and a full count distribution that <em>can also</em> emit 0):</p>
+    <pre><code>P(Y=0) = π + (1−π)·g(0)
+P(Y=k) = (1−π)·g(k)            for k ≥ 1</code></pre>
+    <p>For <b>zero-adjustment</b> (semicontinuous: an atom at 0 plus a strictly-positive continuous part, which <em>cannot</em> emit 0):</p>
+    <pre><code>P(Y=0) = π
+f(Y=y) = (1−π)·g(y)            for y &gt; 0   (g a positive-continuous density)</code></pre>
+    <p>where <code>g</code> is the base family (Poisson, NB, Gamma, IG, Beta) and <code>π</code> the logit-linked mixing parameter. <code>loglik_pointwise</code> selects the branch per row on <code>y == 0</code>; <code>cdf</code> adds the atom mass below/at zero; <code>variance</code> and <code>expected_value</code> follow the mixture law of total variance (mean ≠ μ — <b>override both</b>). For discrete bases set <code>is_discrete()</code> → <code>true</code> and reuse <code>discrete_quantile</code>.</p>
+    <p>In code, the per-row branch (here zero-inflation over a count base <code>g</code>, with <code>π</code> logit-linked as the family's second parameter) is a <code>par_zip3_map</code> that switches on <code>y == 0</code> and works in log-space for stability:</p>
+    <pre><code>fn loglik_pointwise(&amp;self, y: &amp;Array1&lt;f64&gt;, params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;)
+    -&gt; Result&lt;Array1&lt;f64&gt;, GamlssError&gt;
+{
+    let mu = require(self, params, "mu")?;       // base rate (log link)
+    let pi = require(self, params, "sigma")?;    // structural-zero prob (logit link)
+    Ok(par_zip3_map(y, mu, pi, |yi, mui, pii| {
+        let g0 = (-mui).exp();                   // g(0) for Poisson base = e^(−μ)
+        if *yi == 0.0 {
+            // P(Y=0) = π + (1−π)·g(0)
+            (pii + (1.0 - pii) * g0).max(MIN_POSITIVE).ln()
+        } else {
+            // P(Y=k) = (1−π)·g(k);  add ln(1−π) to the base log-pmf
+            (1.0 - pii).max(MIN_POSITIVE).ln() + base_log_pmf(*yi, *mui)
+        }
+    }))
+}</code></pre>
+    <p>Zero-<em>adjustment</em> (a positive-continuous base that cannot emit 0) is the same shape with the <code>y == 0</code> arm returning <code>ln π</code> and the <code>y &gt; 0</code> arm returning <code>ln(1−π) + base_logpdf</code>. The derivative columns follow by differentiating each branch; validate with <code>check_score_via_finite_diff</code> per parameter.</p>
+  </div>
+
+  <h2 class="part">DIST-5 · zero-inflated &amp; zero-adjusted</h2>
+  <div class="ns">
+    <p><b>Families:</b> ZIP, ZINBI (zero-inflated Poisson / NB), ZAGA, ZAIG (zero-adjusted Gamma / Inverse Gaussian), and the inflated betas BEINF / BEZI / BEOI (atoms at 0 and/or 1). The zero-inflated pair reuses the existing <code>poisson.rs</code> / <code>negative_binomial.rs</code> densities for <code>g</code>; the zero-adjusted pair reuses the DIST-2 positive-continuous densities; BEINF reuses <code>beta.rs</code> with one or two boundary atoms.</p>
+    <p><b>Why it ships with residuals, not alone</b> — from <code>docs/planning/feature-brainstorm.md</code>: ZIP is <em>visibly broken</em> under Pearson residuals (a spike of zeros plus a Poisson part is not remotely Gaussian), so shipping it without <span class="id done">INFER-1</span> randomized-quantile residuals invites bug reports. <span class="id done">INFER-1</span> is <b>already shipped</b> (<code>GamlssModel::quantile_residuals</code>, exposed on every surface) and its discrete de-lumping branch is exactly what makes ZIP look right — so the dependency is already satisfied; just point the worked example at it.</p>
+  </div>
+
+  <h2 class="part">DIST-7 · Tweedie (the hard one)</h2>
+  <div class="ns">
+    <p>Compound Poisson-Gamma: a sum of <code>N ~ Poisson</code> Gamma jumps, so <code>P(Y=0) = exp(−λ)</code> (an exact atom) and <code>Y &gt; 0</code> is continuous. The single highest-value real-world case — insurance claims, rainfall, e-commerce spend — and the reason it earns its own section: <b>it has no closed-form density</b>. With the power-variance parameter <code>p ∈ (1,2)</code>, <code>Var(Y) = φ·μ^p</code>, and the density for <code>y &gt; 0</code> is an infinite series:</p>
+    <pre><code>f(y) = (1/y)·W(y, φ, p)·exp{ (1/φ)·[ y·μ^(1−p)/(1−p) − μ^(2−p)/(2−p) ] }</code></pre>
+    <p>where <code>W</code> is the Wright function evaluated by summing terms (or a saddlepoint approximation). The work here is <b>numerics, not trait plumbing</b>: a stable, convergent series evaluation of <code>W</code> (and its derivatives) belongs in <code>src/math.rs</code> alongside the existing <code>digamma</code>/<code>trigamma</code> — bound the term count, work in log-space, and validate against R's <code>tweedie::dtweedie</code>. Treat <code>p</code> as a fitted parameter (its own predictor, typically fixed or profiled) and the atom at 0 as in the shared spine. Flag this as the highest-effort item in the guide — closer to the Box-Cox derivative work than to the easy positive-continuous template.</p>
+  </div>
+
+  <h2 class="part">DIST-6 · Ocat beyond 5 categories</h2>
+  <div class="ns">
+    <p>Not a mixture, but it belongs with these because it is the other family that grows its parameter list at construction. <code>Ocat::new</code> currently <code>assert!</code>s <code>2..=5</code> (<code>ocat.rs:44</code>) and <code>threshold_param_name</code> hard-codes <code>delta_1..delta_4</code> (<code>ocat.rs:62</code>). Generalizing means lifting the cap: generate threshold parameter names dynamically for arbitrary <code>R</code> (the score/Fisher math at <code>ocat.rs:191</code> is already written as a loop over <code>n_thresholds</code> and does not assume a fixed count), and replacing the four-arm <code>match</code> with a generated-name scheme. <code>parameters()</code> returns <code>&amp;[&amp;'static str]</code>, so arbitrary-length names need either an interned/leaked name pool or a small redesign of the parameter-name return type — call this out as the one real design decision.</p>
+    <p>Like <code>Binomial</code>, <code>Ocat</code> carries state (<code>n_categories</code>) that a name string cannot recover, so it stays excluded from <code>from_name</code> and the JSON/WASM string-dispatch routes (<code>ocat.rs:15</code>) — see <span class="id">SER-1</span> below.</p>
+  </div>
+
+  <h2 class="part">Build order</h2>
+  <ol class="steps">
+    <li><b>Start with ZIP</b> — it reuses <code>poisson.rs</code> wholesale for <code>g</code> and exercises the entire mixture spine (extra logit parameter, <code>y==0</code> likelihood branch, atom in the CDF, <code>is_discrete</code>). New file <code>src/distributions/zip.rs</code>; register at <code>src/distributions/mod.rs:244</code>.</li>
+    <li><b>Likelihood + CDF first.</b> Branch <code>loglik_pointwise</code> on <code>y==0</code>; add the atom mass in <code>cdf</code>; <code>quantile</code> via <code>discrete_quantile</code>. Override <code>expected_value</code> / <code>variance</code> with the mixture moments.</li>
+    <li><b>Derivatives for both parameters.</b> Score/Fisher for μ <em>and</em> the mixing π on the η scale; validate each with <code>check_score_via_finite_diff</code> (it perturbs one parameter at a time — works for multi-parameter families, as the <code>ocat</code> tests show).</li>
+    <li><b>Fan out the mixture family:</b> ZINBI (swap NB for Poisson), then ZAGA / ZAIG (positive-continuous base, zero-adjusted branch), then BEINF (beta base, 0/1 atoms).</li>
+    <li><b>Tweedie</b> as a focused mini-project: land the Wright-series numerics in <code>src/math.rs</code> with its own tests first, then the family on top. <b>Ocat-∞</b> independently: lift the cap and the name scheme in <code>ocat.rs</code>.</li>
+  </ol>
+
+  <h2 class="part">Tests &amp; reference oracle</h2>
+  <div class="ns">
+    <p><b>Oracle:</b> R <code>gamlss</code> <code>ZIP()</code> / <code>ZINBI()</code> / <code>ZAGA()</code> / <code>BEINF()</code> (same μ/σ/ν parameterization); for Tweedie the <code>tweedie</code> / <code>statmod</code> packages (<code>dtweedie</code>, <code>tweedie.profile</code>). Reuse <code>src/distributions/mod.rs::test_helpers</code>: <code>check_score_via_finite_diff</code> (each parameter), <code>check_discrete_cdf_matches_pmf</code> (ZIP/ZINBI), <code>check_cdf_quantile_roundtrip</code> + <code>check_cdf_pdf_consistency</code> (the continuous part of ZAGA/Tweedie, away from the atom), <code>check_cdf_monotone_in_unit</code>, and <code>derivative_keys_match_parameters</code>.</p>
+    <ul>
+      <li><b>Atom probability</b>: assert <code>cdf(0) − cdf(0⁻) = P(Y=0)</code> matches the mixture formula at known (μ, π).</li>
+      <li><b>Residual sanity</b>: a ZIP fit's randomized-quantile residuals (<span class="id done">INFER-1</span>) are ≈ N(0,1) where Pearson residuals are visibly non-normal — the headline demo.</li>
+      <li><b>Tweedie numerics</b>: <code>dtweedie</code> series matches R across <code>p ∈ {1.1, 1.5, 1.9}</code> and a range of <code>y</code> spanning the atom and the tail; coefficient recovery from simulated data.</li>
+    </ul>
+  </div>
+
+  <h2 class="part">Cross-surface bindings <span class="id done">BIND-3</span></h2>
+  <div class="ns">
+    <p>ZIP / ZINBI / ZAGA / ZAIG / BEINF and Tweedie are <em>stateless</em> (all parameters fitted), so add them to <code>from_name</code> (<code>src/distributions/mod.rs:298</code>) and they flow through the JSON facade (<code>src/json.rs</code>) and WASM shim for free, plus a Python class in <code>src/python.rs</code>. <span class="id">SER-1</span> does not bite them. <b>Ocat-∞ is the exception</b>: it carries <code>n_categories</code> and stays out of the name routes — its round-trip is gated on <span class="id">SER-1</span> (serialize the parameter, not just the name), which this work makes more urgent. Ship a worked example for each (<span class="id">DOC-3</span>): the ZIP residual demo and a Tweedie insurance-spend fit.</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIST-5</span></td><td>ZIP / ZINBI / ZAGA / ZAIG / BEINF impl <code>Distribution</code> with a fitted mixing parameter; atom probability matches the mixture formula; RQ residuals look right.</td></tr>
+      <tr><td class="k"><span class="id">DIST-7</span></td><td>Tweedie family on top of a tested Wright-series evaluation in <code>src/math.rs</code>; matches R <code>dtweedie</code> across <code>p</code>; coefficient recovery green.</td></tr>
+      <tr><td class="k"><span class="id">DIST-6</span></td><td><code>Ocat</code> accepts arbitrary <code>R</code> (cap + name scheme lifted); existing 2–5 tests still pass.</td></tr>
+      <tr><td class="k">tests</td><td>Score-vs-FD per parameter, atom-mass, and oracle-parity fixtures green (<code>#[ignore]</code> for the R-dependent ones).</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream C (DIST-5 / DIST-7 / DIST-6) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a> (the shipped Box-Cox family in <code>src/distributions/</code> is the trait template)</footer>
+</div>
+</body>
+</html>

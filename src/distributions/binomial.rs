@@ -158,6 +158,12 @@ impl Distribution for Binomial {
         "Binomial"
     }
 
+    fn descriptor(&self) -> super::FamilyDescriptor {
+        super::FamilyDescriptor::Binomial {
+            n_trials: self.n_trials.to_vec(),
+        }
+    }
+
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => {

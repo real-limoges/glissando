@@ -1051,8 +1051,8 @@ mod reml_tests {
             &data,
         )
         .unwrap();
-        let (x_model, penalties, _total, layouts) =
-            assemble_model_matrices(&data, n, &terms).unwrap();
+        let design = assemble_model_matrices(&data, n, &terms).unwrap();
+        let (x_model, penalties, layouts) = (design.x, design.penalties, design.layouts);
 
         // Gaussian identity link: z = y exactly; w = 1/σ̂² constant (σ̂ ≈ 0.2 → w ≈ 25).
         let z = Array1::from_vec(y_vals.clone());

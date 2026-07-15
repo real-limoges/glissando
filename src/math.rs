@@ -102,6 +102,21 @@ pub(crate) fn std_normal_quantile(p: f64) -> f64 {
     std::f64::consts::SQRT_2 * erf_inv(2.0 * p.clamp(1e-12, 1.0 - 1e-12) - 1.0)
 }
 
+/// Standard-normal CDF `Φ(x)` via the error function. Shared by `ProbitLink`,
+/// `Gaussian::cdf`, and the Box-Cox families (`BCCG`), so all use one definition.
+#[inline]
+pub(crate) fn std_normal_cdf(x: f64) -> f64 {
+    use statrs::function::erf::erf;
+    0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
+}
+
+/// Standard-normal PDF `φ(x) = exp(−x²/2)/√(2π)`. The inverse-link derivative of
+/// `ProbitLink`; also the density core of the Box-Cox normal families.
+#[inline]
+pub(crate) fn std_normal_pdf(x: f64) -> f64 {
+    (-0.5 * x * x).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
 /// Digamma function: psi(x) = d/dx log(Gamma(x)).
 /// Delegates to statrs. For arrays, use [`digamma_batch`] instead.
 #[inline]

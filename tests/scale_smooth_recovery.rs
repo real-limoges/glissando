@@ -15,7 +15,7 @@
 //! λ-objective is unimodal but has a flat high-λ shelf (smooth pinned to its
 //! null space) that OpenBLAS reduction-order noise could occasionally tip the
 //! optimizer onto. That is now repaired by the collapse-guarded restart in
-//! `fitting::scoring::step` (see `docs/math/mathematics.md` §8.4). The root-cause
+//! `fitting::scoring::step` (see `docs/math/mathematics.md` [RESTART-GUARD]). The root-cause
 //! diagnostics live in `tests/lambda_bistability.rs` and
 //! `solver::reml_tests::diagnostic_laml_landscape_control_case` (both `#[ignore]`d).
 

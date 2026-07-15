@@ -19,6 +19,9 @@
 //!   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}], "sigma": [{"Intercept": null}]}`.
 //! - **config** (`parse_config`): `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`
 //!   (`criterion` is `"reml"`, `"gcv"`, or `"fellner_schall"`; all fields optional).
+//!   Add `"links"` to override a parameter's link by name, e.g.
+//!   `{"links": {"mu": "probit"}}` — accepted names: `"identity"`, `"log"`, `"logit"`,
+//!   `"probit"`, `"cloglog"`, `"inverse"`, `"inverse_square"`, `"sqrt"`, `"cauchit"`.
 //! - **predictions** (`serialize_predictions`): `{"mu": [..], "sigma": [..]}`.
 //! - **predictions with SE** (`serialize_predictions_with_se`):
 //!   `{"mu": {"fitted": [..], "eta": [..], "se_eta": [..]}, ...}`.
@@ -28,9 +31,9 @@
 //!
 //! [`fit`] and [`load`] resolve a distribution by name via
 //! [`crate::distributions::from_name`], which covers `Gaussian`, `Poisson`,
-//! `StudentT`, `Gamma`, `NegativeBinomial`, and `Beta`. `Binomial` is excluded
-//! because it needs `n_trials` state that a name cannot carry — construct it
-//! through the typed API instead.
+//! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `BCCG`, `BCT`, and `BCPE`.
+//! `Binomial` is excluded because it needs `n_trials` state that a name cannot
+//! carry — construct it through the typed API instead.
 //!
 //! # Example
 //!
@@ -93,9 +96,26 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
     DataSet::from_vecs(raw)
 }
 
+/// Parse a formula from JSON, accepting either spelling (DATA-5):
+///
+/// - **term-list** — the structured `{ "mu": [ {"Linear": {"col_name": "x"}}, … ] }`
+///   form matching the [`Term`](crate::Term) schema; or
+/// - **string formula** — the ergonomic `{ "mu": "y ~ s(x) + z", "sigma": "~ 1" }`
+///   form, where each value is an R/mgcv-style formula string.
+///
+/// The two are disambiguated by value type (string vs array), so existing
+/// term-list payloads keep working unchanged.
+///
 /// # Errors
-/// Returns [`GamlssError::Input`] if the JSON does not match the term schema.
+/// Returns [`GamlssError::Input`] if the JSON matches neither schema or a string
+/// formula is malformed.
 pub fn parse_formula(json: &str) -> Result<Formula, GamlssError> {
+    // Try the ergonomic string-map form first: `{param: "y ~ ..."}`. This only
+    // succeeds when every value is a JSON string, so a term-list payload (values
+    // are arrays) falls through to the structured deserializer below.
+    if let Ok(string_map) = serde_json::from_str::<HashMap<String, String>>(json) {
+        return Formula::from_strings(string_map.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    }
     serde_json::from_str(json).map_err(json_err)
 }
 
@@ -203,11 +223,11 @@ pub fn fit(
 /// returning it alongside its resolved distribution.
 ///
 /// # Errors
-/// Returns [`GamlssError`] if the JSON is malformed or names a distribution that
-/// cannot be reconstructed from its name (e.g. `Binomial`).
+/// Returns [`GamlssError`] if the JSON is malformed or describes a distribution
+/// that cannot be reconstructed (e.g. a `Named` descriptor for an unknown family).
 pub fn load(json: &str) -> Result<(GamlssModel, Box<dyn Distribution>), GamlssError> {
-    let (model, distribution_name) = GamlssModel::from_json(json)?;
-    let family = from_name(&distribution_name)?;
+    let (model, descriptor) = GamlssModel::from_json(json)?;
+    let family = descriptor.build()?;
     Ok((model, family))
 }
 
@@ -507,6 +527,31 @@ mod tests {
     #[test]
     fn unknown_distribution_errors() {
         assert!(fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
+    }
+
+    /// DATA-5: the string-formula spelling is accepted by `parse_formula` and
+    /// fits identically to the equivalent term-list payload.
+    #[test]
+    fn string_formula_fits_like_term_list() {
+        const STR_FORMULA: &str = r#"{"mu": "y ~ x", "sigma": "~ 1"}"#;
+        let (m_str, fam) = fit(Y, DATA, STR_FORMULA, "Gaussian", None, None).unwrap();
+        let (m_list, _) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
+        let _ = fam;
+        for param in ["mu", "sigma"] {
+            let a = &m_str.models[param].coefficients.0;
+            let b = &m_list.models[param].coefficients.0;
+            for (x, z) in a.iter().zip(b.iter()) {
+                assert!((x - z).abs() < 1e-12, "{param}: {x} vs {z}");
+            }
+        }
+    }
+
+    /// The string-map and term-list forms are disambiguated by value type, so a
+    /// term-list payload still parses as before.
+    #[test]
+    fn term_list_formula_still_parses() {
+        let f = parse_formula(FORMULA).unwrap();
+        assert_eq!(f["mu"].len(), 2);
     }
 
     #[test]

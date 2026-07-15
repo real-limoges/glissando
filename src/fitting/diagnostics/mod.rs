@@ -254,6 +254,7 @@ mod tests {
             edf,
             term_edf: vec![edf],
             term_blocks: vec![("(intercept)".to_string(), 0, 1)],
+            link: None,
         }
     }
 

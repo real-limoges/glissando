@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glissando · continuous &amp; count families implementation guide</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
+    --accent:#7aa2f7; --accent2:#bb9af7; --key:#e0af68; --line:#2f334d;
+    --good:#9ece6a; --warn:#f7768e;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:2rem 1.25rem 4rem;
+    background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; color:#fff; }
+  h1 .sub { color:var(--accent); font-weight:600; }
+  .lede { color:var(--dim); margin:0 0 1rem; }
+  .lede:last-of-type { margin-bottom:2rem; }
+  h2 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em;
+       color:var(--accent2); margin:2.4rem 0 .9rem; }
+  h2.part { font-size:.95rem; letter-spacing:.06em; color:#fff;
+            border-bottom:1px solid var(--line); padding-bottom:.5rem; margin-top:3rem; }
+  kbd {
+    display:inline-block; background:#15161e; color:var(--key);
+    border:1px solid #3b3f5c; border-bottom-width:2px; border-radius:5px;
+    padding:.05rem .42rem; font:600 12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap;
+  }
+  code { background:#15161e; color:var(--accent); padding:.05rem .32rem;
+         border-radius:4px; font:13px ui-monospace,Menlo,monospace; }
+  pre { background:#15161e; border:1px solid var(--line); border-radius:8px;
+        padding:.9rem 1.1rem; overflow-x:auto; margin:.6rem 0; }
+  pre code { background:none; border:none; padding:0; color:var(--fg);
+             font:12.5px/1.5 ui-monospace,Menlo,monospace; }
+  .id { display:inline-block; background:#15161e; color:var(--good);
+        border:1px solid var(--line); border-radius:4px;
+        padding:.05rem .4rem; font:600 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap; }
+  .id.done { background:var(--good); color:#15161e; border-color:var(--good); }
+  a { color:var(--accent); text-decoration:none;
+      border-bottom:1px solid rgba(122,162,247,.4); }
+  a:hover { border-bottom-color:var(--accent); }
+  .loop { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:.5rem 1.1rem; }
+  .loop table { width:100%; border-collapse:collapse; }
+  .loop td { padding:.45rem .2rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .loop tr:last-child td { border-bottom:none; }
+  .loop td.k { white-space:nowrap; width:1%; padding-right:1.1rem; }
+  .ns { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+        padding:1rem 1.15rem; margin-bottom:.7rem; }
+  .ns p { margin:.5rem 0; }
+  .ns p:first-child { margin-top:0; }
+  .ns p:last-child { margin-bottom:0; }
+  .ns b { color:#fff; }
+  ol.steps { list-style:none; counter-reset:s; padding:0; margin:0; }
+  ol.steps > li {
+    counter-increment:s; position:relative;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:.85rem 1.1rem .85rem 3.2rem; margin:0 0 .55rem;
+  }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:1rem; top:.85rem;
+    width:1.5rem; height:1.5rem; border-radius:50%;
+    background:var(--accent); color:#15161e; font-weight:700; font-size:.85rem;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.steps b { color:#fff; }
+  ol.steps .sub2 { color:var(--dim); font-size:.88rem; margin-top:.3rem; }
+  em { color:var(--dim); font-style:italic; }
+  .crumb { color:var(--dim); font-size:.82rem; margin:0 0 1.5rem; }
+  footer { color:var(--dim); font-size:.78rem; margin-top:2.5rem; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b></p>
+  <h1>glissando <span class="sub">· continuous &amp; count families</span></h1>
+  <p class="lede">Implements <span class="id">DIST-2</span> (continuous-positive), <span class="id">DIST-3</span> (skew / kurtotic continuous), and <span class="id">DIST-4</span> (count families) — the bulk of what <code>gamlss.dist</code> ships. These are grouped together because they all plug into the <b style="color:#fff">existing <code>Distribution</code> trait with no new fitting machinery</b>: each is one struct, one file, registered by name. Structural changes (atoms, censoring, mixtures) live in the sibling guides.</p>
+  <p class="lede"><b style="color:#fff">Read the shipped Box-Cox family first</b> (<code>src/distributions/bccg.rs</code> / <code>bct.rs</code> / <code>bcpe.rs</code>) — it is the worked example of every <code>Distribution</code> method and the template all of these copy. This guide is the catalog: what each group needs <em>on top of</em> that template, and the build order that lands cheap wins before hard ones.</p>
+
+  <h2 class="part">The trait, recapped</h2>
+  <div class="ns">
+    <p>A family is a struct implementing <code>Distribution</code> (<code>src/distributions/mod.rs:41</code>). Copy the file shape of the closest existing family and fill in: <code>parameters()</code>, <code>default_link()</code>, <code>derivatives()</code> (score <code>u</code> + Fisher <code>w</code> <b>on the η scale</b>), <code>loglik_pointwise()</code>, <code>cdf()</code>, <code>quantile()</code>, <code>variance()</code>, <code>name()</code>, and <code>is_discrete()</code> / <code>expected_value()</code> / <code>initial_value()</code> where the defaults are wrong. The defaults give you <code>pdf</code> (<code>= exp(loglik)</code>, <code>mod.rs:105</code>), <code>loglik</code> (sum), and <code>expected_value = μ</code> (<code>mod.rs:78</code>) for free.</p>
+    <p>The <code>derivatives()</code> contract — a <code>HashMap</code> keyed by parameter name, each holding the η-scale score <code>u</code> and Fisher weight <code>w</code> as aligned <code>Array1&lt;f64&gt;</code> columns — is the heart of every family:</p>
+    <pre><code>fn derivatives(&amp;self, y: &amp;Array1&lt;f64&gt;, params: &amp;HashMap&lt;&amp;str, &amp;Array1&lt;f64&gt;&gt;)
+    -&gt; DerivativesResult
+{
+    // …compute u_p, w_p per parameter on the η = link(θ) scale…
+    Ok(HashMap::from([
+        ("mu".to_string(),    (u_mu, w_mu)),
+        ("sigma".to_string(), (u_sigma, w_sigma)),
+    ]))
+}</code></pre>
+    <p>For a <b>fully worked DIST-2 family in copy-paste Rust</b> — Weibull, every method end to end plus the four-surface registration and tests — see the companion <a href="GUIDE-continuous-positive-worked.html">continuous-positive worked guide</a>. This guide is the catalog around it.</p>
+    <p>Closest templates by shape: <code>gamma.rs</code> / <code>poisson.rs</code> (1–2 params), <code>student_t.rs</code> and the Box-Cox files (3–4 params with ν/τ), <code>poisson.rs</code> again for the discrete CDF/quantile contract. Special-function helpers are already vendored: <code>statrs::function::gamma::{ln_gamma, digamma, gamma_ur}</code>, <code>statrs::function::beta::beta_reg</code>, and the vectorized <code>par_zip_map</code> / <code>par_zip3_map</code> + <code>digamma</code>/<code>trigamma</code> in <code>src/math.rs</code>.</p>
+  </div>
+
+  <h2 class="part">DIST-2 · continuous-positive (the easy wins)</h2>
+  <div class="ns">
+    <p><b>Families:</b> Lognormal (LOGNO), Exponential, Weibull (WEI), Inverse Gaussian (IG), Generalized Gamma (GG), Pareto. Support is <code>y &gt; 0</code>; <code>is_discrete()</code> stays <code>false</code>.</p>
+    <p><b>Shared spine:</b> a log link on μ (positive scale), and these are the families that <b>exercise the just-shipped canonical links</b> <span class="id done">LINK-3</span> (inverse, Gamma), <span class="id done">LINK-4</span> (inverse-square, IG), <span class="id done">LINK-5</span> (sqrt) — all shipped in <code>src/distributions/links.rs</code>; selecting them is a <code>default_link</code> choice, nothing more. Override <code>expected_value</code> whenever the mean ≠ μ (e.g. Lognormal mean <code>exp(μ+σ²/2)</code>, Weibull mean <code>μ·Γ(1+1/σ)</code>) and <code>variance</code> for honest Pearson residuals.</p>
+    <p><b>Order within the group:</b> <b>Exponential</b> (1 param) and <b>Lognormal</b> (reuses the Gaussian density on <code>log y</code> + a Jacobian) are the cheap first wins — both are a few lines over <code>gamma.rs</code>. Weibull and IG are 2-parameter and have closed-form <code>cdf</code>/<code>quantile</code>. GG (3-param) generalizes Gamma/Weibull/Lognormal and is the capstone; Pareto is heavy-tailed and wants robust seeds in <code>initial_value</code>.</p>
+  </div>
+
+  <h2 class="part">DIST-3 · skew / kurtotic continuous</h2>
+  <div class="ns">
+    <p><b>Families:</b> Skew Normal (SN1/SN2), Skew-t (ST1–ST5), Sinh-Arcsinh (SHASH), Johnson SU (JSU), Power Exponential (PE), Generalized t (GT). These carry 3–4 parameters — location μ, scale σ, skew ν, kurtosis τ.</p>
+    <p><b>Shared spine:</b> closest template is <code>student_t.rs</code> and the Box-Cox <code>bct.rs</code> / <code>bcpe.rs</code> files — same μ/σ/ν(/τ) layout, identity-or-log links per parameter, robust median/MAD seeds in <code>initial_value</code>. The mean is generally ≠ μ, so <code>expected_value</code> must be overridden (or, where no closed form exists, documented as median-centred). The kurtotic densities (PE, SHASH) need the same <code>lgamma</code> / normalizing-constant machinery the BCPE family already uses. <b>The derivative columns are the heavy step</b> — validate every <code>derivatives()</code> against a finite-difference of <code>loglik_pointwise</code> (helper below) before trusting it; a wrong score silently degrades the fit rather than erroring.</p>
+  </div>
+
+  <h2 class="part">DIST-4 · count families</h2>
+  <div class="ns">
+    <p><b>Families:</b> Geometric, Logarithmic, Beta-Binomial (BB), Double Poisson, Poisson-Inverse-Gaussian (PIG), Sichel, Delaporte.</p>
+    <p><b>Shared spine — the discrete contract:</b> set <code>is_discrete()</code> → <code>true</code> (this routes the de-lumping branch of <span class="id done">INFER-1</span> randomized-quantile residuals, which needs both <code>F(y)</code> and <code>F(y−1)</code>). Implement <code>quantile</code> via the shared <code>discrete_quantile(p, |k| cdf_at(k))</code> helper (<code>mod.rs:215</code>, doubling-bracket then bisection — copy <code>poisson.rs:92</code>). The <code>cdf</code> must satisfy <code>cdf(k) − cdf(k−1) = pmf(k)</code> at integer support; the test helper <code>check_discrete_cdf_matches_pmf</code> enforces exactly this. Where a closed-form CDF exists use it (Poisson uses <code>gamma_ur</code>, Binomial uses <code>beta_reg</code>); otherwise sum the pmf with a running guard. PIG / Sichel / Delaporte are over-dispersed mixtures and need their recursive pmf — the heaviest items; Geometric and Logarithmic are the cheap entry points.</p>
+  </div>
+
+  <h2 class="part">Build order</h2>
+  <ol class="steps">
+    <li><b>Pick the cheapest family in the target group</b> (Exponential / Lognormal for DIST-2, SN for DIST-3, Geometric for DIST-4). New file <code>src/distributions/&lt;name&gt;.rs</code>; copy the closest template's struct + <code>Default</code> + trait skeleton; register the module + <code>pub use</code> in <code>src/distributions/mod.rs</code> (the block at <code>mod.rs:244</code>).</li>
+    <li><b>Transform + likelihood first.</b> Implement <code>loglik_pointwise</code>, <code>cdf</code>, <code>quantile</code> (continuous: closed-form invert; discrete: <code>discrete_quantile</code>). These are independently testable and unblock <code>pdf</code> + centiles before any derivative work.</li>
+    <li><b>Derivatives (the heavy step).</b> Return score/Fisher per parameter on the η scale. <b>Validate against finite differences</b> with <code>check_score_via_finite_diff</code> before trusting it. Put the full ∂/∂μ, ∂/∂σ, … derivations in <a href="../math/mathematics.md">docs/math/mathematics.md</a> §1 alongside the existing families.</li>
+    <li><b>Override the defaults that are wrong.</b> <code>expected_value</code> wherever mean ≠ μ; <code>variance</code> for Pearson residuals; <code>initial_value</code> for robust seeds; <code>is_discrete</code> → <code>true</code> for counts.</li>
+    <li><b>Register in the factory + bindings.</b> Add the name to <code>from_name</code> (<code>mod.rs:298</code>) and the surfaces below, then move to the next family in the group — only <code>h(z)</code> / the extra parameter / its derivative column change.</li>
+  </ol>
+
+  <h2 class="part">Tests &amp; reference oracle</h2>
+  <div class="ns">
+    <p><b>Oracle: R <code>gamlss</code> / <code>gamlss.dist</code></b> — the like-for-like Rigby-Stasinopoulos oracle with the <em>same</em> parameterization (<code>dIG/pIG/qIG</code>, <code>dWEI</code>, <code>dLOGNO</code>, <code>dSICHEL</code>, <code>dPIG</code>, <code>dSHASH</code>, …). Per the project's StudentT experience, compare against the matching <code>gamlss</code> family, <b>not</b> mgcv. Reuse the existing helpers in <code>src/distributions/mod.rs::test_helpers</code>:</p>
+    <ul>
+      <li><code>check_score_via_finite_diff</code> — analytic score vs central difference of <code>loglik_pointwise</code>, on the η scale, at random parameter values.</li>
+      <li><code>check_cdf_quantile_roundtrip</code> (continuous) — <code>Q(F(y)) ≈ y</code>.</li>
+      <li><code>check_cdf_pdf_consistency</code> (continuous) — <code>dF/dy ≈ pdf(y)</code>.</li>
+      <li><code>check_discrete_cdf_matches_pmf</code> (counts) — <code>cdf(k) − cdf(k−1) ≈ pmf(k)</code>.</li>
+      <li><code>check_cdf_monotone_in_unit</code> — <code>cdf ∈ [0,1]</code>, non-decreasing.</li>
+      <li><code>derivative_keys_match_parameters</code> — every parameter has a finite, non-negative-Fisher derivative entry.</li>
+    </ul>
+    <p><b>Coefficient recovery</b> (<code>tests/correctness.rs</code> style): simulate from known parameters via the family's <code>quantile</code>, fit, assert recovery. <b>Parity</b> (<code>tests/mgcv_reference.rs</code> style, <code>#[ignore]</code>): add a case to <code>benchmark/run_comparison.sh</code> / <code>fit_gamlss.R</code> and compare coefficients + fitted quantities.</p>
+  </div>
+
+  <h2 class="part">Cross-surface bindings <span class="id done">BIND-3</span></h2>
+  <div class="ns">
+    <p>Surface each family exactly as the existing 11 are: add the name to <code>from_name</code> (<code>src/distributions/mod.rs:298</code>) — which the JSON facade (<code>src/json.rs</code>) and WASM shim resolve through automatically — and a Python distribution class in <code>src/python.rs</code>. Because every parameter of these families is <em>fitted</em> (none carry structural state like <code>Binomial</code>'s <code>n_trials</code> or <code>Ocat</code>'s <code>n_categories</code>), <span class="id">SER-1</span> does <b>not</b> bite: they round-trip through <code>to_json</code> / <code>from_json</code> by name. Add a per-distribution worked example (<span class="id">DOC-3</span>).</p>
+  </div>
+
+  <h2 class="part">Done when</h2>
+  <div class="loop">
+    <table>
+      <tr><td class="k"><span class="id">DIST-2</span></td><td>IG / Weibull / Lognormal / Exponential / GG / Pareto impl <code>Distribution</code>; instantiable by name on all four surfaces; canonical inverse / inverse-square / sqrt links exercised.</td></tr>
+      <tr><td class="k"><span class="id">DIST-3</span></td><td>SN / ST / SHASH / JSU / PE / GT impl <code>Distribution</code> with validated 3–4-parameter score/Fisher columns.</td></tr>
+      <tr><td class="k"><span class="id">DIST-4</span></td><td>Count families with <code>is_discrete = true</code>, <code>discrete_quantile</code>, and the <code>cdf(k)−cdf(k−1)=pmf(k)</code> contract green.</td></tr>
+      <tr><td class="k">tests</td><td>Score-vs-FD, round-trip / pmf consistency, and coefficient recovery green; <code>gamlss</code> parity fixtures committed (<code>#[ignore]</code>).</td></tr>
+    </table>
+  </div>
+
+  <footer>glissando · implementation guide · workstream C (DIST-2 / DIST-3 / DIST-4) · companion to <a href="../planning/ROADMAP.html">ROADMAP.html</a> (the shipped Box-Cox family in <code>src/distributions/</code> is the trait template)</footer>
+</div>
+</body>
+</html>

@@ -8,7 +8,9 @@ This document provides detailed mathematical derivations for the GAMLSS implemen
 
 ## 1. Distribution Derivatives and Distributional Functions
 
-This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm. §1.10 then derives the cumulative distribution, density, and quantile (the CDF/PDF/quantile trio) that these same families expose for residuals, centiles, and predictive intervals.
+This section provides detailed derivations of score functions (first derivatives of log-likelihood) and Fisher information (expected second derivatives) for all implemented distributions. These quantities drive the penalized iteratively reweighted least squares (P-IRLS) algorithm. [CDF-TRIO] then derives the cumulative distribution, density, and quantile (the CDF/PDF/quantile trio) that these same families expose for residuals, centiles, and predictive intervals.
+
+> **Cross-references** use bracketed tags: a named subsection is cited as `[TAG]` (e.g. `[WEIBULL]`, `[CDF-TRIO]`) — search the tag to jump to its heading. Whole-chapter references keep the `§N` form.
 
 **Key quantities**:
 - **Score** $u = \frac{\partial \ell}{\partial \eta}$: Direction of steepest ascent for the log-likelihood
@@ -17,7 +19,7 @@ This section provides detailed derivations of score functions (first derivatives
 
 For each distribution, we derive these quantities accounting for the link function via the chain rule.
 
-### 1.1 Gaussian Distribution
+### [GAUSSIAN] Gaussian Distribution
 
 **Parameterization**: $Y \sim N(\mu, \sigma^2)$
 
@@ -78,7 +80,7 @@ $$
 
 ---
 
-### 1.2 Student-t Distribution
+### [STUDENT-T] Student-t Distribution
 
 ### Log-Likelihood
 
@@ -144,7 +146,7 @@ where $\psi'(x)$ is the trigamma function.
 
 ---
 
-### 1.3 Poisson Distribution
+### [POISSON] Poisson Distribution
 
 **Parameterization**: $Y \sim \text{Poisson}(\mu)$
 
@@ -185,7 +187,7 @@ $$
 
 ---
 
-### 1.4 Gamma Distribution
+### [GAMMA] Gamma Distribution
 
 **Parameterization**: $Y \sim \text{Gamma}(\alpha, \theta)$ where $\alpha = 1/\sigma^2$ (shape), $\theta = \mu\sigma^2$ (scale)
 
@@ -262,7 +264,73 @@ $$
 
 ---
 
-### 1.5 Negative Binomial Distribution
+### [WEIBULL] Weibull Distribution
+
+**Parameterization**: $Y \sim \text{Weibull}$ with scale $\mu$ and shape $\sigma$ (gamlss `WEI`), density $f(y) = \frac{\sigma}{\mu}\left(\frac{y}{\mu}\right)^{\sigma-1}\exp\left[-\left(\frac{y}{\mu}\right)^\sigma\right]$ on $y > 0$.
+
+**Parameters**:
+- $\mu$ (scale): log link
+- $\sigma$ (shape): log link
+
+**Moments**: $\mathbb{E}[Y] = \mu\,\Gamma(1 + 1/\sigma)$, $\text{Var}(Y) = \mu^2\left[\Gamma(1 + 2/\sigma) - \Gamma(1 + 1/\sigma)^2\right]$ — neither equals $\mu$, so both moment methods are overridden.
+
+Throughout, write $z = (y/\mu)^\sigma$, which is $\text{Exp}(1)$-distributed at the true parameters.
+
+#### Log-Likelihood
+
+$$
+\ell(\mu, \sigma \mid y) = \log\sigma - \sigma\log\mu + (\sigma - 1)\log y - \left(\frac{y}{\mu}\right)^\sigma
+$$
+
+#### Derivatives for $\mu$ (log link)
+
+Let $\eta_\mu = \log\mu$. Since $\partial z/\partial\mu = -\sigma z/\mu$,
+$$
+\frac{\partial \ell}{\partial \mu} = -\frac{\sigma}{\mu} + \frac{\sigma}{\mu}\left(\frac{y}{\mu}\right)^\sigma = \frac{\sigma}{\mu}(z - 1).
+$$
+
+Chain rule for log link ($d\mu/d\eta_\mu = \mu$):
+$$
+\frac{\partial \ell}{\partial \eta_\mu} = \sigma(z - 1).
+$$
+
+Using $\mathbb{E}[z] = 1$, the $\eta$-scale Fisher weight is constant:
+$$
+u_\mu = \sigma(z - 1), \quad w_\mu = \sigma^2.
+$$
+
+#### Derivatives for $\sigma$ (log link)
+
+Let $\eta_\sigma = \log\sigma$. With $\partial z/\partial\sigma = z\log(y/\mu)$,
+$$
+\frac{\partial \ell}{\partial \sigma} = \frac{1}{\sigma} + \log\!\frac{y}{\mu} - \left(\frac{y}{\mu}\right)^\sigma \log\!\frac{y}{\mu} = \frac{1}{\sigma} + \log\!\frac{y}{\mu}\,(1 - z).
+$$
+
+Chain rule for log link ($d\sigma/d\eta_\sigma = \sigma$):
+$$
+\frac{\partial \ell}{\partial \eta_\sigma} = 1 + \sigma\log\!\frac{y}{\mu}\,(1 - z).
+$$
+
+The expected information on the $\eta_\sigma$ scale is the Weibull shape constant
+$$
+I_{\eta_\sigma} = \frac{\pi^2}{6} + (1 - \gamma)^2 \approx 1.8237,
+$$
+where $\gamma \approx 0.5772$ is the Euler–Mascheroni constant. Hence
+$$
+u_\sigma = 1 + \sigma\log(y/\mu)\,(1 - z), \quad w_\sigma = \frac{\pi^2}{6} + (1 - \gamma)^2.
+$$
+
+#### CDF, Density, and Quantile
+
+$$
+F(y \mid \mu, \sigma) = 1 - \exp\!\left[-\left(\frac{y}{\mu}\right)^\sigma\right], \qquad
+Q(p \mid \mu, \sigma) = \mu\,\bigl[-\log(1 - p)\bigr]^{1/\sigma},
+$$
+with density $f$ as above. All three are closed-form; see [CDF-TRIO] for how the trio feeds residuals and centiles.
+
+---
+
+### [NEG-BINOMIAL] Negative Binomial Distribution
 
 **Parameterization**: $Y \sim \text{NB}(r, p)$ with mean $\mu$ and dispersion $\sigma$ (NB2 parameterization)
 
@@ -341,7 +409,7 @@ $$
 
 ---
 
-### 1.6 Beta Distribution
+### [BETA] Beta Distribution
 
 **Parameterization**: $Y \sim \text{Beta}(\alpha, \beta)$ where $\alpha = \mu\phi$ and $\beta = (1-\mu)\phi$
 
@@ -415,7 +483,7 @@ $$
 
 ---
 
-### 1.7 Binomial Distribution
+### [BINOMIAL] Binomial Distribution
 
 **Parameterization**: $Y \sim \text{Binomial}(n, \mu)$ where $Y$ is the number of successes in $n$ trials
 
@@ -456,7 +524,7 @@ $$
 
 ---
 
-### 1.8 Ordered Categorical Distribution (`Ocat`)
+### [OCAT] Ordered Categorical Distribution (`Ocat`)
 
 **Parameterization**: Proportional-odds / cumulative-logit for ordinal response $y \in \{1, \ldots, R\}$, $R \in \{2, 3, 4, 5\}$.
 
@@ -543,7 +611,97 @@ Source: `src/distributions/ocat.rs`.
 
 ---
 
-### 1.9 Example: Computing Derivatives for Gaussian Data
+### [BCCG] Box-Cox–Cole-Green (BCCG) Distribution
+
+The BCCG family (Cole & Green 1992) models a **skew positive** response $y > 0$ by a Box-Cox power transform to a standard normal. It is parameterized by the median $\mu$ (log link), the approximate coefficient of variation $\sigma$ (log link), and the skewness / Box-Cox power $\nu$ (identity link). It is the engine behind LMS centile curves (growth charts). BCCG is the worked template for the Box-Cox family; BCT and BCPE extend the same spine, replacing the standard normal that the transformed residual follows with a Student-$t$ (extra df $\tau$) or power-exponential (extra kurtosis $\tau$).
+
+#### The Box-Cox z-score
+
+The shared spine transforms $y > 0$ to a standardized residual $z$:
+$$
+z = \begin{cases}
+\dfrac{(y/\mu)^\nu - 1}{\nu\sigma} & \nu \ne 0 \\[8pt]
+\dfrac{\log(y/\mu)}{\sigma} & \nu = 0 \quad (\text{limit})
+\end{cases}
+$$
+Numerically the $\nu \ne 0$ branch is evaluated as $\operatorname{expm1}(\nu L)/(\nu\sigma)$ with $L = \log(y/\mu)$, which is accurate (no cancellation) as $\nu \to 0$, so the density is smooth through $\nu = 0$.
+
+#### Log-Likelihood
+
+For BCCG the transformed residual is standard normal, $z \sim N(0,1)$, so adding the Jacobian $\mathrm{d}z/\mathrm{d}y$ gives the pointwise log-density
+$$
+\ell = -\tfrac{1}{2} z^2 - \tfrac{1}{2}\log(2\pi) + (\nu - 1)\log(y) - \nu\log(\mu) - \log(\sigma).
+$$
+(The exact gamlss density truncates the lower tail at $y = 0$ and renormalizes by $\Phi(1/(\sigma|\nu|))$; in the usual regime $1/(\sigma|\nu|)$ is large so $\Phi \approx 1$ and the correction is negligible — the implementation uses the un-truncated form.)
+
+By the definition of $z$ we have the identity $T \equiv (y/\mu)^\nu = 1 + \nu\sigma z$, which collapses the score functions to clean forms.
+
+#### First Derivatives (Score Functions)
+
+Partial derivatives of $z$:
+$$
+\frac{\partial z}{\partial \mu} = -\frac{T}{\mu\sigma}, \qquad
+\frac{\partial z}{\partial \sigma} = -\frac{z}{\sigma}, \qquad
+\frac{\partial z}{\partial \nu} = \frac{\nu T L - (T - 1)}{\nu^2 \sigma},
+$$
+with the limit $\partial z/\partial\nu \to L^2/(2\sigma)$ as $\nu \to 0$. On the parameter scale,
+$$
+\frac{\partial \ell}{\partial \mu} = \frac{zT}{\mu\sigma} - \frac{\nu}{\mu}, \qquad
+\frac{\partial \ell}{\partial \sigma} = \frac{z^2 - 1}{\sigma}, \qquad
+\frac{\partial \ell}{\partial \nu} = -z\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+Applying the chain rule for the links ($\mu, \sigma$ log $\Rightarrow u_\eta = \theta\,\partial\ell/\partial\theta$; $\nu$ identity $\Rightarrow u_\eta = \partial\ell/\partial\nu$) and substituting $T = 1 + \nu\sigma z$ gives the $\eta$-scale scores the implementation returns:
+$$
+u_\mu = \frac{z}{\sigma} + \nu(z^2 - 1), \qquad
+u_\sigma = z^2 - 1, \qquad
+u_\nu = -z\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+
+#### Expected Fisher Information
+
+Using $z \sim N(0,1)$ (so $E[z^2] = 1$, $E[z^4] = 3$) and a small-$\sigma$ expansion for $\nu$, the expected information on the parameter scale is
+$$
+I_{\mu\mu} = \frac{1}{\mu^2\sigma^2} + \frac{2\nu^2}{\mu^2}, \qquad
+I_{\sigma\sigma} = \frac{2}{\sigma^2}, \qquad
+I_{\nu\nu} = \frac{7\sigma^2}{4},
+$$
+matching the gamlss BCCG expected second derivatives. The $\eta$-scale weights ($W_\eta = (\mathrm{d}\theta/\mathrm{d}\eta)^2 I_{\theta\theta}$, floored to keep $W$ positive definite) are
+$$
+w_\mu = \mu^2 I_{\mu\mu} = \frac{1}{\sigma^2} + 2\nu^2, \qquad
+w_\sigma = \sigma^2 I_{\sigma\sigma} = 2, \qquad
+w_\nu = I_{\nu\nu} = \frac{7\sigma^2}{4}.
+$$
+
+#### CDF and Quantile
+
+Both reduce to the standard normal $\Phi$ of the Box-Cox z-score:
+$$
+F(y) = \Phi(z), \qquad
+Q(p) = \mu\bigl(1 + \nu\sigma\,\Phi^{-1}(p)\bigr)^{1/\nu} \quad (\nu \ne 0; \ \ \mu\,e^{\sigma\Phi^{-1}(p)} \text{ at } \nu = 0).
+$$
+Since $\mathrm{d}z/\mathrm{d}y = (y/\mu)^{\nu-1}/(\sigma\mu) > 0$ for $y > 0$, $F$ is a valid increasing CDF. Two special cases give independent oracles: at $\nu = 1$, BCCG is $N(\mu, \mu\sigma)$; at $\nu = 0$, it is $\mathrm{LogNormal}(\log\mu, \sigma)$. The mean is not $\mu$ (which is the median); the implementation uses the second-order approximation $E[Y] \approx \mu(1 + \tfrac{1}{2}\sigma^2(1-\nu))$, exact at $\nu \in \{0, 1\}$.
+
+#### BCT and BCPE: the same spine, a heavier-tailed $z$
+
+BCT and BCPE add a fourth parameter $\tau > 0$ (log link) by replacing the standard normal that $z$ follows. The Box-Cox spine ($z$, $\partial z/\partial\nu$, the Jacobian) is **unchanged**; only $\log h(z)$, the $\mu/\sigma/\nu$ scores' dependence on $\mathrm{d}\ell/\mathrm{d}z$, and the new $\tau$ column differ. Writing $D = -\mathrm{d}\ell/\mathrm{d}z$ (so $D = z$ for the normal), the $\eta$-scale scores keep one shape:
+$$
+u_\mu = \frac{D\,T}{\sigma} - \nu, \qquad
+u_\sigma = zD - 1, \qquad
+u_\nu = -D\,\frac{\partial z}{\partial \nu} + \log(y/\mu).
+$$
+
+**BCT** (Box-Cox-$t$): $z \sim t_\tau$ (Student-$t$, $\tau$ degrees of freedom), so $\log h(z) = \log\Gamma(\tfrac{\tau+1}{2}) - \log\Gamma(\tfrac{\tau}{2}) - \tfrac12\log(\pi\tau) - \tfrac{\tau+1}{2}\log(1 + z^2/\tau)$. The robustifying weight $w_t = (\tau+1)/(\tau+z^2)$ gives $D = w_t z$, so $u_\mu = w_t zT/\sigma - \nu$, $u_\sigma = w_t z^2 - 1$. The $\tau$ score and information mirror `StudentT` (see [STUDENT-T])'s df parameter; $F(y) = T_\tau(z)$. As $\tau \to \infty$, $t \to$ normal and BCT $\to$ BCCG.
+
+**BCPE** (Box-Cox power-exponential): $z$ follows a variance-standardized power-exponential with shape $\tau$. With $c^2 = 2^{-2/\tau}\,\Gamma(1/\tau)/\Gamma(3/\tau)$,
+$$
+\log h(z) = N(\tau) - \tfrac12\bigl|z/c\bigr|^\tau, \qquad
+N(\tau) = \log\tau - \log 2 - \tfrac32\log\Gamma(1/\tau) + \tfrac12\log\Gamma(3/\tau),
+$$
+so $D = \tfrac{\tau}{2c}|z/c|^{\tau-1}\operatorname{sign}(z)$ and $u_\sigma = \tfrac{\tau}{2}|z/c|^\tau - 1$. The CDF is the regularized incomplete gamma $F(y) = \tfrac12 + \tfrac12\operatorname{sign}(z)\,P\!\bigl(1/\tau,\ \tfrac12|z/c|^\tau\bigr)$, inverted for the quantile via a $\mathrm{Gamma}(1/\tau, 1)$ quantile. $\tau = 2$ is the normal, so BCPE $\to$ BCCG; $\tau < 2$ is leptokurtic, $\tau > 2$ platykurtic. The exact $\tau$ Fisher information uses the $\mathrm{Gamma}(1/\tau, 1)$ moments of $v = \tfrac12|z/c|^\tau$: writing $\partial\ell/\partial\tau = N'(\tau) + P v + Q\,v\log v$, $\;\mathrm{E}[(\partial\ell/\partial\tau)^2]$ closes in $\psi, \psi'$ at $a = 1/\tau$.
+
+---
+
+### [WORKED-EXAMPLE] Example: Computing Derivatives for Gaussian Data
 
 Suppose we have data $y = [2.1, 1.9, 3.2]$ and current parameter estimates $\mu = [2.0, 2.0, 3.0]$, $\sigma = [0.5, 0.5, 0.5]$.
 
@@ -579,9 +737,9 @@ The PWLS solver then regresses $z_\sigma$ on the design matrix for $\sigma$ with
 
 ---
 
-### 1.10 Cumulative Distributions, Densities, and Quantiles
+### [CDF-TRIO] Cumulative Distributions, Densities, and Quantiles
 
-Beyond the score/Fisher quantities that drive fitting, each family exposes the **distributional trio** — the cumulative distribution $F$, the density/mass $f$, and the quantile (inverse CDF) $Q$. These are what every statistically distinctive GAMLSS output needs (quantile residuals in §11.3, centile curves, predictive intervals).
+Beyond the score/Fisher quantities that drive fitting, each family exposes the **distributional trio** — the cumulative distribution $F$, the density/mass $f$, and the quantile (inverse CDF) $Q$. These are what every statistically distinctive GAMLSS output needs (quantile residuals in [RESIDUALS], centile curves, predictive intervals).
 
 #### Definitions
 
@@ -591,7 +749,7 @@ f(y \mid \theta) = \begin{cases} \dfrac{\partial F}{\partial y} & \text{continuo
 Q(p \mid \theta) = \inf\{\, y : F(y \mid \theta) \ge p \,\}.
 $$
 
-The density is obtained for free from the pointwise log-likelihood of §1.1–§1.8:
+The density is obtained for free from the pointwise log-likelihood of [GAUSSIAN]–[OCAT]:
 $$
 f(y \mid \theta) = \exp\bigl(\ell_{\text{pointwise}}(y \mid \theta)\bigr),
 $$
@@ -603,7 +761,7 @@ If $Y$ is continuous with CDF $F$, then
 $$
 U = F(Y \mid \theta) \sim \text{Uniform}(0,1) \quad\Longrightarrow\quad r = \Phi^{-1}(U) \sim N(0,1).
 $$
-So $r_i = \Phi^{-1}(F(y_i \mid \hat\theta_i))$ is standard normal whenever the fitted model is correct, **regardless of the family** — the foundation of the randomized quantile residuals of §11.3.
+So $r_i = \Phi^{-1}(F(y_i \mid \hat\theta_i))$ is standard normal whenever the fitted model is correct, **regardless of the family** — the foundation of the randomized quantile residuals of [RESIDUALS].
 
 #### Per-family CDF and quantile
 
@@ -613,6 +771,7 @@ Each family maps its gamlss (mean/dispersion) parameters to the standard argumen
 | --- | --- | --- | --- | --- |
 | Gaussian | $\mu,\sigma$ | loc $\mu$, sd $\sigma$ | $\tfrac12\bigl[1 + \mathrm{erf}\bigl(\tfrac{y-\mu}{\sigma\sqrt2}\bigr)\bigr]$ | $\mu + \sigma\sqrt2\,\mathrm{erf}^{-1}(2p-1)$ |
 | Gamma | $\mu,\sigma$ | shape $\alpha=1/\sigma^2$, scale $s=\mu\sigma^2$ | $P(\alpha,\,y/s)$ | $\text{Gamma}(\alpha,1/s)^{-1}(p)$ |
+| Weibull | $\mu,\sigma$ | scale $\mu$, shape $\sigma$ | $1 - e^{-(y/\mu)^\sigma}$ | $\mu\,[-\ln(1-p)]^{1/\sigma}$ |
 | Student-t | $\mu,\sigma,\nu$ | std $t$ on $z=(y-\mu)/\sigma$ | $T_\nu(z)$ | $\mu + \sigma\,T_\nu^{-1}(p)$ |
 | Beta | $\mu,\phi$ | $a=\mu\phi,\; b=(1-\mu)\phi$ | $I_y(a,b)$ | $\text{Beta}(a,b)^{-1}(p)$ |
 | Poisson *(disc.)* | $\mu$ | rate $\mu$ | $Q(\lfloor y\rfloor + 1,\, \mu)$ | search (below) |
@@ -620,7 +779,7 @@ Each family maps its gamlss (mean/dispersion) parameters to the standard argumen
 | Binomial *(disc.)* | $n$ (state), $\mu$ | $n$ trials, prob $\mu$ | $I_{1-\mu}(n-\lfloor y\rfloor,\, \lfloor y\rfloor + 1)$ | search |
 | Ocat *(disc.)* | $\mu,\delta$ thresholds | cumulative-logit | $\mathrm{logistic}(\theta_{\lfloor y\rfloor} - \mu)$, $=1$ at $y \ge R$ | smallest level $r$ with $F(r) \ge p$ |
 
-Note Beta uses the **precision** parameterization $(\mu,\phi)$ consistent with §1.6 and the glossary, so $a=\mu\phi$ and $b=(1-\mu)\phi$ (not a $(\mu,\sigma)$ form).
+Note Beta uses the **precision** parameterization $(\mu,\phi)$ consistent with [BETA] and the glossary, so $a=\mu\phi$ and $b=(1-\mu)\phi$ (not a $(\mu,\sigma)$ form).
 
 #### Discrete CDFs via incomplete special functions
 
@@ -628,7 +787,7 @@ The discrete CDFs avoid a summation loop through a special-function identity. Fo
 $$
 F(m \mid \mu) = \sum_{k=0}^{m} e^{-\mu}\frac{\mu^k}{k!} = Q(m+1, \mu) = \frac{\Gamma(m+1, \mu)}{\Gamma(m+1)}, \qquad m = \lfloor y \rfloor,
 $$
-i.e. the regularized **upper** incomplete gamma at an integer first argument equals the Poisson CDF. The negative-binomial and binomial CDFs are the regularized incomplete beta evaluations in the table; Ocat is the proportional-odds cumulative-logit $P(Y \le r) = \mathrm{logistic}(\theta_r - \mu)$ (the same $F_k$ used in §1.8).
+i.e. the regularized **upper** incomplete gamma at an integer first argument equals the Poisson CDF. The negative-binomial and binomial CDFs are the regularized incomplete beta evaluations in the table; Ocat is the proportional-odds cumulative-logit $P(Y \le r) = \mathrm{logistic}(\theta_r - \mu)$ (the same $F_k$ used in [OCAT]).
 
 #### Discrete quantile search
 
@@ -640,13 +799,119 @@ which is $O(\log k)$ even for large means. The right-continuous convention — e
 $$
 F(k) - F(k-1) = f(k) \quad \text{(pmf at integer support)},
 $$
-which the randomized quantile residuals of §11.3 rely on to de-lump each atom.
+which the randomized quantile residuals of [RESIDUALS] rely on to de-lump each atom.
+
+### [STRUCTURAL] Structural Likelihoods: Censoring, Truncation, and Hurdles
+
+These are **not new families** — they are transformations of a base family's
+likelihood given extra per-observation information the analyst supplies. Each is
+a *wrapper distribution* that holds a boxed base `Distribution` and fits the base
+family's parameters through the ordinary RS loop; only `loglik_pointwise` and
+`derivatives` change. Throughout, $F$ and $f$ are the base CDF and density, and
+for a parameter $\theta$ with linear predictor $\eta_\theta$ write
+$F' = \partial F / \partial \eta_\theta$ and $F'' = \partial^2 F / \partial \eta_\theta^2$.
+The score is $u = \partial \ell / \partial \eta$ and the IRLS working weight is the
+**observed information** $w = -\partial^2 \ell / \partial \eta^2$, floored at
+$\texttt{MIN\_WEIGHT}$ to keep $X^T W X + S_\lambda$ positive definite (large
+steps are then tamed by the step-halving line search of [BACKFIT]).
+
+#### [STRUCT-1] Censoring
+
+Each observation is exact, or known only to lie below / above / within an
+interval. The pointwise log-likelihood swaps the density for a survival /
+interval probability built from the base CDF:
+$$
+\ell =
+\begin{cases}
+\log f(y) & \text{event (exact } y) \\
+\log S(y) = \log\!\big(1 - F(y)\big) & \text{right-censored } (Y > y) \\
+\log F(y) & \text{left-censored } (Y \le y) \\
+\log\!\big(F(\text{hi}) - F(y)\big) & \text{interval } [y, \text{hi}]
+\end{cases}
+$$
+Differentiating with respect to $\eta$ gives the score and observed-information
+weight per censored row:
+$$
+\text{right:} \quad u = \frac{-F'}{1 - F}, \quad w = \frac{F''}{1 - F} + \left(\frac{F'}{1 - F}\right)^2,
+$$
+$$
+\text{left:} \quad u = \frac{F'}{F}, \quad w = -\frac{F''}{F} + \left(\frac{F'}{F}\right)^2,
+$$
+$$
+\text{interval } (D = F(\text{hi}) - F(y)): \quad u = \frac{D'}{D}, \quad w = -\frac{D''}{D} + \left(\frac{D'}{D}\right)^2,
+$$
+with $D' = F'(\text{hi}) - F'(y)$, $D'' = F''(\text{hi}) - F''(y)$. Event rows keep
+the base family's $(u, w)$, so an all-event `Censored` reduces exactly to the base
+log-likelihood. Source: `src/distributions/censored.rs`.
+
+#### [STRUCT-2] Truncation
+
+The response is observed only within $(\text{lo}, \text{hi})$; out-of-range values
+are *absent*, not censored, so the density renormalizes by the in-support mass
+$D = F(\text{hi}) - F(\text{lo})$:
+$$
+\ell = \log f(y) - \log D, \qquad \text{lo} < y < \text{hi}.
+$$
+The score and weight add the normalizer's contribution to the base family's:
+$$
+u = u_{\text{base}} - \frac{D'}{D}, \qquad w = w_{\text{base}} + \frac{D''}{D} - \left(\frac{D'}{D}\right)^2 .
+$$
+A $(-\infty, \infty)$ truncation reduces to the base. The wrapper's CDF/quantile
+are renormalized onto the truncated support, $F_T(y) = (F(y) - F(\text{lo}))/D$.
+Source: `src/distributions/truncated.rs`.
+
+#### [STRUCT-3] Hurdle / two-part
+
+A point mass at zero plus a *zero-truncated* base for the positive part, with a
+logit-linked atom $\xi = P(Y = 0)$:
+$$
+\ell =
+\begin{cases}
+\log \xi & y = 0 \\
+\log(1 - \xi) + \log f(y) - \log\!\big(1 - F(0)\big) & y > 0
+\end{cases}
+$$
+The $\xi$ atom is a Bernoulli on the zero indicator; with the logit link
+$\eta_\xi = \operatorname{logit}\xi$,
+$$
+u_\xi = \mathbf{1}(y = 0) - \xi, \qquad w_\xi = \xi(1 - \xi).
+$$
+The base parameters receive the zero-truncation score (truncating at $0$) on the
+positive rows and nothing on the zero rows. Contrast with zero-*inflation*, where
+the base can still emit $0$. Source: `src/distributions/hurdle.rs`.
+
+#### [STRUCT-CDF-ETA] Analytic CDF $\eta$-derivatives
+
+The censoring/truncation score and weight need $F'$ and $F''$ for each parameter.
+The `Distribution::cdf_eta_derivatives` hook supplies these **analytically for the
+location/scale parameters**, while non-elementary **shape-parameter** derivatives
+(which would require differentiating the regularized incomplete gamma/beta with
+respect to its shape argument) fall back to a central difference of the base
+`cdf` on that parameter's $\eta$. For $z = (y - \mu)/\sigma$ with standardized
+density $g$ (and $g' = \mathrm{d}g/\mathrm{d}z$):
+$$
+\text{location } \mu \;(\text{identity}): \quad \frac{\partial F}{\partial \eta} = -\frac{g}{\sigma}, \quad \frac{\partial^2 F}{\partial \eta^2} = \frac{g'}{\sigma^2},
+$$
+$$
+\text{scale } \sigma \;(\text{log}): \quad \frac{\partial F}{\partial \eta} = -z\,g, \quad \frac{\partial^2 F}{\partial \eta^2} = z\,g + z^2 g'.
+$$
+**Gaussian** uses $g = \varphi$, $g' = -z\varphi$, so $\partial^2 F/\partial \eta_\sigma^2 = z\varphi(1 - z^2)$.
+**Student-t** uses the standardized $t$ density with $g' = -g\,(\nu+1)z/(\nu + z^2)$ for $\mu, \sigma$; its $\nu$ is numeric.
+**Gamma** treats $\mu$ (log link) analytically: $\mu$ enters only the scale
+$\theta = \mu\sigma^2$ at fixed shape $\alpha = 1/\sigma^2$, so with $x = y/\theta$,
+$$
+\frac{\partial F}{\partial \eta_\mu} = -\frac{x^{\alpha} e^{-x}}{\Gamma(\alpha)}, \qquad \frac{\partial^2 F}{\partial \eta_\mu^2} = (x - \alpha)\,\frac{\partial F}{\partial \eta_\mu},
+$$
+while Gamma's $\sigma$ (which enters the shape) is numeric; **Beta** (both shape
+parameters) is fully numeric. Source: `gaussian.rs` / `student_t.rs` / `gamma.rs`
+(`cdf_eta_derivatives`), `src/distributions/structural.rs` (numeric fallback +
+the score/weight composition above).
 
 ---
 
 ## 2. Special Functions
 
-### 2.1 Digamma Function
+### [DIGAMMA] Digamma Function
 
 The digamma function $\psi(x) = \frac{d}{dx}\log\Gamma(x) = \frac{\Gamma'(x)}{\Gamma(x)}$ appears in derivatives for Gamma, Negative Binomial, and Beta distributions.
 
@@ -672,7 +937,7 @@ $$
 - $\psi(2) = 1 - \gamma \approx 0.4227843351$
 - $\psi(1/2) = -\gamma - 2\log(2) \approx -1.9635100260$
 
-### 2.2 Trigamma Function
+### [TRIGAMMA] Trigamma Function
 
 The trigamma function $\psi'(x) = \frac{d^2}{dx^2}\log\Gamma(x)$ is needed for Student-t Fisher information.
 
@@ -700,7 +965,7 @@ $$
 
 ## 3. Numerical Stability and Implementation
 
-### 3.1 Parameter Bounds
+### [PARAM-BOUNDS] Parameter Bounds
 
 To prevent numerical issues, parameters are clamped to safe ranges:
 
@@ -714,7 +979,7 @@ To prevent numerical issues, parameters are clamped to safe ranges:
 - Log/logit links: $\eta \in [-30, 30]$
 - Prevents overflow in $\exp(\eta)$ (since $e^{30} \approx 10^{13}$ and $e^{-30} \approx 10^{-14}$)
 
-### 3.2 Distribution-Specific Safeguards
+### [DIST-SAFEGUARDS] Distribution-Specific Safeguards
 
 **Student-t**:
 - Enforce $\nu > 2$ (finite variance) via the floored log link on $\nu$ (§7)
@@ -734,7 +999,7 @@ To prevent numerical issues, parameters are clamped to safe ranges:
 - Floor each category probability $\pi_r$ at $\mathrm{MIN\_PROB} = 10^{-10}$ before computing scores and Fisher info
 - Renormalize: divide all $\pi_r$ by their sum after flooring, so that $\sum_r \pi_r = 1$ is maintained
 
-### 3.3 Batched Special Function Computation
+### [BATCHED-SPECFUN] Batched Special Function Computation
 
 Digamma and trigamma functions are computed in batched vectorized form for performance:
 
@@ -747,7 +1012,7 @@ The switchpoint is empirically tuned to balance overhead vs. speedup.
 
 ## 4. GAMLSS Iteration (P-IRLS)
 
-### 4.1 Backfitting Outer Loop
+### [BACKFIT] Backfitting Outer Loop
 
 GAMLSS fits the joint model by cycling through distribution parameters one at a time, holding the others fixed (Rigby & Stasinopoulos 2005, §3). For a $P$-parameter family (e.g.\ Gaussian: $P=2$; Student-t: $P=3$):
 
@@ -775,7 +1040,7 @@ and all parameters must pass before the outer loop terminates. Using each parame
 
 The active default is $\epsilon = 10^{-3}$, max iterations $= 200$ (`DEFAULT_TOLERANCE`, `DEFAULT_MAX_ITER` at `src/fitting/mod.rs:31-32`).
 
-### 4.2 Inner P-IRLS Step (Fisher Scoring)
+### [PIRLS-INNER] Inner P-IRLS Step (Fisher Scoring)
 
 For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
 
@@ -785,7 +1050,7 @@ For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
    $$
    where $u_k = \frac{\partial \ell}{\partial \eta_k}$ and $w_k$ is the (expected, or in some cases observed) Fisher information.
 
-2. **Penalized weighted least squares** (see §8.1 for the Cholesky solve):
+2. **Penalized weighted least squares** (see [PWLS-CHOLESKY] for the Cholesky solve):
    $$
    \hat{\beta}_k = \arg\min_\beta \|W_k^{1/2}(z_k - X_k\beta)\|^2 + \sum_j \lambda_j \beta^T S_j \beta
    $$
@@ -795,11 +1060,11 @@ For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
    \eta_k^{(\mathrm{new})} = X_k \hat{\beta}_k
    $$
 
-4. **Smoothing parameter selection** — GCV, REML, or Fellner–Schall (§§ 8, 8.2).
+4. **Smoothing parameter selection** — GCV, REML, or Fellner–Schall (§8, [REML-LAML]).
 
 Source: `src/fitting/scoring.rs:40-180`.
 
-### 4.3 Working-Response Derivation
+### [WORKING-RESPONSE] Working-Response Derivation
 
 Why is $z = \eta + u/w$ the right pseudo-response? Expand the log-likelihood for one observation in $\eta$ around the current iterate $\eta_0$:
 
@@ -819,9 +1084,9 @@ $$
 X^T W X \,\beta = X^T W z.
 $$
 
-Adding the penalty $\sum_j \lambda_j \beta^T S_j \beta$ to the surrogate produces the PWLS system of §8.1. This is exactly the IRLS construction of McCullagh & Nelder (1989) generalized to one distributional parameter at a time.
+Adding the penalty $\sum_j \lambda_j \beta^T S_j \beta$ to the surrogate produces the PWLS system of [PWLS-CHOLESKY]. This is exactly the IRLS construction of McCullagh & Nelder (1989) generalized to one distributional parameter at a time.
 
-### 4.4 Numerical Safeguards in the Inner Loop
+### [INNER-SAFEGUARDS] Numerical Safeguards in the Inner Loop
 
 Cataloged here so the magic constants are auditable. All apply per observation, per inner iteration. Source: `src/fitting/scoring.rs`, `src/distributions/links.rs`.
 
@@ -834,7 +1099,7 @@ Cataloged here so the magic constants are auditable. All apply per observation, 
 
 Persistent non-zero `weight_floor_hits` or `step_cap_hits` at convergence signals model misspecification or ill-conditioned data; transient hits in early iterations are normal.
 
-### 4.5 Prior / Observation Weights
+### [PRIOR-WEIGHTS] Prior / Observation Weights
 
 Each call to the P-IRLS `step` function accepts an optional `prior_weights: Option<&Array1<f64>>` — a per-observation scale applied to each observation's likelihood contribution. When absent, a ones vector is substituted (uniform weights).
 
@@ -860,11 +1125,44 @@ When `prior_weights = None`, the formula reduces to $W = \mathrm{diag}(\mathrm{s
 
 Source: `src/fitting/scoring.rs:61-141` (`step`).
 
+### [STRUCT-4] Finite Mixtures via EM
+
+A $K$-component finite mixture has density
+$$
+f(y) = \sum_{k=1}^{K} w_k\, g_k(y), \qquad w_k \ge 0, \quad \sum_k w_k = 1,
+$$
+where each component $g_k$ is a GAMLSS of the same family with its own fitted
+parameters. The components' responsibilities couple the observations, so — unlike
+the per-row structural wrappers of [STRUCTURAL] — a mixture cannot be a single
+`Distribution`; it is fit by an **EM outer loop** over the existing
+prior-weighted RS fit ([PRIOR-WEIGHTS]):
+
+- **E-step** — posterior responsibility that observation $i$ came from component $k$:
+$$
+r_{ik} = \frac{w_k\, g_k(y_i)}{\sum_{j} w_j\, g_j(y_i)} .
+$$
+- **M-step** — refit each component by the prior-weighted RS fit with observation
+  weights $r_{\cdot k}$, then update the mixing weights
+  $w_k = \tfrac{1}{n}\sum_i r_{ik}$.
+
+Iteration continues until the mixture log-likelihood
+$$
+\ell_{\text{mix}} = \sum_i \log \sum_k w_k\, g_k(y_i)
+$$
+stops improving (relative change below tolerance); EM makes $\ell_{\text{mix}}$
+monotone non-decreasing. Initialization assigns each observation to the nearest of
+$K$ randomly drawn seed observations (a 1-D $k$-means seeding that breaks the
+symmetric "all components identical" fixed point), and a small responsibility
+floor keeps every component non-empty. The fitted `MixtureModel` reports
+$\ell_{\text{mix}}$, the component models, the weights, and AIC/BIC with effective
+degrees of freedom $\sum_k \mathrm{EDF}_k + (K - 1)$ (the $K-1$ free mixing
+weights). Source: `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`).
+
 ---
 
 ## 5. Smoothing and Penalty Matrices
 
-### 5.0 B-Spline Basis (Cox–de Boor)
+### [BSPLINE-BASIS] B-Spline Basis (Cox–de Boor)
 
 A degree-$p$ B-spline basis with $k$ functions is defined on a knot vector
 $$
@@ -902,7 +1200,7 @@ Properties:
 - **Non-negativity**: $B_j(x) \ge 0$.
 - **Local support**: $B_{i,p}$ is non-zero only on $[\tau_i, \tau_{i+p+1}]$, so each row of the design matrix has at most $p+1$ non-zero entries.
 
-### 5.1 Sum-to-Zero Reparameterization (Identifiability)
+### [SUM-TO-ZERO] Sum-to-Zero Reparameterization (Identifiability)
 
 Partition-of-unity creates a rank deficiency when the model has both an intercept and a smooth term: the column vector $\mathbf{1}_n$ lies in the column space of $B$, so the design matrix $[\mathbf{1}_n \mid B]$ is column-rank-deficient. To restore identifiability, the smooth is reparameterized through an orthonormal basis of the subspace orthogonal to $\mathbf{1}_k$.
 
@@ -927,7 +1225,53 @@ $$
 
 The new design matrix $[\mathbf{1}_n \mid B Z]$ has full column rank, and the constraint $\mathbf{1}_k^T \beta = 0$ — i.e.\ the smooth has mean zero across knots — is enforced automatically.
 
-### P-Spline Penalty (Eilers & Marx 1996)
+### [DESIGN-TERMS] Design-Matrix Terms: Factors, Interactions, and Offsets (DATA-1/2/3)
+
+The assembler (`src/fitting/assembler.rs`) turns a parameter's term list into design
+columns. Beyond the intercept, linear, and smooth blocks above, three parametric term
+kinds expand here.
+
+**Factors (contrast coding).** A categorical column with $L$ distinct level codes
+expands into $L-1$ columns under a chosen contrast, so a factor sharing the parameter
+with an intercept stays identifiable (the dropped degree of freedom is the baseline /
+grand mean). With levels sorted $\ell_0 < \ell_1 < \dots < \ell_{L-1}$:
+
+- **Treatment** (R `contr.treatment`, the default): column $j$ is the indicator
+  $\mathbb{1}[g_i = \ell_{j+1}]$, with $\ell_0$ the baseline. Coefficient $j$ is the
+  mean shift of level $\ell_{j+1}$ relative to $\ell_0$.
+- **Sum-to-zero** (R `contr.sum`): column $j$ is $+1$ for level $\ell_j$, $-1$ for the
+  last level $\ell_{L-1}$, and $0$ otherwise. Each column sums to zero over the levels,
+  so the coefficients are contrasts against the grand mean and the last level is
+  $-\sum_j \beta_j$.
+
+Levels are resolved once from the training column and stored on the term, so prediction
+replays the identical column mapping; an unseen level at predict time maps to an all-zero
+row (the honest "no information" encoding).
+
+**Interactions.** The term $a\!:\!b$ is the row-wise Kronecker product of the two
+operands' design blocks: if $A \in \mathbb{R}^{n\times p}$ and $B \in \mathbb{R}^{n\times q}$
+are the operand columns, the interaction block is $C \in \mathbb{R}^{n\times pq}$ with
+$$
+C_{i,\,(r-1)q + s} = A_{i r}\, B_{i s},
+$$
+the same `row_kronecker_into` primitive used for tensor smooths. Factor$\times$continuous
+and factor$\times$factor both fall out of this product once factors are expanded; the
+crossing $a\!*\!b$ desugars to $a + b + a\!:\!b$.
+
+**Offsets.** An offset is a known per-row term entering the linear predictor with a fixed
+coefficient of $1$:
+$$
+\eta = X\beta + o, \qquad o_i = \log(\text{exposure}_i)\ \text{(typical rate model)}.
+$$
+It contributes to $\eta$, not to $\beta$, so it carries no design column. In the
+Rigby–Stasinopoulos working response ([WORKING-RESPONSE]) the solver fits $X\beta$ to
+$z = \eta + u/w$; since $X\beta = \eta - o$, the offset is subtracted from the working
+response before the penalized least-squares solve, $z' = z - o$, and $\eta$ is
+reconstructed as $X\beta + o$ afterward. The solver therefore stays offset-unaware, and a
+fit with offset $o$ is identical to folding $o$ into the response on the link scale (a
+closed-form check for the identity link).
+
+### [PSPLINE-PENALTY] P-Spline Penalty (Eilers & Marx 1996)
 
 For 2nd-order differences:
 $$
@@ -946,7 +1290,7 @@ $$
 
 This penalizes curvature: $\lambda \beta^T S \beta \approx \lambda \int (\beta''(x))^2 dx$
 
-### Tensor Product Smooth and Anisotropic Penalty
+### [TENSOR-PENALTY] Tensor Product Smooth and Anisotropic Penalty
 
 For a bivariate smooth $f(x_1, x_2)$ built from marginal bases $B_1 \in \mathbb{R}^{n \times k_1}$ and $B_2 \in \mathbb{R}^{n \times k_2}$, the joint basis is the **row-wise Kronecker product** of the marginals:
 $$
@@ -964,13 +1308,13 @@ $$
 $$
 $S^{(1)}$ penalizes roughness in the $x_1$ direction at every $x_2$ slice; $S^{(2)}$ vice versa. Choosing two $\lambda$'s lets the GCV/REML routine pick different smoothness for each margin (Wood 2017, §5.6).
 
-The sum-to-zero constraint of §5.1 is applied **per margin** before the Kronecker product when an intercept is present:
+The sum-to-zero constraint of [SUM-TO-ZERO] is applied **per margin** before the Kronecker product when an intercept is present:
 $$
 B_{1,\mathrm{new}} = B_1 Z_1,\;\; B_{2,\mathrm{new}} = B_2 Z_2,\;\; S^{(1)} = (Z_1^T S_1 Z_1) \otimes I_{k_2 - 1},\;\; S^{(2)} = I_{k_1 - 1} \otimes (Z_2^T S_2 Z_2).
 $$
 Source: `src/fitting/assembler.rs:44-102`, `src/splines.rs:8-41`.
 
-### Random Effect Penalty
+### [RANDEF-PENALTY] Random Effect Penalty
 
 For an observation-to-group map $g : \{1, \ldots, n\} \to \{1, \ldots, G\}$, the design matrix is the binary indicator
 $$
@@ -981,7 +1325,7 @@ Coupled with the **identity penalty** $S = I_G$, the model
 $$
 \eta = \mathbf{1} \beta_0 + Z \alpha, \qquad \lambda \alpha^T \alpha = \lambda \sum_{g=1}^G \alpha_g^2
 $$
-is equivalent to the Bayesian random-intercept prior $\alpha_g \sim N(0, 1/\lambda)$ — the ridge-penalized empirical Bayes interpretation. Since each row of $Z$ sums to 1, the sum-to-zero reparameterization of §5.1 is again applied when an intercept is present:
+is equivalent to the Bayesian random-intercept prior $\alpha_g \sim N(0, 1/\lambda)$ — the ridge-penalized empirical Bayes interpretation. Since each row of $Z$ sums to 1, the sum-to-zero reparameterization of [SUM-TO-ZERO] is again applied when an intercept is present:
 $$
 Z_{\mathrm{new}} = Z\,Z_{\mathrm{c}} \in \mathbb{R}^{n \times (G-1)}, \qquad Z_{\mathrm{c}}^T I_G Z_{\mathrm{c}} = I_{G-1}.
 $$
@@ -989,7 +1333,7 @@ Source: `src/fitting/assembler.rs:103-126`.
 
 ---
 
-### 5.1 Block-Sparse Penalty Matrices
+### [BLOCK-SPARSE] Block-Sparse Penalty Matrices
 
 In practice, penalty matrices $S_j$ are often **block-sparse**: they only penalize a subset of the coefficient vector. For example, if the model has an intercept, linear terms, and a smooth term:
 
@@ -1080,6 +1424,56 @@ where $H = X(X^TWX + \lambda S)^{-1}X^TWX$ is the hat matrix.
 - **Numerical safeguards**:
   - Clamp $\mu \in [10^{-10}, 1-10^{-10}]$ before applying link
   - Clamp $\eta \in [-30, 30]$ to prevent overflow in inverse
+
+### Probit Link
+- **Function**: $g(\mu) = \Phi^{-1}(\mu)$, the standard-normal quantile
+- **Inverse**: $g^{-1}(\eta) = \Phi(\eta)$
+- **Domain**: $\mu \in (0, 1)$
+- **Use**: Binomial probability — the latent-normal alternative to logit (econometrics, bioassay)
+- **Derivative**: $\frac{d\mu}{d\eta} = \phi(\eta) = \frac{1}{\sqrt{2\pi}}e^{-\eta^2/2}$, the standard-normal density
+- **Reuse**: $\Phi$ is the same `erf`-based CDF used by `Gaussian::cdf`; $\Phi^{-1}$ is `math::std_normal_quantile`
+- **Numerical safeguards**: clamp $\mu \in [10^{-10}, 1-10^{-10}]$, $\eta \in [-30, 30]$
+
+### Complementary Log-Log Link
+- **Function**: $g(\mu) = \log(-\log(1-\mu))$
+- **Inverse**: $g^{-1}(\eta) = 1 - \exp(-e^{\eta})$
+- **Domain**: $\mu \in (0, 1)$ (asymmetric: approaches the bounds at different rates)
+- **Use**: discrete-time survival / complementary-risk, asymmetric rare-event data
+- **Derivative**: $\frac{d\mu}{d\eta} = \exp(\eta - e^{\eta})$
+- **Numerical safeguards**: clamp $\eta \in [-30, 30]$ before the inner $\exp$
+
+### Inverse Link
+- **Function**: $g(\mu) = 1/\mu$
+- **Inverse**: $g^{-1}(\eta) = 1/\eta$
+- **Domain**: $\mu \neq 0$ ($\mu$ and $\eta$ share a sign)
+- **Use**: canonical link for the Gamma family
+- **Derivative**: $\frac{d\mu}{d\eta} = -1/\eta^2$
+- **Numerical safeguard**: keep $|\eta| \ge 10^{-10}$ (sign-preserving floor) so $1/\eta$ stays finite
+
+### Inverse-Square Link
+- **Function**: $g(\mu) = 1/\mu^2$
+- **Inverse**: $g^{-1}(\eta) = \eta^{-1/2}$
+- **Domain**: $\mu > 0$, $\eta > 0$
+- **Use**: positive responses (e.g. an inverse-Gaussian mean)
+- **Derivative**: $\frac{d\mu}{d\eta} = -\tfrac{1}{2}\eta^{-3/2}$
+- **Numerical safeguard**: floor $\eta \ge 10^{-10}$
+
+### Square-Root Link
+- **Function**: $g(\mu) = \sqrt{\mu}$
+- **Inverse**: $g^{-1}(\eta) = \eta^2$
+- **Domain**: $\mu \ge 0$
+- **Use**: Poisson variance-stabilizing link
+- **Derivative**: $\frac{d\mu}{d\eta} = 2\eta$
+
+### Cauchit Link
+- **Function**: $g(\mu) = \tan(\pi(\mu - \tfrac{1}{2}))$
+- **Inverse**: $g^{-1}(\eta) = \tfrac{1}{2} + \frac{\arctan(\eta)}{\pi}$
+- **Domain**: $\mu \in (0, 1)$
+- **Use**: bounded probability with heavier tails than logit/probit — robust to extreme points in the linear predictor
+- **Derivative**: $\frac{d\mu}{d\eta} = \frac{1}{\pi(1 + \eta^2)}$
+- **Numerical safeguards**: clamp $\mu \in [10^{-10}, 1-10^{-10}]$, $\eta \in [-30, 30]$
+
+All six are selectable by name (`"probit"`, `"cloglog"`, `"inverse"`, `"inverse_square"`, `"sqrt"`, `"cauchit"`) via `FitConfig::links` and reconstructed through `distributions::link_from_name`; each supplies the analytic $\frac{d\mu}{d\eta}$ above so the IRLS weights below are exact rather than finite-differenced.
 
 ### Chain Rule for Link Functions
 
@@ -1182,7 +1576,7 @@ This ensures $\lambda_j > 0$ without explicit constraints.
 
 ---
 
-### 8.1 Efficient PWLS Solution via Cholesky Decomposition
+### [PWLS-CHOLESKY] Efficient PWLS Solution via Cholesky Decomposition
 
 The penalized weighted least squares problem:
 $$
@@ -1247,7 +1641,7 @@ This avoids forming the full $p \times p$ products when $S_{\text{block}} \ll p$
 
 ---
 
-### 8.2 REML / Laplace-Approximate Marginal Likelihood
+### [REML-LAML] REML / Laplace-Approximate Marginal Likelihood
 
 GCV is one option for picking the smoothing parameters; the default `criterion` in `FitConfig` is `Reml` (see `src/fitting/mod.rs:43-54`). REML in this setting is the Laplace-approximate marginal likelihood (LAML) of Wood (2011), evaluated at the working PWLS step. The selector is exposed as a three-variant enum:
 
@@ -1255,7 +1649,7 @@ GCV is one option for picking the smoothing parameters; the default `criterion` 
 pub enum SmoothingCriterion { Gcv, Reml /* default */, FellnerSchall }
 ```
 
-`Gcv` minimizes the score of §8 via L-BFGS on $\log \lambda$. `Reml` minimizes $-V_r$ (below) via L-BFGS on $\log \lambda$. `FellnerSchall` targets the same $-V_r$ via a deterministic multiplicative fixed-point (§8.3).
+`Gcv` minimizes the score of §8 via L-BFGS on $\log \lambda$. `Reml` minimizes $-V_r$ (below) via L-BFGS on $\log \lambda$. `FellnerSchall` targets the same $-V_r$ via a deterministic multiplicative fixed-point ([FELLNER-SCHALL]).
 
 #### The LAML objective
 
@@ -1267,7 +1661,7 @@ $$
 $$
 where $|\,\cdot\,|_+$ denotes the **pseudo-determinant** — the product of strictly positive eigenvalues — required because $S_\lambda$ is rank-deficient (its null space contains the unpenalized polynomial directions: constants for order-1 penalties, lines for order-2, etc., plus the unpenalized intercept and linear columns).
 
-$\log|X^T W X + S_\lambda|$ is computed via `log_det_robust` (see §8.1): Cholesky on the fast path; symmetric eigensolver fallback for near-PD matrices with tiny negative floating-point pivots (common for evenly-spaced B-spline designs), clamping eigenvalues to $10^{-300}$ before the log so the REML optimizer naturally avoids degenerate $\lambda$ regions instead of crashing.
+$\log|X^T W X + S_\lambda|$ is computed via `log_det_robust` (see [PWLS-CHOLESKY]): Cholesky on the fast path; symmetric eigensolver fallback for near-PD matrices with tiny negative floating-point pivots (common for evenly-spaced B-spline designs), clamping eigenvalues to $10^{-300}$ before the log so the REML optimizer naturally avoids degenerate $\lambda$ regions instead of crashing.
 
 Source: `src/fitting/solver.rs:170-250` (`RemlCost`); `src/linalg.rs` (`log_det_robust`).
 
@@ -1309,7 +1703,7 @@ with $V = (X^T W X + S_\lambda)^{-1}$. The implementation evaluates this analyti
 
 Source: `src/fitting/solver.rs:214-303`.
 
-### 8.3 Fellner–Schall Multiplicative Fixed Point
+### [FELLNER-SCHALL] Fellner–Schall Multiplicative Fixed Point
 
 Wood & Fasiolo (2017) show that for the LAML target, the update
 $$
@@ -1337,7 +1731,7 @@ The tolerance is set at $10^{-4}$ (rather than the looser $10^{-3}$) because the
 - **REML** (default): preferred for stability; the Laplace-approximate marginal likelihood is asymptotically equivalent to true REML for the working PWLS model, and tends to undersmooth less than GCV at moderate sample sizes.
 - **FellnerSchall**: same target as REML but with a deterministic multiplicative update — no L-BFGS, no line search. Fast and well-behaved for well-conditioned problems; can stall if the numerator drifts to its floor.
 
-### 8.4 Collapse-Guarded Restart
+### [RESTART-GUARD] Collapse-Guarded Restart
 
 Across all three criteria the $\lambda$-objective ($-V_r$ or the GCV score) for a single P-spline is **unimodal** in $\log\lambda$, with a single interior optimum, but it flattens into a near-horizontal **shelf** at large $\lambda$ where the smooth has been driven entirely onto its penalty null space (effective degrees of freedom $\to$ the null dimension; for an order-2 penalty after centering, a straight line). On that shelf the gradient $\approx 0$ and, for Fellner–Schall, $\hat\beta^T S_j \hat\beta \to 0$ so the multiplicative ratio explodes upward — both optimizers can become **stuck** there. Because the floating-point reduction order of the dense linear algebra is not deterministic under OpenBLAS, a borderline step can occasionally tip onto the shelf, producing a rare, nondeterministic **collapse** of an otherwise-recoverable smooth.
 
@@ -1360,6 +1754,7 @@ A key feature distinguishing different distributions is how variance relates to 
 | **Gaussian** | $\mu$ | $\sigma^2$ | Constant (homoskedastic) |
 | **Poisson** | $\mu$ | $\mu$ | Equidispersion: $\text{Var} = \text{Mean}$ |
 | **Gamma** | $\mu$ | $\mu^2\sigma^2$ | Proportional to $\mu^2$ (constant CV) |
+| **Weibull** | $\mu\Gamma(1+1/\sigma)$ | $\mu^2[\Gamma(1+2/\sigma)-\Gamma(1+1/\sigma)^2]$ | Shape $\sigma$ controls skew and tail |
 | **Negative Binomial** | $\mu$ | $\mu + \sigma\mu^2$ | Overdispersion relative to Poisson |
 | **Binomial** | $n\mu$ | $n\mu(1-\mu)$ | Quadratic in mean, max at $\mu=0.5$ |
 | **Beta** | $\mu$ | $\frac{\mu(1-\mu)}{1+\phi}$ | Max at $\mu=0.5$, decreases with $\phi$ |
@@ -1462,7 +1857,7 @@ Using a shared global scale — dividing the maximum change across all parameter
 
 ## 11. Model Selection and Diagnostics
 
-### 11.1 Information Criteria
+### [INFO-CRITERIA] Information Criteria
 
 **Akaike Information Criterion (AIC)**:
 $$
@@ -1485,7 +1880,7 @@ $$
 
 BIC penalizes complexity more heavily than AIC for $n > 7$.
 
-### 11.2 Deviance
+### [DEVIANCE] Deviance
 
 The **deviance** measures lack of fit:
 $$
@@ -1499,21 +1894,21 @@ $$
 D_1 - D_2 \sim \chi^2_{\text{EDF}_2 - \text{EDF}_1}
 $$
 
-### 11.3 Residuals
+### [RESIDUALS] Residuals
 
 **Quantile (randomized quantile) residuals** (Dunn & Smyth 1996). For a **continuous** response:
 $$
 r_i = \Phi^{-1}(F(y_i | \hat{\theta}_i))
 $$
 
-where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF. If the model is correct, $r_i \sim N(0,1)$ by the probability integral transform (§1.10).
+where $F$ is the fitted CDF and $\Phi^{-1}$ is the inverse standard normal CDF. If the model is correct, $r_i \sim N(0,1)$ by the probability integral transform ([CDF-TRIO]).
 
 For a **discrete** response, $F$ jumps, so $F(Y)$ is not uniform; the *randomized* PIT spreads each atom across its jump interval. With $v_i \sim \text{Uniform}(0,1)$:
 $$
 a_i = F(y_i - 1 \mid \hat\theta_i), \quad b_i = F(y_i \mid \hat\theta_i), \quad u_i = a_i + v_i\,(b_i - a_i), \quad r_i = \Phi^{-1}(u_i).
 $$
 
-The fitted CDF $F$, quantile $Q$, and the `is_discrete` flag that selects the branch are provided by the distributional trio of §1.10; the right-continuity identity $F(k) - F(k-1) = f(k)$ is what makes $u_i$ uniform on the jump interval.
+The fitted CDF $F$, quantile $Q$, and the `is_discrete` flag that selects the branch are provided by the distributional trio of [CDF-TRIO]; the right-continuity identity $F(k) - F(k-1) = f(k)$ is what makes $u_i$ uniform on the jump interval.
 
 **Deviance residuals**:
 $$
@@ -1527,7 +1922,7 @@ $$
 r_i^{(P)} = \frac{y_i - \hat{\mu}_i}{\sqrt{\widehat{\text{Var}}(Y_i)}}
 $$
 
-### 11.4 Worm Plots
+### [WORM-PLOTS] Worm Plots
 
 For each parameter $\theta_k$, plot quantile residuals against fitted quantiles:
 - X-axis: Normal quantiles $\Phi^{-1}((i-0.5)/n)$
@@ -1539,11 +1934,11 @@ If the model is correct, points should lie on a horizontal line at zero. Systema
 - S-shape: Skewness issues
 - Linear trend: Location shift
 
-### 11.5 Q-Q Plots
+### [QQ-PLOTS] Q-Q Plots
 
 Plot theoretical quantiles against sample quantiles of residuals. Should be approximately linear if residuals are normal.
 
-### 11.6 Goodness of Link Test
+### [LINK-TEST] Goodness of Link Test
 
 To test if link $g$ is appropriate, fit augmented model:
 $$
@@ -1560,42 +1955,49 @@ A reverse index from mathematical concept to the canonical implementation, for c
 
 | Concept (this doc) | Source location |
 | --- | --- |
-| Backfitting outer loop with per-parameter convergence (§4.1) | `src/fitting/mod.rs` (`fit_gamlss`) |
-| P-IRLS inner step (§4.2) | `src/fitting/scoring.rs` (`step`) |
-| `MIN_WEIGHT`, `MAX_STEP` (§4.4) | `src/fitting/scoring.rs:28,32` |
-| Prior / observation weights (§4.5) | `src/fitting/scoring.rs` (`step`) |
-| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` (§4.4) | `src/distributions/links.rs:8-12` |
+| Backfitting outer loop with per-parameter convergence ([BACKFIT]) | `src/fitting/mod.rs` (`fit_gamlss`) |
+| P-IRLS inner step ([PIRLS-INNER]) | `src/fitting/scoring.rs` (`step`) |
+| `MIN_WEIGHT`, `MAX_STEP` ([INNER-SAFEGUARDS]) | `src/fitting/scoring.rs:28,32` |
+| Prior / observation weights ([PRIOR-WEIGHTS]) | `src/fitting/scoring.rs` (`step`) |
+| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` ([INNER-SAFEGUARDS]) | `src/distributions/links.rs:8-12` |
 | `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
-| Gaussian derivatives (§1.1) | `src/distributions/gaussian.rs` |
-| Student-t derivatives (§1.2) | `src/distributions/student_t.rs` |
-| Poisson derivatives (§1.3) | `src/distributions/poisson.rs` |
-| Gamma derivatives (§1.4) | `src/distributions/gamma.rs` |
-| Negative Binomial derivatives (§1.5) | `src/distributions/negative_binomial.rs` |
-| Beta derivatives (§1.6) | `src/distributions/beta.rs` |
-| Binomial derivatives (§1.7) | `src/distributions/binomial.rs` |
-| Ordered categorical derivatives (§1.8) | `src/distributions/ocat.rs` |
+| Gaussian derivatives ([GAUSSIAN]) | `src/distributions/gaussian.rs` |
+| Student-t derivatives ([STUDENT-T]) | `src/distributions/student_t.rs` |
+| Poisson derivatives ([POISSON]) | `src/distributions/poisson.rs` |
+| Gamma derivatives ([GAMMA]) | `src/distributions/gamma.rs` |
+| Weibull derivatives ([WEIBULL]) | `src/distributions/weibull.rs` |
+| Negative Binomial derivatives ([NEG-BINOMIAL]) | `src/distributions/negative_binomial.rs` |
+| Beta derivatives ([BETA]) | `src/distributions/beta.rs` |
+| Binomial derivatives ([BINOMIAL]) | `src/distributions/binomial.rs` |
+| Ordered categorical derivatives ([OCAT]) | `src/distributions/ocat.rs` |
+| Censoring wrapper ([STRUCT-1]) | `src/distributions/censored.rs` |
+| Truncation wrapper ([STRUCT-2]) | `src/distributions/truncated.rs` |
+| Hurdle wrapper ([STRUCT-3]) | `src/distributions/hurdle.rs` |
+| Analytic CDF $\eta$-derivatives + numeric fallback ([STRUCT-CDF-ETA]) | `src/distributions/{gaussian,student_t,gamma}.rs` (`cdf_eta_derivatives`), `src/distributions/structural.rs` |
+| Finite mixtures via EM ([STRUCT-4]) | `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`) |
+| `FamilyDescriptor` serialization (SER-1) | `src/distributions/descriptor.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions/mod.rs` |
-| CDF / PDF / quantile / `is_discrete` trait methods (§1.10) | `src/distributions/mod.rs` + per-family files |
-| `discrete_quantile` bracket+bisection (§1.10) | `src/distributions/mod.rs` (`discrete_quantile`) |
-| B-spline basis (de Boor) & uniform knots (§5.0) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
-| Sum-to-zero Householder $Z$ (§5.1) | `src/splines.rs` (`sum_to_zero_basis`) |
+| CDF / PDF / quantile / `is_discrete` trait methods ([CDF-TRIO]) | `src/distributions/mod.rs` + per-family files |
+| `discrete_quantile` bracket+bisection ([CDF-TRIO]) | `src/distributions/mod.rs` (`discrete_quantile`) |
+| B-spline basis (de Boor) & uniform knots ([BSPLINE-BASIS]) | `src/splines.rs` (`create_basis_matrix`, `evaluate_basis_functions_into`, `select_knots`) |
+| Sum-to-zero Householder $Z$ ([SUM-TO-ZERO]) | `src/splines.rs` (`sum_to_zero_basis`) |
 | Difference penalty matrix (§5) | `src/splines.rs` (`create_penalty_matrix`) |
 | Tensor product assembly (§5) | `src/fitting/assembler.rs` |
 | Random effect assembly (§5) | `src/fitting/assembler.rs` |
-| Block-sparse penalty (§5.1) | `src/fitting/assembler.rs`, `src/types/newtypes.rs` |
-| PWLS / Cholesky solve (§8.1) | `src/fitting/solver.rs` (`fit_pwls`, `fit_pwls_with_grad_info`) |
-| Robust log-det fallback (§8.1, §8.2) | `src/linalg.rs` (`log_det_robust`) |
+| Block-sparse penalty ([BLOCK-SPARSE]) | `src/fitting/assembler.rs`, `src/types/newtypes.rs` |
+| PWLS / Cholesky solve ([PWLS-CHOLESKY]) | `src/fitting/solver.rs` (`fit_pwls`, `fit_pwls_with_grad_info`) |
+| Robust log-det fallback ([PWLS-CHOLESKY], [REML-LAML]) | `src/linalg.rs` (`log_det_robust`) |
 | Initial-$\lambda$ trace-ratio heuristic (§10) | `src/fitting/mod.rs`, `src/fitting/solver.rs` (`initial_log_lambda`) |
 | EDF (§6) | `src/fitting/solver.rs` (`fit_pwls_with_grad_info`) |
 | GCV cost and gradient (§8) | `src/fitting/solver.rs` (`GamlssCost`) |
 | GCV gradient finite-difference test | `src/fitting/solver.rs` (`gcv_gradient_matches_finite_diff`) |
 | GCV L-BFGS driver (§8) | `src/fitting/solver.rs` (`run_optimization`) |
-| REML / LAML cost and gradient (§8.2) | `src/fitting/solver.rs` (`RemlCost`) |
+| REML / LAML cost and gradient ([REML-LAML]) | `src/fitting/solver.rs` (`RemlCost`) |
 | REML gradient finite-difference test | `src/fitting/solver.rs` (`reml_gradient_matches_finite_diff`) |
-| Penalty grouped pseudo-determinant / pseudo-inverse (§8.2) | `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`) |
-| Fellner–Schall iteration (§8.3) | `src/fitting/solver.rs` (`run_optimization_fellner_schall`) |
-| `SmoothingCriterion` enum (§8.2) | `src/fitting/mod.rs` |
+| Penalty grouped pseudo-determinant / pseudo-inverse ([REML-LAML]) | `src/fitting/solver.rs` (`penalty_eigen`, `penalty_nonzero_block_range`) |
+| Fellner–Schall iteration ([FELLNER-SCHALL]) | `src/fitting/solver.rs` (`run_optimization_fellner_schall`) |
+| `SmoothingCriterion` enum ([REML-LAML]) | `src/fitting/mod.rs` |
 | Defaults (`max_iterations=200`, `tolerance=1e-3`) | `src/fitting/mod.rs:31-32` |
 | Diagnostics (AIC/BIC/EDF/residuals, §11) | `src/fitting/diagnostics.rs` |
 
@@ -1609,7 +2011,7 @@ Symbols used throughout this document.
 | --- | --- |
 | $y, Y$ | Response value / random variable |
 | $n$ | Number of observations |
-| $p$ | Total number of coefficients across all terms; also (in §5.0) B-spline degree |
+| $p$ | Total number of coefficients across all terms; also (in [BSPLINE-BASIS]) B-spline degree |
 | $P$ | Number of distribution parameters (e.g.\ $P = 2$ for Gaussian) |
 | $\theta_k$ | $k$-th distribution parameter ($\mu, \sigma, \nu, \phi$) |
 | $\mu, \sigma, \nu, \phi$ | Location, scale, degrees of freedom (Student-t), precision (Beta) |
@@ -1618,13 +2020,13 @@ Symbols used throughout this document.
 | $\delta_k$ | $k$-th threshold increment parameter fed to the RS loop: $\theta_1 = \delta_1$ (identity link), $\theta_k = \theta_{k-1} + e^{\delta_k}$ for $k \ge 2$ (log link) |
 | $F_k, f_k$ | Cumulative-logit CDF and logistic density at threshold $\theta_k$: $F_k = \mathrm{logistic}(\theta_k - \mu)$, $f_k = F_k(1-F_k)$ |
 | $\pi_r$ | Category probability in `Ocat`: $\pi_r = F_r - F_{r-1}$, $F_0=0$, $F_R=1$ |
-| $F(y\mid\theta)$ | Cumulative distribution $P(Y\le y\mid\theta)$; right-continuous step at $\lfloor y\rfloor$ for discrete families (§1.10) |
-| $f(y\mid\theta)$ | Density (continuous) or mass (discrete) $=\exp(\ell_{\text{pointwise}})$ (§1.10) |
-| $Q(p\mid\theta)$ | Quantile / inverse CDF: $\inf\{y:F(y\mid\theta)\ge p\}$ (§1.10) |
+| $F(y\mid\theta)$ | Cumulative distribution $P(Y\le y\mid\theta)$; right-continuous step at $\lfloor y\rfloor$ for discrete families ([CDF-TRIO]) |
+| $f(y\mid\theta)$ | Density (continuous) or mass (discrete) $=\exp(\ell_{\text{pointwise}})$ ([CDF-TRIO]) |
+| $Q(p\mid\theta)$ | Quantile / inverse CDF: $\inf\{y:F(y\mid\theta)\ge p\}$ ([CDF-TRIO]) |
 | $P(a,x),\, Q(a,x)$ | Regularized lower / upper incomplete gamma $\gamma(a,x)/\Gamma(a)$, $1-P(a,x)$ |
 | $I_x(a,b)$ | Regularized incomplete beta $B(x;a,b)/B(a,b)$ |
 | $\Phi, \Phi^{-1}$ | Standard normal CDF and its inverse (quantile) |
-| $\mathrm{prior}_i$ | Per-observation prior / observation weight (§4.5); defaults to 1 |
+| $\mathrm{prior}_i$ | Per-observation prior / observation weight ([PRIOR-WEIGHTS]); defaults to 1 |
 | $\mathrm{safe\_w}_i$ | Floored Fisher weight: $\max(w_i, \mathrm{MIN\_WEIGHT})$ |
 | $g, g^{-1}$ | Link function and its inverse |
 | $\eta = g(\theta)$ | Linear predictor for a distribution parameter |
@@ -1648,6 +2050,7 @@ Symbols used throughout this document.
 | $\odot$ (in §5) | Row-wise Kronecker product (one row of $B_1 \otimes B_2$ per row index) |
 | $\mathbf{1}_k$ | Column vector of $k$ ones |
 | $I_k$ | $k \times k$ identity matrix |
+| `[TAG]` | Cross-reference to the named subsection whose heading carries that bracketed tag (e.g. `[CDF-TRIO]`); chapter-level references use §N |
 
 ---
 
@@ -1669,12 +2072,12 @@ Symbols used throughout this document.
 
 8. Craven, P., & Wahba, G. (1979). Smoothing noisy data with spline functions. *Numerische Mathematik*, 31, 377-403. — Original GCV.
 
-9. McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman and Hall. — IRLS / Fisher scoring derivation underlying §4.3.
+9. McCullagh, P., & Nelder, J. A. (1989). *Generalized Linear Models* (2nd ed.). Chapman and Hall. — IRLS / Fisher scoring derivation underlying [WORKING-RESPONSE].
 
 10. Abramowitz, M., & Stegun, I. A. (1972). *Handbook of Mathematical Functions*. Dover Publications. — Digamma / trigamma asymptotic expansions (6.3.18, 6.4.11).
 
 11. Piegl, L., & Tiller, W. (1997). *The NURBS Book* (2nd ed.). Springer. — Algorithm A2.2: de Boor–Cox recurrence for stable B-spline evaluation; the canonical reference for the `left`/`right` array structure used in `evaluate_basis_functions_into`.
 
-12. McCullagh, P. (1980). Regression models for ordinal data. *Journal of the Royal Statistical Society: Series B*, 42(2), 109-142. — Proportional-odds / cumulative-logit model; foundational reference for the `Ocat` distribution (§1.8).
+12. McCullagh, P. (1980). Regression models for ordinal data. *Journal of the Royal Statistical Society: Series B*, 42(2), 109-142. — Proportional-odds / cumulative-logit model; foundational reference for the `Ocat` distribution ([OCAT]).
 
-13. Dunn, P. K., & Smyth, G. K. (1996). Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, 5(3), 236-244. — Randomized probability integral transform for discrete responses (§1.10, §11.3).
+13. Dunn, P. K., & Smyth, G. K. (1996). Randomized quantile residuals. *Journal of Computational and Graphical Statistics*, 5(3), 236-244. — Randomized probability integral transform for discrete responses ([CDF-TRIO], [RESIDUALS]).

@@ -12,7 +12,8 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use crate::distributions::{
-    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
+    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, Weibull, BCCG,
+    BCPE, BCT,
 };
 use crate::ffi::FamilyType;
 use crate::fitting::selection::{self, Direction, StepScope};
@@ -42,6 +43,10 @@ py_distribution!(PyGamma, "Gamma");
 py_distribution!(PyNegativeBinomial, "NegativeBinomial");
 py_distribution!(PyBeta, "Beta");
 py_distribution!(PyStudentT, "StudentT");
+py_distribution!(PyWeibull, "Weibull");
+py_distribution!(PyBCCG, "BCCG");
+py_distribution!(PyBCT, "BCT");
+py_distribution!(PyBCPE, "BCPE");
 
 /// Binomial carries `n_trials` state, so it gets a manual `pyclass`.
 #[pyclass(name = "Binomial", frozen)]
@@ -90,8 +95,17 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
-        let term_list: &Bound<pyo3::types::PyList> = terms.cast()?;
-        formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
+        // DATA-5: each parameter's value may be an R/mgcv-style **formula string**
+        // (`"y ~ s(x) + factor(g)"`) for ergonomics, or the structured list of term
+        // tuples. A `str` extracts cleanly; anything else is treated as a term list.
+        if let Ok(formula_str) = terms.extract::<String>() {
+            let (_response, parsed) = crate::parse_formula_string(&formula_str)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            formula.add_terms(param_name, parsed);
+        } else {
+            let term_list: &Bound<pyo3::types::PyList> = terms.cast()?;
+            formula.add_terms(param_name, py_parse::parse_terms(term_list)?);
+        }
     }
     Ok(formula)
 }
@@ -141,6 +155,26 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     if let Some(v) = config.get_item("gd_tolerance")? {
         fit_config.gd_tolerance = v.extract()?;
     }
+    if let Some(v) = config.get_item("links")? {
+        // {param_name: link_name}, e.g. {"mu": "probit"}. Link names are validated
+        // against the registry at fit time, mirroring the criterion handling above.
+        let links: std::collections::HashMap<String, String> = v.extract().map_err(|_| {
+            PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
+        })?;
+        fit_config.links.extend(links);
+    }
+    if let Some(v) = config.get_item("na_action")? {
+        let s: String = v.extract()?;
+        fit_config.na_action = match s.to_ascii_lowercase().as_str() {
+            "drop_rows" | "drop" | "omit" => crate::fitting::NaAction::DropRows,
+            "fail" | "error" => crate::fitting::NaAction::Fail,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown na_action '{other}', expected 'drop_rows' or 'fail'"
+                )))
+            }
+        };
+    }
     Ok(fit_config)
 }
 
@@ -181,12 +215,24 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyStudentT>>().is_ok() {
         return Ok(FamilyType::StudentT(StudentT::new()));
     }
+    if family_obj.extract::<PyRef<PyWeibull>>().is_ok() {
+        return Ok(FamilyType::Weibull(Weibull::new()));
+    }
+    if family_obj.extract::<PyRef<PyBCCG>>().is_ok() {
+        return Ok(FamilyType::BCCG(BCCG::new()));
+    }
+    if family_obj.extract::<PyRef<PyBCT>>().is_ok() {
+        return Ok(FamilyType::BCT(BCT::new()));
+    }
+    if family_obj.extract::<PyRef<PyBCPE>>().is_ok() {
+        return Ok(FamilyType::BCPE(BCPE::new()));
+    }
     if let Ok(o) = family_obj.extract::<PyRef<PyOcat>>() {
         return Ok(FamilyType::Ocat(Ocat::new(o.n_categories)));
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), or Ocat(n_categories)",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), Weibull(), BCCG(), BCT(), BCPE(), or Ocat(n_categories)",
     ))
 }
 
@@ -716,6 +762,10 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyNegativeBinomial>()?;
     m.add_class::<PyBeta>()?;
     m.add_class::<PyStudentT>()?;
+    m.add_class::<PyWeibull>()?;
+    m.add_class::<PyBCCG>()?;
+    m.add_class::<PyBCT>()?;
+    m.add_class::<PyBCPE>()?;
     m.add_class::<PyOcat>()?;
     Ok(())
 }

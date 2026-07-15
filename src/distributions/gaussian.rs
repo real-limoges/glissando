@@ -96,6 +96,41 @@ impl Distribution for Gaussian {
         }))
     }
 
+    fn cdf_eta_derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> super::CdfEtaResult {
+        // Location-scale derivatives of F = Φ(z), z = (y−μ)/σ, std-normal pdf φ,
+        // φ'(z) = −z·φ(z). Both parameters are closed form:
+        //   μ (identity):  ∂F/∂η = −φ/σ,        ∂²F/∂η² = φ'/σ² = −zφ/σ².
+        //   σ (log):       ∂F/∂η = −zφ,         ∂²F/∂η² = zφ + z²φ' = zφ(1 − z²).
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let inv_sqrt_2pi = 1.0 / (2.0 * std::f64::consts::PI).sqrt();
+
+        let mut d1_mu = Array1::<f64>::zeros(y.len());
+        let mut d2_mu = Array1::<f64>::zeros(y.len());
+        let mut d1_sigma = Array1::<f64>::zeros(y.len());
+        let mut d2_sigma = Array1::<f64>::zeros(y.len());
+        for i in 0..y.len() {
+            if !y[i].is_finite() {
+                continue; // ±∞ bound: F saturates, all derivatives vanish
+            }
+            let s = sigma[i].max(MIN_POSITIVE);
+            let z = (y[i] - mu[i]) / s;
+            let phi = inv_sqrt_2pi * (-0.5 * z * z).exp();
+            d1_mu[i] = -phi / s;
+            d2_mu[i] = -z * phi / (s * s);
+            d1_sigma[i] = -z * phi;
+            d2_sigma[i] = z * phi * (1.0 - z * z);
+        }
+        Ok(HashMap::from([
+            ("mu".to_string(), (d1_mu, d2_mu)),
+            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+        ]))
+    }
+
     fn quantile(
         &self,
         p: &Array1<f64>,
@@ -118,8 +153,9 @@ impl Distribution for Gaussian {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
     #[cfg(not(target_arch = "wasm32"))]
@@ -199,6 +235,17 @@ mod tests {
         ];
         check_score_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_eta_derivatives_match_finite_diff_gaussian() {
+        let y = array![-1.5, 0.0, 0.7, 2.3];
+        let owned = [
+            ("mu", array![-0.5, 0.2, 1.0, 1.5]),
+            ("sigma", array![1.0, 1.3, 0.8, 1.1]),
+        ];
+        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
+        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
     }
 
     #[test]
