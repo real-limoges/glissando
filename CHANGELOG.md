@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Basin probes for the λ collapse/bound guard include per-coordinate
   seeds**, rescuing anisotropic tensor corner traps (one margin pinned at
   the ceiling while the true LAML optimum has it interior).
+- **The tensor (multi-penalty) basin probe fires only on the cheap
+  collapse/bound triggers again**, reverting a change that ran it
+  *unconditionally on every outer cycle*. Each firing runs a `7^k` grid plus
+  several L-BFGS/Fellner–Schall solves (an eigendecomposition per penalty
+  block), so per-cycle probing cost ≈30 s (OpenBLAS) to >2 min (pure-rust) on
+  a default 10×10 tensor fit in an unoptimized build — hanging the debug test
+  suites — to guard a merely-large-interior-λ corner that only the `#[ignore]`d
+  `benchmark/run_comparison.sh` mgcv sweep checks. Ceiling/floor corners are
+  still caught by the bound trigger; re-run the mgcv comparison before relying
+  on tensor EDF parity for a new seed.
 - Prediction on a model whose stored coefficients no longer match the
   rebuilt design (old serialized `te()`/`pc` bases) returns a typed
   `GamlssError::Shape` with a migration hint instead of panicking.

@@ -146,7 +146,7 @@ fn random_effect_unseen_level_errors() {
 #[test]
 fn tensor_with_intercept_recovers_main_effects() {
     let mut rng = Generator::new(2718);
-    let n = 900;
+    let n = 300;
     let x1: Vec<f64> = (0..n)
         .map(|_| rng.uniform() * std::f64::consts::TAU)
         .collect();
@@ -166,7 +166,7 @@ fn tensor_with_intercept_recovers_main_effects() {
     let formula = Formula::new()
         .with_terms(
             "mu",
-            vec![Term::Intercept, Term::smooth(Smooth::tensor("x1", "x2"))],
+            vec![Term::Intercept, common::tensor("x1", "x2", 5, 5)],
         )
         .with_terms("sigma", vec![Term::Intercept]);
 

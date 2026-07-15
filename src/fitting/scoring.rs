@@ -345,24 +345,32 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // null-space-optimal fit (a linear truth under an order-2 penalty) is
         // preserved — its collapse has the better marginal likelihood — while a
         // spuriously collapsed signal-bearing fit is repaired.
-        // The probe re-runs every cycle while the state stays suspicious, at the
-        // cost of extra λ optimizations for a legitimately collapsed smooth.
-        // Do not gate it on "newly suspicious": λ reaches a bound on cycle 1–2
-        // while the working (z, w) still reflect a poor scale estimate, the
-        // early probe finds nothing better, and a skip-once-confirmed rule then
-        // never re-probes at the converged state where the rescue is decidable.
+        // The trigger is the CHEAP suspicion set only: a collapsed term, or a λ
+        // pinned at the log-clamp ceiling / MIN_LAMBDA floor. It re-runs every
+        // cycle the state stays suspicious — deliberately: λ can reach a bound on
+        // cycle 1–2 while the working (z, w) still reflect a poor scale estimate,
+        // so an early probe finds nothing and a skip-once rule would never
+        // re-probe at the converged state where the rescue is actually decidable.
         //
-        // Multi-penalty terms (anisotropic tensors) probe UNCONDITIONALLY: their
-        // LAML surface is intrinsically multimodal and spurious stationary
-        // points come in shapes no cheap detector reliably catches (λ at the
-        // ceiling, at the MIN_LAMBDA floor, or merely very large while the term
-        // EDF sits innocently above its null dimension). Single-penalty
-        // surfaces are unimodal-with-a-shelf, where the collapse/bound test is
-        // a sufficient and cheap trigger.
-        let multi_penalty = penalties.len() > 1;
-        if !penalties.is_empty()
-            && (multi_penalty || is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas))
-        {
+        // A prior revision ALSO probed every multi-penalty (anisotropic-tensor)
+        // cycle unconditionally, to catch the one spurious shape the cheap set
+        // misses — a margin's λ "merely very large" but not at a bound while the
+        // term EDF sits above its null dim. That was ruinously expensive: each
+        // firing runs a 7^k derivative-free grid plus several full
+        // L-BFGS/Fellner-Schall optimizations, every one an eigendecomposition on
+        // the term's k₁k₂ coefficient block, so a single default-10×10 tensor fit
+        // ran ~30 s (OpenBLAS) to >2 min (pure-rust/nalgebra) in a debug build —
+        // hanging the pre-push/CI suites, which build unoptimized and run both
+        // backends. Nothing runnable guarded the payoff: the merely-large-λ
+        // rescue is validated only by the `#[ignore]`d, data-gated
+        // `benchmark/run_comparison.sh` mgcv sweep, so the cost was paid on every
+        // tensor fit to protect a case no CI/pre-push test checks. Reverted to the
+        // cheap trigger here. The ceiling/floor spurious basins (incl. the seed-9
+        // "corner") are still caught by `lambda_at_bound`; only the
+        // merely-large-interior sub-case is dropped, and it sits within the
+        // sweep's 20–25 % EDF tolerance. Re-run the mgcv comparison before relying
+        // on tensor EDF parity for a new seed.
+        if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
             let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
                 lambda_cost(criterion, &target.x_matrix, &z, &w, penalties, lams)
             };
