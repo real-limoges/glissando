@@ -166,25 +166,23 @@ fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
             degree,
             range_1,
             range_2,
-        }) if range_1.is_none() || range_2.is_none() => {
-            Ok(Term::Smooth(Smooth::TensorProduct {
-                col_name_1: col_name_1.clone(),
-                n_splines_1: *n_splines_1,
-                penalty_order_1: *penalty_order_1,
-                col_name_2: col_name_2.clone(),
-                n_splines_2: *n_splines_2,
-                penalty_order_2: *penalty_order_2,
-                degree: *degree,
-                range_1: Some(match range_1 {
-                    Some(r) => *r,
-                    None => finite_range(get_col(data, col_name_1)?, col_name_1)?,
-                }),
-                range_2: Some(match range_2 {
-                    Some(r) => *r,
-                    None => finite_range(get_col(data, col_name_2)?, col_name_2)?,
-                }),
-            }))
-        }
+        }) if range_1.is_none() || range_2.is_none() => Ok(Term::Smooth(Smooth::TensorProduct {
+            col_name_1: col_name_1.clone(),
+            n_splines_1: *n_splines_1,
+            penalty_order_1: *penalty_order_1,
+            col_name_2: col_name_2.clone(),
+            n_splines_2: *n_splines_2,
+            penalty_order_2: *penalty_order_2,
+            degree: *degree,
+            range_1: Some(match range_1 {
+                Some(r) => *r,
+                None => finite_range(get_col(data, col_name_1)?, col_name_1)?,
+            }),
+            range_2: Some(match range_2 {
+                Some(r) => *r,
+                None => finite_range(get_col(data, col_name_2)?, col_name_2)?,
+            }),
+        })),
         Term::Smooth(Smooth::RandomEffect { col_name, levels }) if levels.is_empty() => {
             Ok(Term::Smooth(Smooth::RandomEffect {
                 col_name: col_name.clone(),
