@@ -106,19 +106,21 @@ println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 | `Gaussian` | mu, sigma | identity, log | Continuous data |
 | `StudentT` | mu, sigma, nu | identity, log, floored-log (ν≥2) | Heavy-tailed continuous |
 | `Gamma` | mu, sigma | log, log | Positive continuous |
+| `Weibull` | mu, sigma | log, log | Positive continuous (survival, durations) |
 | `NegativeBinomial` | mu, sigma | log, log | Overdispersed counts |
 | `Beta` | mu, phi | logit, log | Proportions (0, 1) |
 
 ### Usage
 
 ```rust
-use glissando::distributions::{Poisson, Binomial, Gaussian, StudentT, Gamma, NegativeBinomial, Beta};
+use glissando::distributions::{Poisson, Binomial, Gaussian, StudentT, Gamma, Weibull, NegativeBinomial, Beta};
 
 let poisson = Poisson::new();             // Count data
 let binomial = Binomial::new(10);         // Binary/count with 10 trials
 let gaussian = Gaussian::new();           // Continuous data
 let student_t = StudentT::new();          // Heavy-tailed continuous data
 let gamma = Gamma::new();                 // Positive continuous (e.g., durations)
+let weibull = Weibull::new();             // Positive continuous (survival, time-to-event)
 let neg_bin = NegativeBinomial::new();    // Overdispersed counts
 let beta = Beta::new();                   // Proportions/rates in (0, 1)
 ```
@@ -667,7 +669,7 @@ const config = JSON.stringify({ max_iterations: 200, tolerance: 0.001, criterion
 const model2 = WasmGamlssModel.fitWithConfig(y, data, formula, "Gaussian", config);
 ```
 
-Supported distributions: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`. Note: `Binomial` is not supported in WASM as it requires state (number of trials) that cannot be recovered from the distribution name alone.
+Supported distributions: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, and the Box-Cox family `BCCG`, `BCT`, `BCPE`. Note: `Binomial` is not supported in WASM as it requires state (number of trials) that cannot be recovered from the distribution name alone.
 
 ### Loading Pre-fitted Models
 
@@ -746,7 +748,7 @@ out   = GamlssModel.step_gaic(data, y, Gaussian(), start, scope, np.log(len(y)),
                               "forward")                 # {"model": GamlssModel, "trace": [...]}
 ```
 
-Supported distribution classes mirror the WASM surface — `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, and `Binomial(n_trials)` (Binomial is Python-only because it carries `n_trials` state that can't be reconstructed from a name alone).
+Supported distribution classes mirror the WASM surface — `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, the Box-Cox family `BCCG`, `BCT`, `BCPE`, and `Binomial(n_trials)` (Binomial is Python-only because it carries `n_trials` state that can't be reconstructed from a name alone).
 
 ## Dependencies
 

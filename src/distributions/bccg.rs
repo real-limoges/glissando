@@ -79,7 +79,7 @@ impl Distribution for BCCG {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Box-Cox z-score and η-scale score/Fisher pairs. Full derivation in
-        // docs/math/mathematics.md §1.9. By the definition of z, T = (y/μ)^ν = 1+νσz,
+        // docs/math/mathematics.md [BCCG]. By the definition of z, T = (y/μ)^ν = 1+νσz,
         // so the η-scale scores collapse to the clean forms below.
         //   u_μ (log)      = μ·dl/dμ = z/σ + ν(z²−1)
         //   u_σ (log)      = σ·dl/dσ = z²−1

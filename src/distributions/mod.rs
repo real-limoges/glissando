@@ -305,11 +305,12 @@ pub fn from_name(name: &str) -> Result<Box<dyn Distribution>, GamlssError> {
         "Gamma" => Ok(Box::new(Gamma)),
         "NegativeBinomial" => Ok(Box::new(NegativeBinomial)),
         "Beta" => Ok(Box::new(Beta)),
+        "Weibull" => Ok(Box::new(Weibull)),
         "BCCG" => Ok(Box::new(BCCG)),
         "BCT" => Ok(Box::new(BCT)),
         "BCPE" => Ok(Box::new(BCPE)),
         other => Err(GamlssError::Input(format!(
-            "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG, BCT, BCPE",
+            "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, Weibull, BCCG, BCT, BCPE",
             other
         ))),
     }
@@ -601,6 +602,7 @@ mod tests {
             "Gamma",
             "NegativeBinomial",
             "Beta",
+            "Weibull",
             "BCCG",
             "BCT",
             "BCPE",
@@ -628,6 +630,7 @@ mod tests {
             from_name("Gamma").unwrap(),
             from_name("Beta").unwrap(),
             from_name("NegativeBinomial").unwrap(),
+            from_name("Weibull").unwrap(),
             from_name("BCCG").unwrap(),
             from_name("BCT").unwrap(),
             from_name("BCPE").unwrap(),

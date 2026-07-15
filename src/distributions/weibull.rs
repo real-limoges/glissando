@@ -60,7 +60,7 @@ impl Distribution for Weibull {
 
         let u_mu = par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let m = mui.max(MIN_POSITIVE);
-            let z = (yi.max(MIN_POSITIVE) / m).powf(*si);
+            let z = (yi.max(MIN_POSITIVE) / m).powf(si);
             si * (z - 1.0)
         });
         let w_mu = sigma.mapv(|s| (s * s).max(MIN_WEIGHT));
@@ -68,7 +68,7 @@ impl Distribution for Weibull {
         let u_sigma = par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let m = mui.max(MIN_POSITIVE);
             let r = yi.max(MIN_POSITIVE) / m;
-            let z = r.powf(*si);
+            let z = r.powf(si);
             1.0 + si * r.ln() * (1.0 - z)
         });
         let w_sigma = Array1::from_elem(y.len(), w_sigma_const.max(MIN_WEIGHT));
@@ -89,7 +89,7 @@ impl Distribution for Weibull {
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let yv = yi.max(MIN_POSITIVE);
             let m = mui.max(MIN_POSITIVE);
-            let z = (yv / m).powf(*si);
+            let z = (yv / m).powf(si);
             si.ln() - si * m.ln() + (si - 1.0) * yv.ln() - z
         }))
     }
@@ -116,5 +116,133 @@ impl Distribution for Weibull {
             let g2 = ln_gamma(1.0 + 2.0 / s).exp();
             m * m * (g2 - g1 * g1)
         }))
+    }
+
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // F(y) = 1 − exp(−(y/μ)^σ)
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
+            if yi <= 0.0 {
+                return 0.0; // support is y > 0
+            }
+            let z = (yi / mui.max(MIN_POSITIVE)).powf(si.max(MIN_POSITIVE));
+            -(-z).exp_m1()
+        }))
+    }
+
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        // Q(p) = μ·(−ln(1 − p))^(1/σ)
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
+            let pc = pi.clamp(1e-12, 1.0 - 1e-12);
+            mui.max(MIN_POSITIVE) * (-(-pc).ln_1p()).powf(1.0 / si.max(MIN_POSITIVE))
+        }))
+    }
+
+    fn name(&self) -> &'static str {
+        "Weibull"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distributions::test_helpers::{
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+    };
+    use ndarray::array;
+
+    #[test]
+    fn weibull_derivatives() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let mu = array![1.0, 2.0, 4.0, 6.0];
+        let sigma = array![0.8, 1.0, 1.5, 2.0];
+        let mut p = HashMap::new();
+        p.insert("mu", &mu);
+        p.insert("sigma", &sigma);
+        derivative_keys_match_parameters(&Weibull, p, &y);
+    }
+
+    #[test]
+    fn loglik_weibull_finite_on_typical_inputs() {
+        let owned = [
+            ("mu", array![2.0, 2.0, 4.0]),
+            ("sigma", array![0.8, 1.0, 1.5]),
+        ];
+        let p = params_view(&owned);
+        let ll = Weibull.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn mean_and_variance_match_gamma_function_moments() {
+        // σ = 1 is Exponential(μ): E[Y] = μ, V[Y] = μ².
+        let owned = [("mu", array![3.0]), ("sigma", array![1.0])];
+        let p = params_view(&owned);
+        let m = Weibull.expected_value(&p).unwrap();
+        let v = Weibull.variance(&p).unwrap();
+        assert!((m[0] - 3.0).abs() < 1e-9);
+        assert!((v[0] - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_weibull() {
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.8, 1.0, 1.5]),
+        ];
+        check_score_via_finite_diff(&Weibull, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&Weibull, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_quantile_roundtrip_weibull() {
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![0.8, 1.0, 1.5, 2.0]),
+        ];
+        check_cdf_quantile_roundtrip(&Weibull, &y, &owned, 1e-6);
+        check_cdf_pdf_consistency(&Weibull, &y, &owned, 1e-4, 1e-3);
+    }
+
+    #[test]
+    fn cdf_monotone_weibull_and_zero_below_support() {
+        let grid = Array1::from_iter((0..60).map(|i| i as f64 * 0.2));
+        let owned = [("mu", array![3.0]), ("sigma", array![1.5])];
+        check_cdf_monotone_in_unit(&Weibull, &grid, &owned);
+        // Both boundary points (y = 0 and y < 0) sit outside the y > 0 support.
+        let boundary_params = [("mu", array![3.0, 3.0]), ("sigma", array![1.5, 1.5])];
+        let p = params_view(&boundary_params);
+        let at_boundary = Weibull.cdf(&array![0.0, -1.0], &p).unwrap();
+        assert_eq!(at_boundary[0], 0.0);
+        assert_eq!(at_boundary[1], 0.0);
+    }
+
+    #[test]
+    fn initial_values_are_sensible() {
+        let y = array![1.0, 2.0, 3.0, 4.0];
+        assert!((Weibull.initial_value("mu", &y) - 2.5).abs() < 1e-12);
+        assert_eq!(Weibull.initial_value("sigma", &y), 1.0);
+        assert_eq!(Weibull.initial_value("other", &y), 0.1);
+    }
+
+    #[test]
+    fn default_link_is_log_for_both_and_errs_on_unknown() {
+        assert!(Weibull.default_link("mu").is_ok());
+        assert!(Weibull.default_link("sigma").is_ok());
+        assert!(Weibull.default_link("nu").is_err());
     }
 }

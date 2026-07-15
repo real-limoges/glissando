@@ -83,7 +83,7 @@ impl Distribution for BCT {
     ) -> DerivativesResult {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG; the `t` robustifying weight
         // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG). Full
-        // derivation in docs/math/mathematics.md §1.9. η-scale scores:
+        // derivation in docs/math/mathematics.md [BCCG]. η-scale scores:
         //   u_μ = w_t·z·T/σ − ν   (T = (y/μ)^ν = 1+νσz)
         //   u_σ = w_t·z² − 1
         //   u_ν = −w_t·z·∂z/∂ν + log(y/μ)

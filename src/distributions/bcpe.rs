@@ -99,7 +99,7 @@ impl Distribution for BCPE {
     ) -> DerivativesResult {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG; the PE score replaces the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
-        // (= z at τ=2), full derivation in docs/math/mathematics.md §1.9:
+        // (= z at τ=2), full derivation in docs/math/mathematics.md [BCCG]:
         //   u_μ = D·T/σ − ν   (T = (y/μ)^ν = 1+νσz)
         //   u_σ = (τ/2)gₜ − 1   (= z·D − 1)
         //   u_ν = −D·∂z/∂ν + log(y/μ)

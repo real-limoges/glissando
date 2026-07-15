@@ -12,7 +12,8 @@ use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
 use crate::distributions::{
-    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG, BCPE, BCT,
+    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, Weibull, BCCG,
+    BCPE, BCT,
 };
 use crate::ffi::FamilyType;
 use crate::fitting::selection::{self, Direction, StepScope};
@@ -42,6 +43,7 @@ py_distribution!(PyGamma, "Gamma");
 py_distribution!(PyNegativeBinomial, "NegativeBinomial");
 py_distribution!(PyBeta, "Beta");
 py_distribution!(PyStudentT, "StudentT");
+py_distribution!(PyWeibull, "Weibull");
 py_distribution!(PyBCCG, "BCCG");
 py_distribution!(PyBCT, "BCT");
 py_distribution!(PyBCPE, "BCPE");
@@ -213,6 +215,9 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     if family_obj.extract::<PyRef<PyStudentT>>().is_ok() {
         return Ok(FamilyType::StudentT(StudentT::new()));
     }
+    if family_obj.extract::<PyRef<PyWeibull>>().is_ok() {
+        return Ok(FamilyType::Weibull(Weibull::new()));
+    }
     if family_obj.extract::<PyRef<PyBCCG>>().is_ok() {
         return Ok(FamilyType::BCCG(BCCG::new()));
     }
@@ -227,7 +232,7 @@ fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), BCCG(), BCT(), BCPE(), or Ocat(n_categories)",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), Weibull(), BCCG(), BCT(), BCPE(), or Ocat(n_categories)",
     ))
 }
 
@@ -757,6 +762,7 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyNegativeBinomial>()?;
     m.add_class::<PyBeta>()?;
     m.add_class::<PyStudentT>()?;
+    m.add_class::<PyWeibull>()?;
     m.add_class::<PyBCCG>()?;
     m.add_class::<PyBCT>()?;
     m.add_class::<PyBCPE>()?;

@@ -8,8 +8,8 @@
 #![cfg(any(feature = "python", feature = "wasm"))]
 
 use crate::distributions::{
-    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, BCCG,
-    BCPE, BCT,
+    Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT,
+    Weibull, BCCG, BCPE, BCT,
 };
 use crate::error::GamlssError;
 
@@ -32,6 +32,7 @@ pub(crate) enum FamilyType {
     NegativeBinomial(NegativeBinomial),
     Beta(Beta),
     StudentT(StudentT),
+    Weibull(Weibull),
     BCCG(BCCG),
     BCT(BCT),
     BCPE(BCPE),
@@ -49,6 +50,7 @@ impl FamilyType {
             FamilyType::NegativeBinomial(d) => d,
             FamilyType::Beta(d) => d,
             FamilyType::StudentT(d) => d,
+            FamilyType::Weibull(d) => d,
             FamilyType::BCCG(d) => d,
             FamilyType::BCT(d) => d,
             FamilyType::BCPE(d) => d,
@@ -80,11 +82,12 @@ impl FamilyType {
             "Gamma" => Ok(FamilyType::Gamma(Gamma::new())),
             "NegativeBinomial" => Ok(FamilyType::NegativeBinomial(NegativeBinomial::new())),
             "Beta" => Ok(FamilyType::Beta(Beta::new())),
+            "Weibull" => Ok(FamilyType::Weibull(Weibull::new())),
             "BCCG" => Ok(FamilyType::BCCG(BCCG::new())),
             "BCT" => Ok(FamilyType::BCT(BCT::new())),
             "BCPE" => Ok(FamilyType::BCPE(BCPE::new())),
             other => Err(GamlssError::Input(format!(
-                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, BCCG, BCT, BCPE",
+                "Unknown distribution: '{}'. Supported: Gaussian, Poisson, StudentT, Gamma, NegativeBinomial, Beta, Weibull, BCCG, BCT, BCPE",
                 other
             ))),
         }

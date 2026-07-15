@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Weibull` distribution** (gamlss `WEI`: scale `μ`, shape `σ`, both log-linked)
+  in `src/distributions/weibull.rs`, with analytic score/Fisher weights, closed-form
+  `cdf` (`1 − exp(−(y/μ)^σ)`) and `quantile` (`μ·(−ln(1−p))^(1/σ)`). Registered across
+  every surface: `from_name`, the FFI `FamilyType` (WASM), and the Python `Weibull`
+  class. Full derivation in `docs/math/mathematics.md` `[WEIBULL]`.
+- **Tag-based cross-references in `docs/math/mathematics.md`** — named subsections are
+  now cited by stable bracketed tags (e.g. `[WEIBULL]`, `[CDF-TRIO]`, `[PWLS-CHOLESKY]`)
+  instead of section numbers, so inserting a family no longer renumbers the document.
+  Chapter-level references keep the `§N` form.
+
+- **Weibull family** — a two-parameter (`mu`, `sigma`) Weibull distribution in
+  `src/distributions/weibull.rs`, with analytic score/Fisher `derivatives`,
+  `cdf` (`1 − exp(−(y/μ)^σ)`), `quantile`, and log-linked `mu`/`sigma`.
+  Selectable by name (`"Weibull"`) across native, JSON/WASM, and Python
+  (`Weibull()`) surfaces, bringing the catalog to 12 families.
 - **Structural likelihoods (STRUCT-1..3)** — `Censored`, `Truncated`, and
   `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base
   family, in `src/distributions/{censored,truncated,hurdle}.rs`. Censoring swaps
