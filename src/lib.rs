@@ -51,8 +51,9 @@ pub use ndarray;
 
 pub use error::GamlssError;
 pub use fitting::diagnostics::{self, ModelDiagnostics};
+pub use fitting::mixture::{fit_mixture, MixtureModel};
 pub use fitting::selection::{self, Direction, IcRow, LrTest, StepRecord, StepResult, StepScope};
-pub use fitting::{FitConfig, FitDiagnostics, ParamDiagnostic, SmoothingCriterion};
+pub use fitting::{FitConfig, FitDiagnostics, NaAction, ParamDiagnostic, SmoothingCriterion};
 pub use model::{GamlssModel, PredictionResult};
-pub use terms::{Smooth, Term};
-pub use types::{Coefficients, CovarianceMatrix, DataSet, Formula};
+pub use terms::{Contrast, Smooth, Term};
+pub use types::{parse_formula_string, Coefficients, CovarianceMatrix, DataSet, Formula};

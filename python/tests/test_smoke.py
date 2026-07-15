@@ -13,6 +13,9 @@ def test_module_exposes_expected_classes():
         "NegativeBinomial",
         "Beta",
         "StudentT",
+        "BCCG",
+        "BCT",
+        "BCPE",
     ):
         assert hasattr(glissando, name), f"glissando is missing class {name!r}"
 
@@ -24,6 +27,9 @@ def test_stateless_distributions_construct():
     glissando.NegativeBinomial()
     glissando.Beta()
     glissando.StudentT()
+    glissando.BCCG()
+    glissando.BCT()
+    glissando.BCPE()
 
 
 def test_binomial_takes_n_trials():

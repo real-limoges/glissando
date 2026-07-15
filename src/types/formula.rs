@@ -42,6 +42,58 @@ impl Formula {
         self.0.insert(param.into(), terms);
     }
 
+    /// Build a single-parameter formula from an R/mgcv-style string (DATA-5).
+    ///
+    /// The response on the left of `~` is parsed but discarded — glissando takes
+    /// the response array separately at fit time — so `"y ~ s(x) + z"` and
+    /// `"~ s(x) + z"` are equivalent here.
+    ///
+    /// ```
+    /// use glissando::{Formula, Term};
+    ///
+    /// let f = Formula::parse("mu", "y ~ s(x) + region").unwrap();
+    /// assert_eq!(f["mu"].len(), 3); // intercept + smooth + factor-or-linear
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`GamlssError::Input`](crate::GamlssError::Input) on malformed input
+    /// (unbalanced calls, unknown smooth/contrast arguments, empty right-hand side).
+    pub fn parse(
+        param: impl Into<String>,
+        formula: &str,
+    ) -> Result<Self, crate::error::GamlssError> {
+        let (_response, terms) = crate::types::parse_formula_string(formula)?;
+        Ok(Self::new().with_terms(param, terms))
+    }
+
+    /// Build a multi-parameter formula from `(param, formula_string)` pairs.
+    ///
+    /// ```
+    /// use glissando::Formula;
+    ///
+    /// let f = Formula::from_strings([
+    ///     ("mu", "y ~ s(x) + region"),
+    ///     ("sigma", "~ x"),
+    /// ]).unwrap();
+    /// assert_eq!(f.param_names().len(), 2);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates the first parse error encountered.
+    pub fn from_strings<'a, I>(specs: I) -> Result<Self, crate::error::GamlssError>
+    where
+        I: IntoIterator<Item = (&'a str, &'a str)>,
+    {
+        let mut f = Self::new();
+        for (param, formula) in specs {
+            let (_response, terms) = crate::types::parse_formula_string(formula)?;
+            f.add_terms(param, terms);
+        }
+        Ok(f)
+    }
+
     /// Returns the names of all distribution parameters in this formula.
     pub fn param_names(&self) -> Vec<&String> {
         self.0.keys().collect()

@@ -133,6 +133,37 @@ impl Distribution for Gamma {
         }))
     }
 
+    fn cdf_eta_derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> super::CdfEtaResult {
+        // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ². With η = log μ
+        // (dμ/dη = μ) and dx/dη = −x, the shape α is held fixed, so the
+        // shape-derivative that blocks σ never appears:
+        //   ∂F/∂η_μ  = −xᵅ·e⁻ˣ / Γ(α)
+        //   ∂²F/∂η_μ² = (x − α)·∂F/∂η_μ
+        // σ enters both α and x; its CDF derivative needs ∂P/∂α (non-elementary)
+        // and is left to the wrapper's numeric fallback.
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let mut d1 = Array1::<f64>::zeros(y.len());
+        let mut d2 = Array1::<f64>::zeros(y.len());
+        for i in 0..y.len() {
+            if !y[i].is_finite() || y[i] <= 0.0 {
+                continue; // outside support or ±∞ bound: F flat, derivatives ≡ 0
+            }
+            let s = sigma[i].max(MIN_POSITIVE);
+            let alpha = 1.0 / (s * s);
+            let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
+            // γ-density mass at x: xᵅ·e⁻ˣ / Γ(α) = exp(α·ln x − x − lnΓ(α)).
+            let mass = (alpha * x.ln() - x - ln_gamma(alpha)).exp();
+            d1[i] = -mass;
+            d2[i] = (x - alpha) * d1[i];
+        }
+        Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
+    }
+
     fn quantile(
         &self,
         p: &Array1<f64>,
@@ -160,8 +191,9 @@ impl Distribution for Gamma {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
+        derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
 
@@ -206,6 +238,20 @@ mod tests {
         ];
         check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn cdf_eta_derivatives_match_finite_diff_gamma() {
+        // Only μ is analytic; σ is intentionally left to the numeric fallback.
+        let y = array![0.5, 1.5, 3.0, 7.0];
+        let owned = [
+            ("mu", array![1.0, 2.0, 4.0, 6.0]),
+            ("sigma", array![0.5, 0.4, 0.3, 0.6]),
+        ];
+        check_cdf_eta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
+        let p = params_view(&owned);
+        let derivs = Gamma.cdf_eta_derivatives(&y, &p).unwrap();
+        assert!(!derivs.contains_key("sigma"));
     }
 
     #[test]

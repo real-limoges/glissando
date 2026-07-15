@@ -8,9 +8,15 @@
 
 use glissando::{
     distributions::{Binomial, Gaussian},
-    DataSet, Formula, GamlssError, GamlssModel, Term,
+    DataSet, FitConfig, Formula, GamlssError, GamlssModel, NaAction, Term,
 };
 use ndarray::Array1;
+
+/// `NaAction::Fail` config — the path that rejects non-finite model variables
+/// rather than dropping their rows (the historical default).
+fn fail_on_na() -> FitConfig {
+    FitConfig::default().with_na_action(NaAction::Fail)
+}
 
 fn linear_formula() -> Formula {
     let mut f = Formula::new();
@@ -48,7 +54,17 @@ fn nan_in_response_returns_non_finite_error() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0]));
 
-    let err = GamlssModel::fit(&data, &y, &linear_formula(), &Gaussian::new()).unwrap_err();
+    // Under `NaAction::Fail`, a non-finite response is a hard error (the default
+    // `DropRows` would instead drop the row — see `tests/data_na_handling.rs`).
+    let err = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &linear_formula(),
+        &Gaussian::new(),
+        fail_on_na(),
+    )
+    .unwrap_err();
     assert!(
         matches!(err, GamlssError::NonFiniteValues { count, .. } if count >= 1),
         "NaN in response should yield NonFiniteValues, got {err:?}"
@@ -61,7 +77,15 @@ fn inf_in_predictor_returns_non_finite_error() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(vec![1.0, f64::INFINITY, 3.0, 4.0]));
 
-    let err = GamlssModel::fit(&data, &y, &linear_formula(), &Gaussian::new()).unwrap_err();
+    let err = GamlssModel::fit_with_config(
+        &data,
+        &y,
+        None,
+        &linear_formula(),
+        &Gaussian::new(),
+        fail_on_na(),
+    )
+    .unwrap_err();
     assert!(
         matches!(err, GamlssError::NonFiniteValues { .. }),
         "Inf in predictor should yield NonFiniteValues, got {err:?}"
@@ -187,8 +211,8 @@ fn json_roundtrip_preserves_predictions() {
     let preds = model.predict(&data, &family).unwrap();
 
     let json = model.to_json(&family).unwrap();
-    let (reloaded, dist_name) = GamlssModel::from_json(&json).unwrap();
-    assert_eq!(dist_name, "Gaussian");
+    let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
+    assert_eq!(desc.build().unwrap().name(), "Gaussian");
     let preds2 = reloaded.predict(&data, &family).unwrap();
     for (a, b) in preds["mu"].iter().zip(preds2["mu"].iter()) {
         assert!(

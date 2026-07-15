@@ -158,6 +158,12 @@ impl Distribution for Ocat {
         "Ocat"
     }
 
+    fn descriptor(&self) -> super::FamilyDescriptor {
+        super::FamilyDescriptor::Ocat {
+            n_categories: self.n_categories,
+        }
+    }
+
     fn initial_value(&self, param: &str, _y: &Array1<f64>) -> f64 {
         match param {
             "mu" => 0.0,      // latent predictor starts at 0

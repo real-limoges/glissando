@@ -9,8 +9,10 @@
 mod dataset;
 mod formula;
 mod newtypes;
+mod parse;
 
 pub use dataset::DataSet;
 pub use formula::Formula;
 pub use newtypes::{Coefficients, CovarianceMatrix};
 pub(crate) use newtypes::{LogLambdas, ModelMatrix, PenaltyMatrix};
+pub use parse::parse_formula_string;

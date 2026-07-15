@@ -34,6 +34,22 @@ fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Ar
         .collect()
 }
 
+/// Reconstruct the link used at fit time for a parameter: a persisted override
+/// (see [`FitConfig::links`](crate::FitConfig::links)) takes precedence over the
+/// family's `default_link`, so a model fitted with a non-default link predicts
+/// through that same link. `None`-link parameters (the common case, and all
+/// pre-feature serialized models) fall back to the family default.
+fn resolve_link<D: Distribution + ?Sized>(
+    family: &D,
+    param_name: &str,
+    fitted_param: &fitting::FittedParameter,
+) -> Result<Box<dyn distributions::Link>, GamlssError> {
+    match &fitted_param.link {
+        Some(name) => distributions::link_from_name(name),
+        None => family.default_link(param_name),
+    }
+}
+
 impl GamlssModel {
     /// Fits a GAMLSS model with default configuration.
     ///
@@ -103,6 +119,18 @@ impl GamlssModel {
         family: &D,
         config: FitConfig,
     ) -> Result<Self, GamlssError> {
+        // DATA-4: with `NaAction::DropRows` (the default), drop rows missing a
+        // value in `y` or a referenced column upstream of validation and assembly,
+        // so the design, working response, and weights all share one row mask.
+        // `NaAction::Fail` skips the drop and lets `validate_inputs` reject.
+        let dropped;
+        let (data, y, weights) = if config.na_action == fitting::NaAction::DropRows {
+            dropped = crate::preprocessing::drop_incomplete_rows(y, data, formula, weights)?;
+            (&dropped.0, &dropped.1, dropped.2.as_ref())
+        } else {
+            (data, y, weights)
+        };
+
         validate_inputs(y, data, formula, family, weights)?;
 
         let (fitted_models, diagnostics) =
@@ -142,8 +170,8 @@ impl GamlssModel {
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
-        let (x_matrix, _, _, _) = assemble_model_matrices(new_data, n_obs, &fitted.terms)?;
-        Ok(x_matrix.0)
+        let design = assemble_model_matrices(new_data, n_obs, &fitted.terms)?;
+        Ok(design.x.0)
     }
 
     /// Returns the `p × p` posterior covariance matrix `V = (X'WX + Σλ·S)⁻¹` for
@@ -180,7 +208,9 @@ impl GamlssModel {
             })
     }
 
-    /// Serializes the model to JSON, including the distribution name for later deserialization.
+    /// Serializes the model to JSON, bundling a [`FamilyDescriptor`] so the family
+    /// — including stateful families and structural wrappers — can be rebuilt on
+    /// load (SER-1).
     ///
     /// # Errors
     ///
@@ -188,19 +218,22 @@ impl GamlssModel {
     #[cfg(feature = "serde")]
     pub fn to_json<D: Distribution + ?Sized>(&self, family: &D) -> Result<String, GamlssError> {
         let wrapper = SerializedModel {
-            distribution: family.name().to_string(),
+            distribution: family.descriptor(),
             model: self,
         };
         serde_json::to_string(&wrapper).map_err(|e| GamlssError::Input(e.to_string()))
     }
 
-    /// Deserializes a model from JSON, returning the model and distribution name.
+    /// Deserializes a model from JSON, returning the model and the
+    /// [`FamilyDescriptor`] describing its family. Call
+    /// [`FamilyDescriptor::build`](crate::distributions::FamilyDescriptor::build)
+    /// to reconstruct the boxed distribution.
     ///
     /// # Errors
     ///
     /// Returns `GamlssError::Input` if deserialization fails.
     #[cfg(feature = "serde")]
-    pub fn from_json(json: &str) -> Result<(Self, String), GamlssError> {
+    pub fn from_json(json: &str) -> Result<(Self, distributions::FamilyDescriptor), GamlssError> {
         let wrapper: OwnedSerializedModel =
             serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
         Ok((wrapper.model, wrapper.distribution))
@@ -253,10 +286,11 @@ impl GamlssModel {
         let mut predictions = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) =
-                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
-            let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
-            let link = family.default_link(param_name)?;
+            let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            // η = X·β + offset (DATA-3); offset is zeros unless the formula carries
+            // a Term::Offset, in which case `new_data` must supply its column.
+            let eta = design.x.0.dot(&fitted_param.coefficients.0) + &design.offset;
+            let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
 
             predictions.insert(param_name.clone(), fitted);
@@ -284,9 +318,11 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) =
-                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
-            let eta = x_matrix.0.dot(&fitted_param.coefficients.0);
+            let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let x_matrix = &design.x;
+            // η = X·β + offset; the offset is a fixed shift, so SEs (which depend
+            // only on the random β) are unchanged (DATA-3).
+            let eta = x_matrix.0.dot(&fitted_param.coefficients.0) + &design.offset;
 
             let v = &fitted_param.covariance.0;
             let se_eta: Array1<f64> = x_matrix
@@ -299,7 +335,7 @@ impl GamlssModel {
                 })
                 .collect();
 
-            let link = family.default_link(param_name)?;
+            let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.view().mapv(|e| link.inv_link(e));
 
             results.insert(
@@ -556,8 +592,8 @@ impl GamlssModel {
         let mut results = HashMap::new();
 
         for (param_name, fitted_param) in &self.models {
-            let (x_matrix, _, _, _) =
-                assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
+            let x_matrix = &design.x;
 
             let beta_samples = fitting::sample_posterior_seeded(
                 &fitted_param.coefficients,
@@ -566,12 +602,12 @@ impl GamlssModel {
                 seed,
             )?;
 
-            let link = family.default_link(param_name)?;
+            let link = resolve_link(family, param_name, fitted_param)?;
 
             let prediction_samples: Vec<Array1<f64>> = beta_samples
                 .iter()
                 .map(|beta| {
-                    let eta = x_matrix.0.dot(beta);
+                    let eta = x_matrix.0.dot(beta) + &design.offset;
                     eta.mapv(|e| link.inv_link(e))
                 })
                 .collect();
@@ -633,13 +669,13 @@ impl fmt::Display for GamlssModel {
 #[cfg(feature = "serde")]
 #[derive(serde::Serialize)]
 struct SerializedModel<'a> {
-    distribution: String,
+    distribution: distributions::FamilyDescriptor,
     model: &'a GamlssModel,
 }
 
 #[cfg(feature = "serde")]
 #[derive(serde::Deserialize)]
 struct OwnedSerializedModel {
-    distribution: String,
+    distribution: distributions::FamilyDescriptor,
     model: GamlssModel,
 }
