@@ -34,7 +34,7 @@ impl Distribution for Gamma {
         }
     }
 
-    /// Gamma σ is the coefficient of variation CV = SD(Y)/E[Y], not the raw SD.
+    /// Gamma σ is the coefficient of variation `CV = SD(Y)/E(Y)`, not the raw SD.
     /// The default `initial_value` returns `y.std()`, which is wildly wrong for
     /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
     /// A bad σ_init causes REML to over-penalize the σ smooth on the first RS
@@ -68,21 +68,29 @@ impl Distribution for Gamma {
         let sigma_sq = sigma_safe.mapv(|s| s * s);
         let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
 
-        let u_mu = (y - &mu_safe) / (&mu_safe * &sigma_sq);
+        // Clamp y to the support, mirroring loglik_pointwise: a zero/negative row
+        // would otherwise send ln(y/μ) to −∞/NaN and poison the whole PWLS solve.
+        let y_safe = y.mapv(|yi| yi.max(MIN_POSITIVE));
+
+        let u_mu = (&y_safe - &mu_safe) / (&mu_safe * &sigma_sq);
         let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
 
         let psi_alpha = digamma_batch(&alpha);
         let log_sigma = sigma_safe.mapv(|s| s.ln());
-        let y_over_mu = y / &mu_safe;
+        let y_over_mu = &y_safe / &mu_safe;
         let log_y_over_mu = y_over_mu.mapv(|v| v.ln());
         let u_sigma =
             (2.0 / &sigma_sq) * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
 
-        // Fisher info for σ: I_σ = (4/σ⁴)·ψ'(α) − 2/σ². Floored at MIN_WEIGHT.
+        // Fisher info for σ on the log-link scale: w = σ²·I_σ with
+        // I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴, so w = (4/σ⁴)·ψ'(α) − 4/σ².
+        // Matches gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) (η-scale via ×σ²)
+        // and the Monte-Carlo check E[u_η²]. Since ψ'(1/σ²) > σ² for all σ > 0 the
+        // expression is strictly positive; the MIN_WEIGHT floor guards round-off only.
         let psi_prime_alpha = trigamma_batch(&alpha);
         let sigma_sq_sq = sigma_sq.mapv(|s2| s2 * s2);
-        let w_sigma = ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 2.0 / &sigma_sq)
-            .mapv(|v| v.abs().max(MIN_WEIGHT));
+        let w_sigma =
+            ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 4.0 / &sigma_sq).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
