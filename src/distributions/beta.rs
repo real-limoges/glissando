@@ -85,8 +85,8 @@ impl Distribution for Beta {
         let u_phi = &phi_safe * &dl_dphi;
 
         // Fisher info for φ on η-scale: I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ),
-++      // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
-++      // expression had the sign inverted and relied on `.abs()` to rescue it.) μ²·ψ'(α) − (1−μ)²·ψ'(β)).+       // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
+        // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
+        // expression had the sign inverted and relied on `.abs()` to rescue it.) μ²·ψ'(α) − (1−μ)²·ψ'(β)).+       // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
         let mu_sq = mu_safe.mapv(|m| m * m);
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v * v);
         let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_betai - &psi_prime;
