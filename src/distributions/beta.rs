@@ -84,11 +84,13 @@ impl Distribution for Beta {
             + &one_minus_mu * &log_1_minus_y;
         let u_phi = &phi_safe * &dl_dphi;
 
-        // Fisher info for φ on η-scale: w = φ²·(ψ'(φ) − μ²·ψ'(α) − (1−μ)²·ψ'(β)).
+        // Fisher info for φ on η-scale: I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ),
+++      // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
+++      // expression had the sign inverted and relied on `.abs()` to rescue it.) μ²·ψ'(α) − (1−μ)²·ψ'(β)).+       // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
         let mu_sq = mu_safe.mapv(|m| m * m);
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v * v);
-        let i_phi = &psi_prime_phi - &mu_sq * &psi_prime_alpha - &one_minus_mu_sq * &psi_prime_beta;
-        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.abs().max(MIN_WEIGHT));
+        let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_betai - &psi_prime;
+        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
