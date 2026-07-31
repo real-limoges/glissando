@@ -10,7 +10,7 @@
 use glissando::distributions::{
     Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
-use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, SmoothingCriterion, Term};
+use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
 use serde::Serialize;
@@ -239,6 +239,7 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
                 n_splines: 20,
                 degree: 3,
                 penalty_order: 2,
+                range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -326,6 +327,7 @@ fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
                     n_splines: 20,
                     degree: 3,
                     penalty_order: 2,
+                    range: None,
                 }),
             ],
         );
@@ -398,6 +400,8 @@ fn fit_tensor_smooth(df: &DataFrame) -> FitResult {
                 n_splines_2: 8,
                 penalty_order_2: 2,
                 degree: 3,
+                range_1: None,
+                range_2: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -435,6 +439,7 @@ fn fit_random_effect(df: &DataFrame) -> FitResult {
                 },
                 Term::Smooth(Smooth::RandomEffect {
                     col_name: "g".to_string(),
+                    levels: vec![],
                 }),
             ],
         )
@@ -493,6 +498,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
             n_splines: 20,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })],
     );
 
@@ -560,6 +566,7 @@ fn fit_binomial_smooth(df: &DataFrame) -> FitResult {
             n_splines: 20,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })],
     );
 
@@ -627,6 +634,7 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
                 n_splines: 20,
                 degree: 3,
                 penalty_order: 2,
+                range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -665,6 +673,7 @@ fn fit_gamma_sigma_smooth(df: &DataFrame) -> FitResult {
                     n_splines: 20,
                     degree: 3,
                     penalty_order: 2,
+                    range: None,
                 }),
             ],
         );
@@ -734,6 +743,7 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
                 n_splines: 20,
                 degree: 3,
                 penalty_order: 2,
+                range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept])
@@ -807,6 +817,7 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
                 n_splines: 20,
                 degree: 3,
                 penalty_order: 2,
+                range: None,
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -876,6 +887,7 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
                 n_splines: 20,
                 degree: 3,
                 penalty_order: 2,
+                range: None,
             })],
         )
         .with_terms("phi", vec![Term::Intercept]);
@@ -913,6 +925,7 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
             n_splines: 20,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })
     };
 
@@ -934,14 +947,11 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
-    // Use GCV for this heavily-weighted 5-smooth model: the REML criterion's
-    // landscape for weak smooths (x2-x5, amplitudes 0.1-0.4) is very flat with
-    // a near-degenerate optimum, causing L-BFGS and F-S to overshoot to the
-    // lambda ceiling.  GCV gives finite lambdas that better match mgcv.
-    let config = FitConfig {
-        criterion: SmoothingCriterion::Gcv,
-        ..Default::default()
-    };
+    // REML, matching mgcv's method="REML" on the same model. (This scenario
+    // previously used GCV as a workaround for L-BFGS stalling on the flat LAML
+    // ridges of the weak smooths; the Fellner-Schall polish fixed that, and
+    // GCV's different criterion diverged visibly from mgcv at some seeds.)
+    let config = FitConfig::default();
     match GamlssModel::fit_with_config(&data, &y, Some(&weights), &formula, &family, config) {
         Ok(model) => build_result(
             start,
@@ -972,6 +982,7 @@ fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
             n_splines: 20,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })
     };
 

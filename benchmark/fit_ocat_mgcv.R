@@ -11,10 +11,17 @@
 #     --output /path/to/mgcv_ocat.json
 
 suppressPackageStartupMessages({
-  library(arrow)
   library(mgcv)
   library(jsonlite)
   library(optparse)
+})
+
+# Shared helpers (parquet reader with arrow -> nanoparquet fallback).
+local({
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+  dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg[1]))) else "."
+  source(file.path(dir, "common.R"), local = FALSE)
 })
 
 opts <- parse_args(OptionParser(option_list = list(

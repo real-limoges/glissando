@@ -76,6 +76,7 @@ fn make_formula() -> Formula {
             n_splines: 20,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })
     };
     Formula::new().with_terms(
