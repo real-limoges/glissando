@@ -73,6 +73,7 @@ fn smooth_term() -> Term {
         n_splines: 15,
         degree: 3,
         penalty_order: 2,
+        range: None,
     })
 }
 

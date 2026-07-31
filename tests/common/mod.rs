@@ -55,6 +55,8 @@ pub fn tensor(col1: &str, col2: &str, n1: usize, n2: usize) -> Term {
         n_splines_2: n2,
         penalty_order_2: 2,
         degree: 3,
+        range_1: None,
+        range_2: None,
     })
 }
 

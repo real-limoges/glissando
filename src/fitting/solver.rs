@@ -28,7 +28,7 @@ const REML_RANK_TOL_EPS: f64 = 1e-8;
 /// Clamp on |log λ| applied to REML's optimized output before exponentiation.
 /// Wide enough that no real solution is constrained; narrow enough to keep
 /// L-BFGS from wandering into numerically pathological regions.
-const LOG_LAMBDA_CLAMP: f64 = 30.0;
+pub(super) const LOG_LAMBDA_CLAMP: f64 = 30.0;
 
 /// Decades (in natural-log λ) below the cold-start heuristic to seed the
 /// collapse-guarded restart. The cold start sits *past* the interior LAML
@@ -373,7 +373,49 @@ pub(crate) fn run_optimization_reml(
         GamlssError::Optimization("REML optimizer failed to find best parameters".to_string())
     })?;
     let clamped = best_log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP));
-    Ok(clamped.mapv(f64::exp))
+    let lbfgs_lambdas = clamped.mapv(f64::exp);
+
+    // Deterministic Fellner-Schall polish. L-BFGS + MoreThuente can stall at a
+    // warm-start-dependent, non-stationary point when the LAML surface has flat
+    // ridges (e.g. several smooths collapsing to their null space with λ at the
+    // clamp ceiling); the resulting per-cycle λ jitter keeps the outer RS loop
+    // from ever seeing a stationary η. F-S iterates the same LAML target
+    // monotonically and lands on the same fixed point from either side of a
+    // ridge, making the per-cycle λ map deterministic. Keep whichever λ scores
+    // better so the polish can never make the fit worse.
+    // Best-effort: a linear-algebra failure inside the polish (e.g. an
+    // eigensolver hiccup at a degenerate λ) falls back to the L-BFGS result
+    // rather than failing the whole fit.
+    let polished = match run_optimization_fellner_schall(
+        x_model,
+        z,
+        w,
+        penalty_matrices,
+        Some(&lbfgs_lambdas),
+    ) {
+        Ok(p) => p,
+        Err(_) => return Ok(lbfgs_lambdas),
+    };
+    let lbfgs_cost = lambda_cost(
+        SmoothingCriterion::Reml,
+        x_model,
+        z,
+        w,
+        penalty_matrices,
+        &lbfgs_lambdas,
+    );
+    let polished_cost = lambda_cost(
+        SmoothingCriterion::Reml,
+        x_model,
+        z,
+        w,
+        penalty_matrices,
+        &polished,
+    );
+    match (lbfgs_cost, polished_cost) {
+        (Ok(lc), Ok(pc)) if pc <= lc => Ok(polished),
+        _ => Ok(lbfgs_lambdas),
+    }
 }
 
 /// Fellner-Schall (Wood & Fasiolo 2017) multiplicative fixed-point optimizer
@@ -1046,6 +1088,7 @@ mod reml_tests {
                     n_splines: 15,
                     degree: 3,
                     penalty_order: 2,
+                    range: None,
                 }),
             ],
             &data,
