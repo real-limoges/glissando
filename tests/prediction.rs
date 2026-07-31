@@ -506,6 +506,7 @@ fn term_name_strings_are_correct() {
             cr_spline("x", 6),
             Term::Smooth(glissando::Smooth::RandomEffect {
                 col_name: "group".to_string(),
+                levels: vec![],
             }),
         ],
     );

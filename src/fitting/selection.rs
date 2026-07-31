@@ -1,4 +1,4 @@
-//! Model selection and comparison over fitted [`GamlssModel`](crate::GamlssModel)s.
+//! Model selection and comparison over fitted [`GamlssModel`]s.
 //!
 //! Three facilities sharing one mechanism — compare models by a penalized
 //! log-likelihood (an information criterion) or a deviance difference — over one
@@ -10,7 +10,7 @@
 //! - [`lr_test`] runs a likelihood-ratio χ² test for a nested pair.
 //! - [`step_gaic`] greedily adds/drops one term at a time to minimize GAIC(k).
 //!
-//! Every score flows through [`compute_gaic`](crate::diagnostics::compute_gaic),
+//! Every score flows through [`compute_gaic`],
 //! so these comparisons stay consistent with `diagnostics(..).aic`/`.bic`.
 
 use super::diagnostics::{compute_gaic, total_edf};
