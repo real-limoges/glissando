@@ -20,10 +20,17 @@
 # smoothing criterion.
 
 suppressPackageStartupMessages({
-  library(arrow)
   library(mgcv)
   library(jsonlite)
   library(optparse)
+})
+
+# Shared helpers (parquet reader with arrow -> nanoparquet fallback).
+local({
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+  dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg[1]))) else "."
+  source(file.path(dir, "common.R"), local = FALSE)
 })
 
 opts <- parse_args(OptionParser(option_list = list(
@@ -331,6 +338,45 @@ fit_random_effect <- function(df, output) {
   )
 }
 
+# Heteroskedastic Gaussian: mean AND log-scale both linear in x, via gaulss.
+# gaulss linear predictors: η₁ = μ (identity); η₂ goes through the logb link
+# (τ = 1/σ = b + exp(η₂), b = 0.01), so σ = 1/linkinv(η₂). Only μ coefficients
+# are emitted — the σ model lives on a different link scale than glissando's
+# log σ, so coefficient-level σ comparison is not meaningful, but fitted_mu /
+# fitted_sigma / log-likelihood / SE[μ] all are.
+fit_gaussian_heteroskedastic <- function(df, output) {
+  start <- Sys.time()
+  m <- gam(list(y ~ x, ~ x), data = df, family = gaulss())
+  fv        <- fitted(m)
+  mu_hat    <- fv[, 1]
+  sigma_hat <- 1.0 / fv[, 2]
+
+  se_pred <- tryCatch(predict(m, type = "link", se.fit = TRUE), error = function(e) NULL)
+  se_eta_out <- if (!is.null(se_pred) && is.matrix(se_pred$se.fit)) {
+    list(mu = as.list(unname(se_pred$se.fit[, 1])))
+  } else {
+    list()
+  }
+
+  result <- list(
+    converged    = gam_converged(m),
+    iterations   = if (!is.null(m$outer.info$iter)) as.integer(m$outer.info$iter) else 0L,
+    fit_time_ms  = elapsed_ms(start),
+    coefficients = list(mu = unname(coef(m))[1:2]),
+    fitted_mu    = as.list(unname(mu_hat)),
+    fitted_sigma = as.list(unname(sigma_hat)),
+    # Coefficients 1:2 belong to the μ predictor (y ~ x), 3:4 to the σ
+    # predictor (~ x); both are unpenalized so each EDF is exactly 2.
+    edf          = list(mu = sum(m$edf[1:2]), sigma = sum(m$edf[3:4])),
+    log_likelihood = as.numeric(stats::logLik(m)),
+    aic          = AIC(m),
+    sp           = sp_list(m),
+    se_eta       = se_eta_out,
+    error        = NA
+  )
+  write_json(result, output, auto_unbox = TRUE, pretty = TRUE, na = "null")
+}
+
 # ─── Scale-smooth fitters (LSS families) ─────────────────────────────────────
 
 # Gaussian location-scale smooth (gaulss).
@@ -380,14 +426,16 @@ fit_gamma_sigma_smooth <- function(df, output) {
   start <- Sys.time()
   m <- gam(list(y ~ 1, ~ s(x, bs = "ps", k = 20)), data = df, family = gammals())
   # gammals linear predictors (predict type="link"):
-  #   η₁ = log(μ)                — log link for mean
-  #   η₂ = log(CV²) = 2·log(CV) — mgcv uses log-squared-CV, so CV = exp(η₂/2)
-  # glissando σ = CV, so sigma_hat = exp(η₂/2) = sqrt(exp(η₂)).
-  # Note: fitted(m) returns only the first column (μ) for some mgcv versions;
-  # predict(type="link") always returns a 2-column matrix for two-formula models.
+  #   η₁ = log(μ)  — "identity" link on the log-mean, so exp(η₁) = E[Y].
+  #   η₂ — the SCALE predictor goes through gammals' `logb` link, NOT a plain
+  #        log: θ = log(φ) = b + log(1 + exp(η₂)) with b = −7 by default.
+  #        Treating η₂ as log(φ) directly (the previous code) produced σ̂ in the
+  #        5–20 range for a true CV of 0.2–0.7. Use the family's own linkinv to
+  #        recover θ = log(φ); glissando's σ = CV = sqrt(φ) = exp(θ/2).
   lp        <- predict(m, type = "link")
-  mu_hat    <- exp(lp[, 1])           # log link → E[Y]
-  sigma_hat <- exp(lp[, 2] / 2.0)    # log-CV² link → CV (glissando's σ)
+  mu_hat    <- exp(lp[, 1])                       # log-mean → E[Y]
+  theta     <- m$family$linfo[[2]]$linkinv(lp[, 2])  # log(φ) via logb linkinv
+  sigma_hat <- exp(theta / 2.0)                   # φ = CV² → σ = CV
 
   se_pred <- tryCatch(predict(m, type = "link", se.fit = TRUE), error = function(e) NULL)
   se_eta_out <- if (!is.null(se_pred) && is.matrix(se_pred$se.fit)) {
@@ -498,6 +546,7 @@ fit_b2_weighted_studentt <- function(df, output) {
 
 dispatch <- list(
   gaussian_linear           = fit_gaussian_linear,
+  gaussian_heteroskedastic  = fit_gaussian_heteroskedastic,
   gaussian_multiple         = fit_gaussian_multiple,
   gaussian_large            = fit_gaussian_large,
   gaussian_smooth           = fit_gaussian_smooth,
