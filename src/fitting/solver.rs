@@ -615,10 +615,16 @@ fn fit_pwls_with_grad_info(
     let s_lambda = weighted_penalty_sum(nfo.x_t_w_x.nrows(), lambdas, penalty_matrices);
     let lhs = &nfo.x_t_w_x + &s_lambda;
 
-    let beta_arr = linalg::solve(&lhs, &nfo.x_t_w_z)?;
+    // `solve_robust`/`inv_robust` fall back to an eigendecomposition when `lhs`
+    // is near-singular in floating point (e.g. a smooth term collapsing toward
+    // its penalty null space) — the same failure mode the plain LU path has no
+    // fallback for, which showed up as a CI-only `dgesv`/`dpotrf` failure that
+    // didn't reproduce locally (BLAS-build-dependent rounding tips a near-zero
+    // pivot over). The fast path matches the previous direct solve/inv exactly.
+    let beta_arr = linalg::solve_robust(&lhs, &nfo.x_t_w_z)?;
     let beta = Coefficients(beta_arr);
 
-    let v = linalg::inv(&lhs)?;
+    let v = linalg::inv_robust(&lhs)?;
 
     // EDF (effective degrees of freedom) measures model complexity.
     // EDF = tr(H) where H = X(X'WX + sum lambda*S)^-1 X'W is the hat matrix.
