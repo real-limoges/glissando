@@ -19,7 +19,9 @@
 //! string cannot, so it is excluded from [`from_name`](super::from_name); build
 //! it through this typed API and serialize it via the family descriptor (SER-1).
 
-use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
+use super::structural::{
+    cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
+};
 use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -55,6 +57,11 @@ pub struct Censored {
     /// Interval upper bounds, aligned with `status`. Only read on
     /// [`CensorStatus::Interval`] rows.
     upper: Array1<f64>,
+    /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
+    /// immutable after construction, so this is computed once here instead of
+    /// rescanned on every `loglik_pointwise` / `derivatives` call (i.e. every
+    /// IRLS iteration).
+    has_interval: bool,
 }
 
 impl Censored {
@@ -62,10 +69,12 @@ impl Censored {
     /// censoring (no interval rows); `upper` is set to zeros.
     pub fn new(base: Box<dyn Distribution>, status: Array1<CensorStatus>) -> Self {
         let n = status.len();
+        let has_interval = status.iter().any(|s| *s == CensorStatus::Interval);
         Self {
             base,
             status,
             upper: Array1::zeros(n),
+            has_interval,
         }
     }
 
@@ -76,10 +85,12 @@ impl Censored {
         status: Array1<CensorStatus>,
         upper: Array1<f64>,
     ) -> Self {
+        let has_interval = status.iter().any(|s| *s == CensorStatus::Interval);
         Self {
             base,
             status,
             upper,
+            has_interval,
         }
     }
 
@@ -124,8 +135,7 @@ impl Distribution for Censored {
         self.check_len(y.len())?;
         let base_ll = self.base.loglik_pointwise(y, params)?;
         let f_y = self.base.cdf(y, params)?;
-        let needs_upper = self.status.iter().any(|s| *s == CensorStatus::Interval);
-        let f_up = if needs_upper {
+        let f_up = if self.has_interval {
             Some(self.base.cdf(&self.upper, params)?)
         } else {
             None
@@ -157,26 +167,18 @@ impl Distribution for Censored {
         // weight built from F, F', F''.
         let base_derivs = self.base.derivatives(y, params)?;
         let f_y = self.base.cdf(y, params)?;
-        let grad_y = cdf_eta_grads(self.base.as_ref(), y, params)?;
+        let grad_y = cdf_eta_grads(self.base.as_ref(), y, &f_y, params)?;
 
-        let needs_upper = self.status.iter().any(|s| *s == CensorStatus::Interval);
-        let (f_up, grad_up) = if needs_upper {
-            (
-                Some(self.base.cdf(&self.upper, params)?),
-                Some(cdf_eta_grads(self.base.as_ref(), &self.upper, params)?),
-            )
+        let (f_up, grad_up) = if self.has_interval {
+            let f_up = self.base.cdf(&self.upper, params)?;
+            let grad_up = cdf_eta_grads(self.base.as_ref(), &self.upper, &f_up, params)?;
+            (Some(f_up), Some(grad_up))
         } else {
             (None, None)
         };
 
-        let mut out: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
-        for &param in self.base.parameters() {
-            let (mut u, mut w) = base_derivs
-                .get(param)
-                .cloned()
-                .ok_or_else(|| self.base.unknown_param(param))?;
+        rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
             let (d1y, d2y) = &grad_y[param];
-
             for i in 0..y.len() {
                 match self.status[i] {
                     CensorStatus::Event => {}
@@ -201,9 +203,7 @@ impl Distribution for Censored {
                     }
                 }
             }
-            out.insert(param.to_string(), (u, w));
-        }
-        Ok(out)
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -312,6 +312,25 @@ mod tests {
             CensorStatus::Right,
         ];
         let cens = Censored::new(Box::new(Gaussian::new()), status);
+        check_score_via_finite_diff(&cens, &y, &owned, "mu", 1e-4);
+        check_score_via_finite_diff(&cens, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn interval_score_matches_finite_diff() {
+        // Interval censoring is the one branch `censored_score_matches_finite_diff`
+        // doesn't exercise; check it in isolation (mixed with Event/Right so the
+        // other branches' code paths stay live in the same call).
+        let y = array![0.0, -0.5, 0.3, 1.0];
+        let upper = array![1.0, 0.5, 1.2, 2.0];
+        let owned = gaussian_owned();
+        let status = array![
+            CensorStatus::Interval,
+            CensorStatus::Interval,
+            CensorStatus::Event,
+            CensorStatus::Right,
+        ];
+        let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
         check_score_via_finite_diff(&cens, &y, &owned, "mu", 1e-4);
         check_score_via_finite_diff(&cens, &y, &owned, "sigma", 1e-4);
     }

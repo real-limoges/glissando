@@ -5,8 +5,8 @@ mod common;
 
 use common::{cr_spline, linear_intercepts, random, smooth_intercepts, Generator};
 use glissando::{
-    distributions::{Gaussian, Poisson},
-    DataSet, Formula, GamlssModel, Smooth, Term,
+    distributions::{Gamma, Gaussian, Poisson},
+    DataSet, Formula, GamlssError, GamlssModel, Smooth, Term,
 };
 use ndarray::Array1;
 use rand::RngExt;
@@ -799,4 +799,103 @@ fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
             );
         }
     }
+}
+
+// A model fit with Gaussian's default identity link for "mu" must reject a
+// predict-time family swap to Poisson (whose default link for "mu" is log) —
+// both families have a "mu" parameter, so nothing but the family-identity
+// check catches this; without it, predict would silently apply exp(eta) to
+// coefficients fit under the identity link.
+#[test]
+fn predict_rejects_mismatched_family() {
+    let mut rng = Generator::new(7);
+    let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let err = model.predict(&data, &Poisson::new()).unwrap_err();
+    assert!(
+        matches!(err, GamlssError::FamilyMismatch { .. }),
+        "expected FamilyMismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn predict_with_se_rejects_mismatched_family() {
+    let mut rng = Generator::new(8);
+    let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let err = model.predict_with_se(&data, &Poisson::new()).unwrap_err();
+    assert!(
+        matches!(err, GamlssError::FamilyMismatch { .. }),
+        "expected FamilyMismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn predict_samples_rejects_mismatched_family() {
+    let mut rng = Generator::new(9);
+    let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let err = model
+        .predict_samples(&data, &Poisson::new(), 5, Some(1))
+        .unwrap_err();
+    assert!(
+        matches!(err, GamlssError::FamilyMismatch { .. }),
+        "expected FamilyMismatch, got {err:?}"
+    );
+}
+
+// A model with no stored family descriptor (the pre-this-feature state, or any
+// GamlssModel value hand-built without going through fit/from_json) must skip
+// the check entirely rather than reject every family, matching the
+// `FittedParameter::link` backward-compat precedent. Uses Gamma (also
+// ["mu", "sigma"], but LogLink for "mu" instead of Gaussian's IdentityLink) so
+// a real mismatch is exercised, not just a same-family self-check — Poisson
+// (only "mu") would fail on the missing "sigma" parameter instead, which
+// wouldn't isolate what this test is actually about.
+#[test]
+fn model_with_no_family_skips_validation() {
+    let mut rng = Generator::new(10);
+    let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+    let bare = GamlssModel {
+        family: None,
+        ..model
+    };
+
+    assert!(bare.family.is_none());
+    assert!(
+        bare.predict(&data, &Gamma::new()).is_ok(),
+        "with no stored family descriptor, validation must be skipped, not fail-closed"
+    );
+}
+
+#[cfg(feature = "serialization")]
+#[test]
+fn json_roundtrip_backfills_family_and_still_predicts() {
+    let mut rng = Generator::new(11);
+    let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
+    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let family = Gaussian::new();
+    let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
+
+    let json = model.to_json(&family).unwrap();
+    let (reloaded, _descriptor) = GamlssModel::from_json(&json).unwrap();
+
+    assert!(
+        reloaded.family.is_some(),
+        "from_json should backfill `family` from the serialized descriptor"
+    );
+    // The correct family still predicts fine...
+    let preds = reloaded.predict(&data, &family).unwrap();
+    assert!(preds.contains_key("mu"));
+    // ...and a mismatched one is now rejected, exactly as for a freshly-fit model.
+    let err = reloaded.predict(&data, &Poisson::new()).unwrap_err();
+    assert!(matches!(err, GamlssError::FamilyMismatch { .. }));
 }

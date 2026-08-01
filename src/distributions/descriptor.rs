@@ -13,7 +13,7 @@ use super::{
 use ndarray::Array1;
 
 /// A reconstructable description of a [`Distribution`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FamilyDescriptor {
     /// A stateless family addressed by name (see [`from_name`](super::from_name)).
