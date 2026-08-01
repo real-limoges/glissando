@@ -25,7 +25,7 @@ use crate::distributions::{Distribution, MIN_WEIGHT};
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
 use indexmap::IndexMap;
-use ndarray::{Array1, Zip};
+use ndarray::{s, Array1, Zip};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -154,9 +154,12 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
         let mut cross = 0.0_f64; // dᵀ·S_λ·β₀
         let mut quad = 0.0_f64; // dᵀ·S_λ·d
         for (s_j, &lam) in model.penalty_matrices.iter().zip(proposed.lambdas.iter()) {
-            let s_d = s_j.0.dot(&dir);
-            cross += lam * s_d.dot(&model.beta.0);
-            quad += lam * s_d.dot(&dir);
+            let (start, end) = s_j.block_range();
+            let dir_block = dir.slice(s![start..=end]);
+            let beta_block = model.beta.0.slice(s![start..=end]);
+            let s_d_block = s_j.block.dot(&dir_block);
+            cross += lam * s_d_block.dot(&beta_block);
+            quad += lam * s_d_block.dot(&dir_block);
         }
         (cross, quad)
     };
@@ -704,7 +707,10 @@ mod tests {
             }],
             link: Box::new(IdentityLink),
             x_matrix: ModelMatrix(basis),
-            penalty_matrices: vec![PenaltyMatrix(penalty)],
+            penalty_matrices: vec![PenaltyMatrix {
+                offset: 0,
+                block: penalty,
+            }],
             beta: Coefficients(Array1::zeros(n_splines)),
             eta: Array1::from_elem(n, 0.0),
             // μ = inv_link(η) = η for IdentityLink.
@@ -754,7 +760,10 @@ mod tests {
             }],
             link: Box::new(IdentityLink),
             x_matrix: ModelMatrix(basis),
-            penalty_matrices: vec![PenaltyMatrix(penalty)],
+            penalty_matrices: vec![PenaltyMatrix {
+                offset: 0,
+                block: penalty,
+            }],
             beta: Coefficients(Array1::zeros(n_splines)),
             eta: Array1::from_elem(n, 0.0),
             mu: Array1::from_elem(n, 0.0),

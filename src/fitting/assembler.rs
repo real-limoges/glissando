@@ -12,7 +12,7 @@ use crate::splines::{
 use crate::terms::Contrast;
 use crate::types::{DataSet, ModelMatrix};
 use ndarray::concatenate;
-use ndarray::{s, Array1, Array2, Axis};
+use ndarray::{Array1, Array2, Axis};
 use std::collections::HashMap;
 
 /// The numeric realization of a [`Formula`](crate::Formula)'s term list for one
@@ -374,7 +374,7 @@ fn assemble_smooth(
     n_obs: usize,
     smooth: &Smooth,
     apply_constraint: bool,
-) -> Result<(Array2<f64>, Vec<PenaltyMatrix>), GamlssError> {
+) -> Result<(Array2<f64>, Vec<Array2<f64>>), GamlssError> {
     match smooth {
         Smooth::PSpline1D {
             col_name,
@@ -389,12 +389,9 @@ fn assemble_smooth(
 
             if apply_constraint && *n_splines >= 2 {
                 let (basis_c, penalties_c) = apply_sum_to_zero(&basis, &[&penalty], *n_splines);
-                Ok((
-                    basis_c,
-                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
-                ))
+                Ok((basis_c, penalties_c))
             } else {
-                Ok((basis, vec![PenaltyMatrix(penalty)]))
+                Ok((basis, vec![penalty]))
             }
         }
 
@@ -429,12 +426,9 @@ fn assemble_smooth(
             }
             if needs_zero_sum && *k >= 2 {
                 let (basis_c, penalties_c) = apply_sum_to_zero(&basis, &[&penalty], *k);
-                Ok((
-                    basis_c,
-                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
-                ))
+                Ok((basis_c, penalties_c))
             } else {
-                Ok((basis, vec![PenaltyMatrix(penalty)]))
+                Ok((basis, vec![penalty]))
             }
         }
 
@@ -479,15 +473,9 @@ fn assemble_smooth(
             if apply_constraint && n_full >= 2 {
                 let (basis_c, penalties_c) =
                     apply_sum_to_zero(&basis, &[&penalty_1, &penalty_2], n_full);
-                Ok((
-                    basis_c,
-                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
-                ))
+                Ok((basis_c, penalties_c))
             } else {
-                Ok((
-                    basis,
-                    vec![PenaltyMatrix(penalty_1), PenaltyMatrix(penalty_2)],
-                ))
+                Ok((basis, vec![penalty_1, penalty_2]))
             }
         }
 
@@ -541,10 +529,10 @@ fn assemble_smooth(
                 let basis_c = basis.dot(&z);
                 // Z'·I·Z = Z'·Z = I_{k-1} since Z has orthonormal columns.
                 let penalty_c = Array2::<f64>::eye(n_groups - 1);
-                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+                Ok((basis_c, vec![penalty_c]))
             } else {
                 let penalty = Array2::<f64>::eye(n_groups);
-                Ok((basis, vec![PenaltyMatrix(penalty)]))
+                Ok((basis, vec![penalty]))
             }
         }
     }
@@ -566,7 +554,7 @@ pub(crate) fn assemble_model_matrices(
     let has_intercept = terms.iter().any(|t| matches!(t, Term::Intercept));
 
     let mut model_matrix_parts = Vec::with_capacity(terms.len());
-    let mut penalty_blocks: Vec<(usize, PenaltyMatrix)> = Vec::new();
+    let mut penalty_matrices: Vec<PenaltyMatrix> = Vec::new();
     let mut term_layouts = Vec::with_capacity(terms.len());
     let mut total_coeffs = 0;
     // Fixed per-row carry into η; stays zero unless a `Term::Offset` is present.
@@ -613,7 +601,10 @@ pub(crate) fn assemble_model_matrices(
                 });
 
                 for penalty_block in penalties {
-                    penalty_blocks.push((total_coeffs, penalty_block));
+                    penalty_matrices.push(PenaltyMatrix {
+                        offset: total_coeffs,
+                        block: penalty_block,
+                    });
                 }
                 total_coeffs += n_coeffs;
             }
@@ -633,20 +624,6 @@ pub(crate) fn assemble_model_matrices(
                 .collect::<Vec<_>>(),
         )?)
     };
-
-    let penalty_matrices = penalty_blocks
-        .into_iter()
-        .map(|(start_index, block)| {
-            let mut s_j = PenaltyMatrix(Array2::<f64>::zeros((total_coeffs, total_coeffs)));
-            let n = block.ncols();
-            s_j.slice_mut(s![
-                start_index..start_index + n,
-                start_index..start_index + n
-            ])
-            .assign(&block);
-            s_j
-        })
-        .collect::<Vec<_>>();
 
     Ok(AssembledDesign {
         x: x_model,
@@ -688,6 +665,81 @@ mod tests {
                 row_sum
             );
         }
+    }
+
+    /// A tensor-product smooth's two anisotropic marginal penalties act on
+    /// the same k1*k2 coefficient block, so they must share the same offset
+    /// — this is what lets `group_penalties` merge them into one group.
+    #[test]
+    fn tensor_product_penalties_share_offset() {
+        let mut data = DataSet::new();
+        let n_obs = 60;
+        data.insert_column("x1", Array1::linspace(0.0, 1.0, n_obs));
+        data.insert_column("x2", Array1::linspace(0.0, 1.0, n_obs));
+
+        let term = Term::Smooth(Smooth::TensorProduct {
+            col_name_1: "x1".into(),
+            n_splines_1: 5,
+            penalty_order_1: 2,
+            col_name_2: "x2".into(),
+            n_splines_2: 4,
+            penalty_order_2: 2,
+            degree: 3,
+            range_1: None,
+            range_2: None,
+        });
+
+        let design = assemble_model_matrices(&data, n_obs, &[term]).unwrap();
+        assert_eq!(
+            design.penalties.len(),
+            2,
+            "tensor product has 2 marginal penalties"
+        );
+        assert_eq!(design.penalties[0].offset, 0);
+        assert_eq!(
+            design.penalties[0].offset, design.penalties[1].offset,
+            "both marginal penalties must share the same coefficient-block offset"
+        );
+        let n_full = 5 * 4;
+        assert_eq!(design.penalties[0].block.dim(), (n_full, n_full));
+        assert_eq!(design.penalties[1].block.dim(), (n_full, n_full));
+    }
+
+    /// A second smooth term's penalty must start right after the first
+    /// smooth's coefficients — this is the offset bookkeeping `Efficiency
+    /// #11`'s block-local `PenaltyMatrix` storage depends on.
+    #[test]
+    fn second_smooth_penalty_offset_equals_first_smooth_coeff_count() {
+        let mut data = DataSet::new();
+        let n_obs = 60;
+        data.insert_column("x1", Array1::linspace(0.0, 1.0, n_obs));
+        data.insert_column("x2", Array1::linspace(0.0, 1.0, n_obs));
+
+        let term1 = Term::Smooth(Smooth::PSpline1D {
+            col_name: "x1".into(),
+            n_splines: 8,
+            degree: 3,
+            penalty_order: 2,
+            range: None,
+        });
+        let term2 = Term::Smooth(Smooth::PSpline1D {
+            col_name: "x2".into(),
+            n_splines: 6,
+            degree: 3,
+            penalty_order: 2,
+            range: None,
+        });
+
+        let design = assemble_model_matrices(&data, n_obs, &[term1, term2]).unwrap();
+        assert_eq!(design.penalties.len(), 2);
+        assert_eq!(design.penalties[0].offset, 0);
+        assert_eq!(design.penalties[0].block.nrows(), 8);
+        assert_eq!(
+            design.penalties[1].offset, design.layouts[0].n_coeffs,
+            "second smooth's penalty must start right after the first smooth's coefficients"
+        );
+        assert_eq!(design.penalties[1].offset, 8);
+        assert_eq!(design.penalties[1].block.nrows(), 6);
     }
 
     fn data_with(name: &str, values: Vec<f64>) -> DataSet {
