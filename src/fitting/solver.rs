@@ -116,7 +116,7 @@ pub(crate) struct PenaltyGroups(Vec<(usize, usize, Vec<usize>)>);
 pub(crate) fn group_penalties(penalty_matrices: &[PenaltyMatrix]) -> PenaltyGroups {
     let ranges: Vec<(usize, usize)> = penalty_matrices
         .iter()
-        .map(|s_j| penalty_nonzero_block_range(&s_j.0))
+        .map(|s_j| s_j.block_range())
         .collect();
 
     let mut processed = vec![false; penalty_matrices.len()];
@@ -218,20 +218,26 @@ impl<'a> Gradient for GamlssCost<'a> {
         let mut grad_vec = Array1::zeros(n_penalties);
 
         for j in 0..n_penalties {
-            let s_j = &self.penalty_matrices[j].0;
+            let s_j = &self.penalty_matrices[j];
+            let (start, end) = s_j.block_range();
+            let beta_block = info.beta.0.slice(s![start..=end]);
 
-            // dRSS/dlambda_j = 2 * (X'Wr)' * V * Sj * beta
-            let v_sj_beta = info.v_matrix.dot(&s_j.dot(&info.beta.0));
+            // dRSS/dlambda_j = 2 * (X'Wr)' * V * Sj * beta. Sj*beta is zero
+            // outside [start,end] and equals block.dot(beta_block) inside it,
+            // so V*(Sj*beta) only needs V's [start,end] column slice.
+            let sj_beta_block = s_j.block.dot(&beta_block);
+            let v_sj_beta = info.v_matrix.slice(s![.., start..=end]).dot(&sj_beta_block);
             let d_rss = 2.0 * info.x_t_w_r.dot(&v_sj_beta);
 
-            // dEDF/dlambda_j = -tr(V * Sj * V * X'WX)
-            //
-            // V·Sj·V is symmetric (V and Sj both are), and so is X'WX, so
-            // its trace against X'WX reduces to a Hadamard-product row sum
-            // instead of a third O(p³) matrix product just to read off a
-            // diagonal that is immediately summed away.
-            let v_sj = info.v_matrix.dot(s_j);
-            let v_sj_v = v_sj.dot(&info.v_matrix);
+            // dEDF/dlambda_j = -tr(V * Sj * V * X'WX). V·Sj is zero outside
+            // columns [start,end] by the same reasoning, so the left
+            // multiply also only needs V's [start,end] column slice. The
+            // final Hadamard-sum against X'WX stays full-width (v_sj_v is
+            // genuinely dense) — V·Sj·V is symmetric and so is X'WX, so
+            // that trace still reduces to a Hadamard-product row sum
+            // instead of a third full matrix product.
+            let v_sj_cols = info.v_matrix.slice(s![.., start..=end]).dot(&s_j.block);
+            let v_sj_v = v_sj_cols.dot(&info.v_matrix.slice(s![start..=end, ..]));
             let d_edf = -(&v_sj_v * &self.nfo.x_t_w_x).sum();
 
             // Quotient rule: dGCV/dlambda_j = n * [dRSS*(n-EDF) + 2*RSS*dEDF] / (n-EDF)^3
@@ -271,6 +277,7 @@ impl<'a> CostFunction for RemlCost<'a> {
             .map_err(Error::new)?;
 
         let eig = penalty_eigen(
+            self.nfo.x_t_w_x.nrows(),
             self.penalty_matrices,
             &lambdas,
             REML_RANK_TOL_EPS,
@@ -313,6 +320,7 @@ impl<'a> Gradient for RemlCost<'a> {
             .map_err(Error::new)?;
 
         let eig = penalty_eigen(
+            self.nfo.x_t_w_x.nrows(),
             self.penalty_matrices,
             &lambdas,
             REML_RANK_TOL_EPS,
@@ -322,10 +330,12 @@ impl<'a> Gradient for RemlCost<'a> {
 
         let mut grad = Array1::<f64>::zeros(n_penalties);
         for j in 0..n_penalties {
-            let s_j = &self.penalty_matrices[j].0;
-            let bsb = s_j.dot(&info.beta.0).dot(&info.beta.0);
-            let tr_v_s = (&info.v_matrix * s_j).sum();
-            let tr_pinv_s = (&eig.pinv * s_j).sum();
+            let s_j = &self.penalty_matrices[j];
+            let (start, end) = s_j.block_range();
+            let beta_block = info.beta.0.slice(s![start..=end]);
+            let bsb = s_j.block.dot(&beta_block).dot(&beta_block);
+            let tr_v_s = (&info.v_matrix.slice(s![start..=end, start..=end]) * &s_j.block).sum();
+            let tr_pinv_s = (&eig.pinv.slice(s![start..=end, start..=end]) * &s_j.block).sum();
             // ∂V_r/∂ρ_j; minimize −V_r so negate.
             let dvr = 0.5 * lambdas[j] * (-bsb + tr_pinv_s - tr_v_s);
             grad[j] = -dvr;
@@ -533,7 +543,13 @@ pub(crate) fn run_optimization_fellner_schall(
 
     for _iter in 0..FS_MAX_ITERS {
         let info = fit_pwls_with_grad_info(nfo, penalty_matrices, &lambdas)?;
-        let eig = penalty_eigen(penalty_matrices, &lambdas, REML_RANK_TOL_EPS, groups)?;
+        let eig = penalty_eigen(
+            nfo.x_t_w_x.nrows(),
+            penalty_matrices,
+            &lambdas,
+            REML_RANK_TOL_EPS,
+            groups,
+        )?;
 
         // Every coordinate's update reads only `info` / `eig` (computed above at the
         // *pre-loop* λ) and its own `lambdas[j]`, so updating in place is equivalent
@@ -541,10 +557,12 @@ pub(crate) fn run_optimization_fellner_schall(
         let mut max_log_change: f64 = 0.0;
 
         for j in 0..n_penalties {
-            let s_j = &penalty_matrices[j].0;
-            let tr_pinv_s = (&eig.pinv * s_j).sum();
-            let tr_v_s = (&info.v_matrix * s_j).sum();
-            let bsb = s_j.dot(&info.beta.0).dot(&info.beta.0);
+            let s_j = &penalty_matrices[j];
+            let (start, end) = s_j.block_range();
+            let beta_block = info.beta.0.slice(s![start..=end]);
+            let tr_pinv_s = (&eig.pinv.slice(s![start..=end, start..=end]) * &s_j.block).sum();
+            let tr_v_s = (&info.v_matrix.slice(s![start..=end, start..=end]) * &s_j.block).sum();
+            let bsb = s_j.block.dot(&beta_block).dot(&beta_block);
 
             let numerator = (tr_pinv_s - tr_v_s).max(FS_NUMERATOR_FLOOR_REL * lambdas[j]);
             let denominator = bsb.max(FS_DENOMINATOR_FLOOR);
@@ -645,7 +663,9 @@ fn weighted_penalty_sum(
 ) -> Array2<f64> {
     let mut s = Array2::<f64>::zeros((n_coeffs, n_coeffs));
     for (i, s_j) in penalty_matrices.iter().enumerate() {
-        s.scaled_add(lambdas[i], &s_j.0);
+        let (start, end) = s_j.block_range();
+        s.slice_mut(s![start..=end, start..=end])
+            .scaled_add(lambdas[i], &s_j.block);
     }
     s
 }
@@ -688,13 +708,14 @@ struct PenaltyEigen {
 /// M_p         = Σ_g null_dim(Σ_{j∈g} λⱼSⱼ_block)
 /// ```
 fn penalty_eigen(
+    n_coeffs: usize,
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>,
     eps: f64,
     groups: &PenaltyGroups,
 ) -> Result<PenaltyEigen, GamlssError> {
     debug_assert!(!penalty_matrices.is_empty());
-    let p = penalty_matrices[0].0.nrows();
+    let p = n_coeffs;
 
     let mut log_pdet = 0.0_f64;
     let mut null_dim = 0_usize;
@@ -710,8 +731,7 @@ fn penalty_eigen(
         // the shared k₁k₂ coefficient block.
         let mut combined = Array2::<f64>::zeros((block_size, block_size));
         for &k in members {
-            let slice = penalty_matrices[k].0.slice(s![start..=end, start..=end]);
-            combined.scaled_add(lambdas[k], &slice);
+            combined.scaled_add(lambdas[k], &penalty_matrices[k].block);
         }
 
         let (eigvals, eigvecs) = linalg::symmetric_eigh(&combined)?;
@@ -744,23 +764,6 @@ fn penalty_eigen(
     })
 }
 
-/// Returns the `[start, end]` index range of the contiguous non-zero block in a symmetric
-/// penalty matrix that was embedded into the full coefficient space by the assembler.
-///
-/// The embedder writes exact zeros outside the block, so any non-zero row marks the boundary.
-/// Falls back to `(0, nrows-1)` if the matrix is entirely zero (degenerate).
-fn penalty_nonzero_block_range(s: &Array2<f64>) -> (usize, usize) {
-    let n = s.nrows();
-    let start = (0..n)
-        .find(|&i| s.row(i).iter().any(|&x| x != 0.0))
-        .unwrap_or(0);
-    let end = (0..n)
-        .rev()
-        .find(|&i| s.row(i).iter().any(|&x| x != 0.0))
-        .unwrap_or(n - 1);
-    (start, end)
-}
-
 /// Cold-start heuristic for log λ when no warm start is available.
 ///
 /// Uses `tr(X'X) / tr(S_j)` (unweighted) rather than `tr(X'WX) / tr(S_j)`.
@@ -785,7 +788,7 @@ pub(super) fn initial_log_lambda(
         .sum::<f64>()
         .max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {
-        let tr_sj = s_j.0.diag().sum().max(MIN_LAMBDA);
+        let tr_sj = s_j.block.diag().sum().max(MIN_LAMBDA);
         (tr_xtx / tr_sj)
             .ln()
             .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
@@ -847,10 +850,14 @@ mod reml_tests {
         // Order-2 difference penalty on basis size 10 has null space of dim 2
         // (constants and lines).
         let p = create_penalty_matrix(10, 2);
-        let pm = PenaltyMatrix(p.clone());
+        let pm = PenaltyMatrix {
+            offset: 0,
+            block: p.clone(),
+        };
         let lambdas = arr1(&[1.0_f64]);
         let groups = group_penalties(std::slice::from_ref(&pm));
         let eig = penalty_eigen(
+            p.nrows(),
             std::slice::from_ref(&pm),
             &lambdas,
             REML_RANK_TOL_EPS,
@@ -893,8 +900,14 @@ mod reml_tests {
 
     #[test]
     fn weighted_penalty_sum_combines_linearly() {
-        let p1 = PenaltyMatrix(arr2(&[[1.0_f64, 0.0], [0.0, 1.0]]));
-        let p2 = PenaltyMatrix(arr2(&[[2.0_f64, 1.0], [1.0, 2.0]]));
+        let p1 = PenaltyMatrix {
+            offset: 0,
+            block: arr2(&[[1.0_f64, 0.0], [0.0, 1.0]]),
+        };
+        let p2 = PenaltyMatrix {
+            offset: 0,
+            block: arr2(&[[2.0_f64, 1.0], [1.0, 2.0]]),
+        };
         let lambdas = arr1(&[0.5_f64, 3.0]);
         let s = weighted_penalty_sum(2, &lambdas, &[p1, p2]);
         // 0.5·I + 3·[[2,1],[1,2]] = [[6.5, 3], [3, 6.5]]
@@ -910,7 +923,10 @@ mod reml_tests {
         // tr(X'X) = 100, tr(S_j) = 4 → log(25) ≈ 3.22.
         use ndarray::Array2;
         let x = ModelMatrix(Array2::ones((50, 2)));
-        let p = PenaltyMatrix(arr2(&[[2.0_f64, 0.0], [0.0, 2.0]]));
+        let p = PenaltyMatrix {
+            offset: 0,
+            block: arr2(&[[2.0_f64, 0.0], [0.0, 2.0]]),
+        };
         let init = initial_log_lambda(&x, &[p]);
         assert_eq!(init.len(), 1);
         assert!(init[0].abs() <= LOG_LAMBDA_CLAMP);
@@ -922,7 +938,10 @@ mod reml_tests {
         // tr(S_j) near-zero → λ would be huge → clamp at upper bound.
         use ndarray::Array2;
         let x = ModelMatrix(Array2::ones((50, 2)));
-        let p = PenaltyMatrix(arr2(&[[1e-30, 0.0], [0.0, 1e-30]]));
+        let p = PenaltyMatrix {
+            offset: 0,
+            block: arr2(&[[1e-30, 0.0], [0.0, 1e-30]]),
+        };
         let init = initial_log_lambda(&x, &[p]);
         assert!(init[0] <= LOG_LAMBDA_CLAMP);
     }
@@ -940,7 +959,15 @@ mod reml_tests {
         let penalty = create_penalty_matrix(n_splines, 2);
         let z = x_coord.mapv(|t| (2.0 * std::f64::consts::PI * t).sin());
         let w = Array1::from_elem(n, 1.0_f64);
-        (ModelMatrix(basis), z, w, vec![PenaltyMatrix(penalty)])
+        (
+            ModelMatrix(basis),
+            z,
+            w,
+            vec![PenaltyMatrix {
+                offset: 0,
+                block: penalty,
+            }],
+        )
     }
 
     #[test]
@@ -994,13 +1021,23 @@ mod reml_tests {
             scores.push(score);
 
             let info = fit_pwls_with_grad_info(&nfo, &ps, &lambdas).unwrap();
-            let eig = penalty_eigen(&ps, &lambdas, REML_RANK_TOL_EPS, &groups).unwrap();
+            let eig = penalty_eigen(
+                nfo.x_t_w_x.nrows(),
+                &ps,
+                &lambdas,
+                REML_RANK_TOL_EPS,
+                &groups,
+            )
+            .unwrap();
             let mut new_lambdas = lambdas.clone();
             for j in 0..n_penalties {
-                let s_j = &ps[j].0;
-                let tr_pinv_s = (&eig.pinv * s_j).sum();
-                let tr_v_s = (&info.v_matrix * s_j).sum();
-                let bsb = s_j.dot(&info.beta.0).dot(&info.beta.0);
+                let s_j = &ps[j];
+                let (start, end) = s_j.block_range();
+                let beta_block = info.beta.0.slice(s![start..=end]);
+                let tr_pinv_s = (&eig.pinv.slice(s![start..=end, start..=end]) * &s_j.block).sum();
+                let tr_v_s =
+                    (&info.v_matrix.slice(s![start..=end, start..=end]) * &s_j.block).sum();
+                let bsb = s_j.block.dot(&beta_block).dot(&beta_block);
                 let numerator = (tr_pinv_s - tr_v_s).max(FS_NUMERATOR_FLOOR_REL * lambdas[j]);
                 let denominator = bsb.max(FS_DENOMINATOR_FLOOR);
                 new_lambdas[j] = (lambdas[j] * (numerator / denominator))
