@@ -18,8 +18,8 @@
 // theory entirely and is exact.
 //
 // PRECISION. Values are formatted to 11 significant digits. The refactor
-// reassociates floating-point operations — `w_σ = 2.0` becomes
-// `σ²·(2/σ²)`, which is not bit-identical — so bit-exactness is the wrong bar.
+// reassociates floating-point operations (`w_σ = 2.0` becomes `σ²·(2/σ²)`,
+// which is not bit-identical), so bit-exactness is the wrong bar.
 // Reassociation moves the last ~1-2 digits (~1e-16 relative); a wrong chain
 // rule moves the value by orders of magnitude. 11 digits sits far above the
 // noise and far below any real algebraic change.
@@ -335,7 +335,7 @@ fn golden_truncated_over_gamma() {
     // through to `structural.rs::numeric_cdf_grad`, which central-differences on
     // the η scale with a *relative* step for a log link (`σ·e^{±FD_EPS}`).
     // Truncated-over-Gaussian exercises only the analytic path, so without this
-    // table the fallback would be unpinned — and it is the path most sensitive
+    // table the fallback would be unpinned, and it is the path most sensitive
     // to any change in how the perturbation is taken.
     let y = array![0.5, 1.0, 1.5, 2.0, 0.75, 2.5];
     let owned = [
