@@ -18,7 +18,7 @@
 //! zero-truncation machinery (STRUCT-2). Like the other structural wrappers it is
 //! excluded from [`from_name`](super::from_name).
 
-use super::structural::{cdf_eta_grads, delegate_to_base};
+use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
     clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT, PROB_EPS,
 };
@@ -119,14 +119,9 @@ impl Distribution for Hurdle {
         let base_derivs = self.base.derivatives(y, params)?;
         let zeros = Array1::<f64>::zeros(y.len());
         let f0 = self.base.cdf(&zeros, params)?;
-        let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, params)?;
+        let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params)?;
 
-        let mut out: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
-        for &param in self.base.parameters() {
-            let (mut u, mut w) = base_derivs
-                .get(param)
-                .cloned()
-                .ok_or_else(|| self.base.unknown_param(param))?;
+        let mut out = rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
             let (d1_0, d2_0) = &grad0[param];
             for i in 0..y.len() {
                 if Self::is_zero(y[i]) {
@@ -140,8 +135,7 @@ impl Distribution for Hurdle {
                     w[i] = (w[i] - d2_0[i] / dmass - (d1_0[i] / dmass).powi(2)).max(MIN_WEIGHT);
                 }
             }
-            out.insert(param.to_string(), (u, w));
-        }
+        })?;
 
         // xi atom (logit link): a Bernoulli on the zero indicator.
         //   u = I(y=0) − xi,   w = xi(1 − xi).

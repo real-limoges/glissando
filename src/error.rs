@@ -34,6 +34,9 @@ pub enum GamlssError {
     #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
     UnknownParameter { distribution: String, param: String },
 
+    #[error("Family mismatch: model was fit with {expected} but predict was called with a different family ({actual})")]
+    FamilyMismatch { expected: String, actual: String },
+
     /// Indicates a bug in the library, not a user error.
     #[error("Internal error: {0}")]
     Internal(String),

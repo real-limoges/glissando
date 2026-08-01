@@ -152,9 +152,23 @@ impl_argmin_math_for_vector_wrapper!(LogLambdas);
 #[derive(Debug, Clone)]
 pub(crate) struct ModelMatrix(pub Array2<f64>);
 
-/// Penalty matrix for a smooth term. Derefs to `Array2<f64>`.
+/// Penalty matrix for a smooth term. Stores only its own contiguous
+/// coefficient block — never the full model width — plus the offset at
+/// which that block sits in the full coefficient vector.
 #[derive(Debug, Clone)]
-pub(crate) struct PenaltyMatrix(pub Array2<f64>);
+pub(crate) struct PenaltyMatrix {
+    pub(crate) offset: usize,
+    pub(crate) block: Array2<f64>,
+}
+
+impl PenaltyMatrix {
+    /// Inclusive `[start, end]` range in the full coefficient space this
+    /// penalty's non-zero entries occupy. Matches the convention already
+    /// used by `PenaltyGroups`/`group_penalties`.
+    pub(crate) fn block_range(&self) -> (usize, usize) {
+        (self.offset, self.offset + self.block.nrows() - 1)
+    }
+}
 
 /// Covariance matrix of coefficient estimates, V = (X'WX + Σλ·S)⁻¹. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
@@ -179,7 +193,6 @@ macro_rules! impl_deref_for_matrix_wrapper {
 }
 
 impl_deref_for_matrix_wrapper!(CovarianceMatrix);
-impl_deref_for_matrix_wrapper!(PenaltyMatrix);
 impl_deref_for_matrix_wrapper!(ModelMatrix);
 
 #[cfg(test)]
@@ -276,10 +289,18 @@ mod tests {
     fn matrix_wrappers_deref_to_array2() {
         let m = ModelMatrix(Array2::from_shape_fn((2, 3), |(i, j)| (i + j) as f64));
         assert_eq!(m.dim(), (2, 3));
-        let p = PenaltyMatrix(Array2::<f64>::eye(3));
-        assert_eq!(p.dim(), (3, 3));
         let c = CovarianceMatrix(Array2::<f64>::zeros((2, 2)));
         assert_eq!(c.dim(), (2, 2));
+    }
+
+    #[test]
+    fn penalty_matrix_block_range() {
+        let p = PenaltyMatrix {
+            offset: 2,
+            block: Array2::<f64>::eye(3),
+        };
+        assert_eq!(p.block.dim(), (3, 3));
+        assert_eq!(p.block_range(), (2, 4));
     }
 
     // --- Serialization round-trip ---
