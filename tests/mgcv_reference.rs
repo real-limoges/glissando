@@ -114,7 +114,7 @@ fn load_summary() -> Option<ComparisonSummary> {
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
-    // Surface parse errors instead of silently mapping them to "file missing" —
+    // Surface parse errors instead of silently mapping them to "file missing":
     // a malformed field from one fitter script otherwise reads as "run
     // run_comparison.sh first", which sends the investigation the wrong way.
     match serde_json::from_str(&content) {
@@ -187,7 +187,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
         } else {
             // fitted_mu (response scale).
             //
-            // Weighted heavy-tail case: the two oracles themselves disagree —
+            // Weighted heavy-tail case: the two oracles themselves disagree;
             // gamlss's pb() local-ML smoothing selects markedly wigglier means
             // than mgcv's REML at some seeds (up to ~25% pointwise), and
             // glissando (REML) sides with mgcv. When the mgcv fit is available,
@@ -212,7 +212,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
                 let (max_rel, mean_abs) = fitted_drift(&g.fitted_mu, &gl.fitted_mu);
                 if max_rel > mu_tol && mean_abs > 1e-2 {
                     failures.push(format!(
-                        "{name}: fitted_mu vs gamlss — max relative {max_rel:.3e}, mean absolute {mean_abs:.3e} (tol {mu_tol:.3})"
+                        "{name}: fitted_mu vs gamlss: max relative {max_rel:.3e}, mean absolute {mean_abs:.3e} (tol {mu_tol:.3})"
                     ));
                 }
             }
@@ -256,7 +256,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
             //
             // Skipped entirely for prior-weighted scenarios, mirroring the main
             // loop's rule for the mgcv comparison: smoothing-selection EDF under
-            // prior weights is implementation-defined — the three references
+            // prior weights is implementation-defined: the three references
             // spread across ~5 EDF on b2 (glissando ≈ 10.5, mgcv scat ≈ 12,
             // gamlss pb ≈ 15.6 at seed 101) while all three means agree
             // pointwise within each other's disagreement. Gating a quantity the
@@ -272,7 +272,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
                         };
                         if (g_edf - ref_edf).abs() > tol {
                             failures.push(format!(
-                                "{name}: edf[{param}] vs gamlss — glissando={g_edf:.3} gamlss={ref_edf:.3} (tol {tol:.3})"
+                                "{name}: edf[{param}] vs gamlss: glissando={g_edf:.3} gamlss={ref_edf:.3} (tol {tol:.3})"
                             ));
                         }
                     }
@@ -397,7 +397,7 @@ fn glissando_matches_mgcv_within_tolerance() {
         }
         // Tensor smooths get a wider pointwise band: with the corner-basin
         // optimizer traps fixed, the residual gap vs mgcv is a criterion-level
-        // convention difference — glissando (like gamlss) evaluates the working
+        // convention difference: glissando (like gamlss) evaluates the working
         // REML at the ML scale estimate while mgcv's gam(REML) profiles φ,
         // worth ~1–2 EDF on a 63-parameter 2-D smooth. Observed agreement is
         // 0.5–1.5% of the surface amplitude (mean abs 0.011–0.027); the EDF

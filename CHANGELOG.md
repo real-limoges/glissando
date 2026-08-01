@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed — solver convergence & mgcv/gamlss parity
+### Fixed: solver convergence & mgcv/gamlss parity
 
 - **Working-response clipping no longer inverts the Fisher step.** The
   per-element `u/w` clip was tightened from a robustness device (±20) to a pure
   anti-overflow guard (±1e6). At ±20, whenever many rows clipped, the update
   direction was decided by the count of positive vs negative rows instead of
-  the score-weighted aggregate — observed as an unbounded ν → ∞ runaway on
+  the score-weighted aggregate, observed as an unbounded ν → ∞ runaway on
   Student-t fits that could never converge. Overshoot control is the job of
   the deviance-guarded step-halving.
 - **Step-halving rejects uphill steps at the backtracking floor** instead of
@@ -50,11 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   basis gets ONE sum-to-zero constraint on the full k₁k₂ basis (mgcv `te()`
   semantics, k₁k₂ − 1 coefficients, both penalties transformed with the same
   Z). Previously each marginal was centered before the Kronecker product,
-  which excluded all `f(x1)` and `g(x2)` main effects — silently making
+  which excluded all `f(x1)` and `g(x2)` main effects, silently making
   `te()` a pure-interaction (`ti()`-style) smooth.
 - **P-spline / tensor knot grids and random-effect level maps are resolved at
   fit time and stored on the term** (`PSpline1D::range`,
-  `TensorProduct::range_1/2`, `RandomEffect::levels` — all `serde(default)`,
+  `TensorProduct::range_1/2`, `RandomEffect::levels`: all `serde(default)`,
   so previously serialized models still load). Prediction replays the
   training basis; it used to re-derive knots/levels from the *prediction*
   data, corrupting grid/subset/reordered-group predictions. Unseen
@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-penalty coefficient direction** (the system was structurally singular);
   the direction is removed with the same Householder transform used for
   centering, preserving `f(pc) = 0`.
-- **Rejected block updates keep their previous λ/covariance/EDF** — the
+- **Rejected block updates keep their previous λ/covariance/EDF**: the
   outer loop previously installed the rejected proposal's values alongside
   the reverted coefficients, so SEs/GAIC described a state the model was
   not in.
@@ -79,8 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *unconditionally on every outer cycle*. Each firing runs a `7^k` grid plus
   several L-BFGS/Fellner–Schall solves (an eigendecomposition per penalty
   block), so per-cycle probing cost ≈30 s (OpenBLAS) to >2 min (pure-rust) on
-  a default 10×10 tensor fit in an unoptimized build — hanging the debug test
-  suites — to guard a merely-large-interior-λ corner that only the `#[ignore]`d
+  a default 10×10 tensor fit in an unoptimized build, hanging the debug test
+  suites, to guard a merely-large-interior-λ corner that only the `#[ignore]`d
   `benchmark/run_comparison.sh` mgcv sweep checks. Ceiling/floor corners are
   still caught by the bound trigger; re-run the mgcv comparison before relying
   on tensor EDF parity for a new seed.

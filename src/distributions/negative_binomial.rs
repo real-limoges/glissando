@@ -36,7 +36,7 @@ impl Distribution for NegativeBinomial {
     }
 
     /// NB2 σ is the overdispersion coefficient (`Var = μ + σμ²`), not a standard
-    /// deviation — the trait default of `sd(y)` is on the wrong scale entirely
+    /// deviation: the trait default of `sd(y)` is on the wrong scale entirely
     /// (often 10–30× too large for count data). Seed it with the method-of-moments
     /// estimate `(var(y) − mean(y))/mean(y)²`, floored at 0.1 like gamlss NBI's
     /// `sigma.initial`.

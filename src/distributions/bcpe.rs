@@ -17,7 +17,7 @@ use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{digamma, trigamma};
+use crate::math::{digamma, median, median_abs_deviation, trigamma};
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, Gamma as SGamma};
 use statrs::function::gamma::{gamma_lr, ln_gamma};
@@ -311,29 +311,6 @@ impl Distribution for BCPE {
     fn name(&self) -> &'static str {
         "BCPE"
     }
-}
-
-/// Median of `y` (finite entries). Returns 0.0 for an empty slice (`validate_inputs`
-/// rejects empty `y` on the public path, so this is only a defensive default).
-fn median(y: &Array1<f64>) -> f64 {
-    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let m = v.len() / 2;
-    if v.len().is_multiple_of(2) {
-        0.5 * (v[m - 1] + v[m])
-    } else {
-        v[m]
-    }
-}
-
-/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
-fn median_abs_deviation(y: &Array1<f64>) -> f64 {
-    let med = median(y);
-    let dev = y.mapv(|x| (x - med).abs());
-    median(&dev)
 }
 
 #[cfg(test)]

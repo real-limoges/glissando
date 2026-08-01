@@ -103,7 +103,7 @@ pub struct FitConfig {
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub step_halving: bool,
     /// Absolute tolerance on the global-deviance change between cycles (FIT-2),
-    /// in deviance units — the same convention as R gamlss's `c.crit`.
+    /// in deviance units: the same convention as R gamlss's `c.crit`.
     /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
@@ -298,14 +298,7 @@ pub(super) fn global_deviance<D: Distribution + ?Sized>(
     prior_weights: Option<&Array1<f64>>,
     models: &IndexMap<String, FittingParameter>,
 ) -> Result<f64, GamlssError> {
-    let params: HashMap<&str, &Array1<f64>> =
-        models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
-    let ll_pt = family.loglik_pointwise(y, &params)?;
-    let ll = match prior_weights {
-        Some(w) => (&ll_pt * w).sum(),
-        None => ll_pt.sum(),
-    };
-    Ok(-2.0 * ll)
+    deviance(family, y, prior_weights, models, None)
 }
 
 /// Same as [`global_deviance`], but evaluating one parameter block at a *proposed*
@@ -319,9 +312,34 @@ pub(super) fn global_deviance_with<D: Distribution + ?Sized>(
     param: &str,
     mu_override: &Array1<f64>,
 ) -> Result<f64, GamlssError> {
+    deviance(family, y, prior_weights, models, Some((param, mu_override)))
+}
+
+/// Largest element-wise absolute difference `max|aᵢ − bᵢ|`, the convergence
+/// yardstick used for both η and β moves. Returns `0.0` for empty inputs.
+pub(super) fn max_abs_diff(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    (a - b)
+        .iter()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max)
+}
+
+/// Shared body of [`global_deviance`] / [`global_deviance_with`]: assemble the
+/// params view from `models`, optionally swapping in a trial block, and scale the
+/// (prior-weighted) log-likelihood by `−2`.
+fn deviance<'a, D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
+    models: &'a IndexMap<String, FittingParameter>,
+    override_: Option<(&'a str, &'a Array1<f64>)>,
+) -> Result<f64, GamlssError> {
     let mut params: HashMap<&str, &Array1<f64>> =
         models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
-    params.insert(param, mu_override); // swap in the trial block
+    if let Some((param, mu_override)) = override_ {
+        params.insert(param, mu_override);
+    }
     let ll_pt = family.loglik_pointwise(y, &params)?;
     let ll = match prior_weights {
         Some(w) => (&ll_pt * w).sum(),
@@ -458,12 +476,42 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     scoring::MIN_STEP_ALPHA,
                 )?
             } else {
-                scoring::Halved {
-                    beta: update.beta.clone(),
-                    eta: update.eta.clone(),
-                    mu: update.mu.clone(),
-                    hits: 0,
-                    rejected: false,
+                // No step-halving: nothing else bounds the accepted step, so
+                // scale the raw Fisher step back to at most `MAX_STEP_NO_HALVING`
+                // per element in η (see that constant's doc comment) instead of
+                // relying on scoring::step's internal MAX_STEP clamp, which is
+                // now far too loose (1e6) to serve alone. Scaling β (not η
+                // directly) keeps η = X·β + offset exact.
+                let pre_model = &models[*param_name];
+                let raw_max_change = update.eta_max_change;
+                let scale = if raw_max_change > scoring::MAX_STEP_NO_HALVING {
+                    scoring::MAX_STEP_NO_HALVING / raw_max_change
+                } else {
+                    1.0
+                };
+                if scale < 1.0 {
+                    let dir = &update.beta.0 - &pre_model.beta.0;
+                    let beta = &pre_model.beta.0 + &(scale * &dir);
+                    let eta = pre_model.x_matrix.0.dot(&beta) + &pre_model.offset;
+                    let mu = eta.mapv(|e| pre_model.link.inv_link(e));
+                    let eta_max_change = max_abs_diff(&eta, &pre_model.eta);
+                    scoring::Halved {
+                        beta: Coefficients(beta),
+                        eta,
+                        mu,
+                        hits: 0,
+                        rejected: false,
+                        eta_max_change,
+                    }
+                } else {
+                    scoring::Halved {
+                        beta: update.beta.clone(),
+                        eta: update.eta.clone(),
+                        mu: update.mu.clone(),
+                        hits: 0,
+                        rejected: false,
+                        eta_max_change: update.eta_max_change,
+                    }
                 }
             };
 
@@ -472,7 +520,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             // A coefficient-space (Δβ) test is vulnerable to false negatives on
             // penalized models: when the smoothing objective has a flat valley,
             // the per-cycle λ re-optimization can jitter between fit-equivalent
-            // (λ, β) pairs whose linear predictors are identical — β moves along
+            // (λ, β) pairs whose linear predictors are identical: β moves along
             // a fit-irrelevant ridge forever and Δβ never passes, even though
             // the model (η, μ, deviance) is fully stationary. Measuring the
             // change of η instead is invariant to such ridges; combined with the
@@ -481,18 +529,24 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             //
             // Each parameter is checked against its own |η| scale, with a floor
             // of 1.0 so the test is equivalent to an absolute threshold when the
-            // linear predictor is O(1). The test uses the full-step `update`: as
-            // the fit approaches the optimum the score → 0, so the full step
-            // → 0 and step-halving accepts α = 1. Far from the optimum a large
-            // full step keeps this test conservative, which is exactly when the
-            // GD test below is the one that should decide.
+            // linear predictor is O(1). The test uses `accepted.eta_max_change`
+            // (what step-halving actually applied), not the full-step proposal:
+            // as the fit approaches the optimum the score → 0, so the full step
+            // → 0 and step-halving accepts α = 1, at which point the two
+            // coincide. They diverge only when the whole block update was
+            // rejected (α = 0, model frozen); using the proposal there would
+            // keep re-flagging "still moving" for a state that hasn't changed
+            // since the first rejection, burning the iteration budget on an
+            // identical re-derived-and-rejected step every cycle. Far from the
+            // optimum a large accepted step keeps this test conservative, which
+            // is exactly when the GD test below is the one that should decide.
             let param_eta_scale = update
                 .eta
                 .iter()
                 .copied()
                 .map(f64::abs)
                 .fold(1.0_f64, f64::max);
-            if update.eta_max_change / param_eta_scale >= config.tolerance {
+            if accepted.eta_max_change / param_eta_scale >= config.tolerance {
                 all_converged = false;
             }
 
@@ -508,9 +562,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 },
             );
 
-            let model = models.get_mut(*param_name).ok_or_else(|| {
-                GamlssError::Internal(format!("Model for parameter '{}' not found", param_name))
-            })?;
+            // Infallible: `models` was populated from this same `family.parameters()`
+            // list above and nothing removes entries (see `&models[*param_name]`).
+            let model = &mut models[*param_name];
             // β/η/μ come from the accepted (possibly damped) step; covariance /
             // EDF / λ keep the values `scoring::step` computed at the full step.
             // Near convergence α → 1 so those are evaluated at the right point —
@@ -519,7 +573,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             // When the whole block update was REJECTED (uphill at every α), the
             // previous λ/covariance/EDF are kept too: the proposal's values
             // describe a state that was never entered, and installing them
-            // would pair the old β with a covariance/EDF evaluated elsewhere —
+            // would pair the old β with a covariance/EDF evaluated elsewhere,
             // corrupting SEs, GAIC, and the collapse warnings. The only
             // exception is the very first cycle, where there is no previous
             // covariance yet; the proposal's is then the best available.
@@ -541,7 +595,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // `c.crit` (default 0.001). A relative test (|ΔGD|/|GD|) was used
         // previously, but its slack scales with the deviance magnitude: at
         // GD ≈ 4000 it declared convergence while the fit was still improving
-        // by ~4 deviance units per cycle — far short of the optimum that gamlss
+        // by ~4 deviance units per cycle, far short of the optimum that gamlss
         // (absolute criterion) reaches on the same data.
         let gd = global_deviance(family, y, prior_weights, &models)?;
         let gd_abs_change = (gd_prev - gd).abs();
@@ -652,16 +706,7 @@ pub fn sample_posterior(
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Result<Vec<Array1<f64>>, GamlssError> {
-    let l_factor =
-        linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
-
-    let mut rng_rs = rng();
-    Ok(sample_from_cholesky(
-        &beta_hat.0,
-        &l_factor,
-        n_samples,
-        &mut rng_rs,
-    ))
+    sample_posterior_seeded(beta_hat, v_beta, n_samples, None)
 }
 
 /// Like [`sample_posterior`] with an optional seed; `None` uses the unseeded RNG.

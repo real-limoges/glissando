@@ -4,6 +4,7 @@
 use crate::distributions::{self, Distribution};
 use crate::fitting::{self, assembler::assemble_model_matrices};
 use crate::preprocessing::validate_inputs;
+use crate::terms::Term;
 use crate::types::{self, Coefficients, DataSet, Formula};
 use crate::{FitConfig, FitDiagnostics, GamlssError, ModelDiagnostics};
 use indexmap::IndexMap;
@@ -57,8 +58,40 @@ fn resolve_link<D: Distribution + ?Sized>(
 fn check_design_width(param: &str, n_cols: usize, n_coefs: usize) -> Result<(), GamlssError> {
     if n_cols != n_coefs {
         return Err(GamlssError::Shape(format!(
-            "parameter '{param}': rebuilt design matrix has {n_cols} columns but the stored              coefficient vector has {n_coefs} entries. This model was likely serialized by an              older glissando version whose basis construction differed (te() tensors and              pc-constrained CR splines changed dimension); refit the model to migrate it."
+            "parameter '{param}': rebuilt design matrix has {n_cols} columns but the stored \
+             coefficient vector has {n_coefs} entries. This model was likely serialized by an \
+             older glissando version whose basis construction differed (te() tensors and \
+             pc-constrained CR splines changed dimension); refit the model to migrate it."
         )));
+    }
+    Ok(())
+}
+
+/// Guard: Student-t's ν-floor boundary-freeze projection (see
+/// `distributions::student_t::derivatives`) sums the score across every row
+/// pinned at `NU_FLOOR` into one scalar, which is only the exact KKT test
+/// when `eta_nu` is intercept-only (one shared ν coefficient). A covariate or
+/// smooth `nu` formula would silently bias the fitted ν coefficients instead
+/// of erroring, so reject it here rather than fit it wrong.
+fn check_student_t_nu_formula<D: Distribution + ?Sized>(
+    formula: &Formula,
+    family: &D,
+) -> Result<(), GamlssError> {
+    if family.name() != "StudentT" {
+        return Ok(());
+    }
+    let nu_is_intercept_only = match formula.get("nu") {
+        None => true,
+        Some(terms) => matches!(terms.as_slice(), [] | [Term::Intercept]),
+    };
+    if !nu_is_intercept_only {
+        return Err(GamlssError::Input(
+            "StudentT: a covariate or smooth formula for 'nu' is not currently supported. \
+             The ν-floor boundary-freeze projection aggregates the score across all pinned \
+             rows into one scalar, which is only exact when eta_nu is intercept-only; use an \
+             intercept-only 'nu' formula (or omit it)."
+                .to_string(),
+        ));
     }
     Ok(())
 }
@@ -145,6 +178,7 @@ impl GamlssModel {
         };
 
         validate_inputs(y, data, formula, family, weights)?;
+        check_student_t_nu_formula(formula, family)?;
 
         let (fitted_models, diagnostics) =
             fitting::fit_gamlss(data, y, weights, formula, family, &config)?;
@@ -394,38 +428,16 @@ impl GamlssModel {
         let n_obs = params_map["mu"].len();
         let r = family.n_categories();
 
-        // Re-assemble the params HashMap in the form that Ocat::category_probs needs.
-        // compute_thresholds_at expects per-observation vectors so we build them here.
+        // Re-assemble the params HashMap in the form Ocat's own threshold
+        // reconstruction needs, then reuse it rather than re-deriving the
+        // cumulative-increment formula here.
         let n_thresh = r - 1;
-
-        // Collect threshold parameter arrays; index k (0-based) → delta_{k+1}
-        let mut delta_arrs: Vec<&ndarray::Array1<f64>> = Vec::with_capacity(n_thresh);
-        for k in 1..=n_thresh {
-            let name = match k {
-                1 => "delta_1",
-                2 => "delta_2",
-                3 => "delta_3",
-                4 => "delta_4",
-                _ => unreachable!(),
-            };
-            delta_arrs.push(params_map.get(name).ok_or_else(|| {
-                GamlssError::Input(format!(
-                    "predict_class_probabilities: missing parameter '{name}'"
-                ))
-            })?);
-        }
+        let params_view = borrow_param_view(&params_map);
         let eta_mu = &params_map["mu"];
 
         let mut out = Array2::zeros((n_obs, r));
         for i in 0..n_obs {
-            let mut thresholds = Vec::with_capacity(n_thresh);
-            for k in 0..n_thresh {
-                if k == 0 {
-                    thresholds.push(delta_arrs[0][i]);
-                } else {
-                    thresholds.push(thresholds[k - 1] + delta_arrs[k][i].max(1e-10));
-                }
-            }
+            let thresholds = distributions::Ocat::compute_thresholds_at(&params_view, n_thresh, i)?;
             let probs = distributions::Ocat::category_probs(eta_mu[i], &thresholds);
             for (j, &p) in probs.iter().enumerate() {
                 out[(i, j)] = p;

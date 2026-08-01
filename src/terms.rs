@@ -197,7 +197,7 @@ pub enum Smooth {
         /// 1 = linear trends, 2 = constant second differences.
         penalty_order: usize,
         /// Training-data range `(min, max)` the uniform knot grid is anchored
-        /// to. **Leave `None` when building a formula** — it is resolved once
+        /// to. **Leave `None` when building a formula**: it is resolved once
         /// from training data at fit time and stored here so prediction reuses
         /// the identical basis (previously the knots were silently re-derived
         /// from the *prediction* data's range, corrupting out-of-range or

@@ -11,7 +11,7 @@ pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f6
     }
 
     // General order-d difference coefficients: convolve [1, -1] with itself d
-    // times, giving the alternating binomial row (1, -d, ..., ±1) — identical to
+    // times, giving the alternating binomial row (1, -d, ..., ±1): identical to
     // R's diff(diag(k), differences = d). The previous code special-cased orders
     // 1 and 2 and silently reused the order-2 row (with the wrong number of
     // rows) for anything higher.

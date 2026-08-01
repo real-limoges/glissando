@@ -82,7 +82,7 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
             // null(S₁⊗I + I⊗S₂) = null(S₁) ⊗ null(S₂); the dimensions multiply.
             // The tensor is centered with ONE sum-to-zero constraint on the full
             // basis (mgcv te() semantics), which removes exactly the constant
-            // direction — a member of the product null space — so subtract 1
+            // direction (a member of the product null space), so subtract 1
             // (not one per margin as the `margin` helper would).
             let d1 = (*penalty_order_1).min(*n_splines_1);
             let d2 = (*penalty_order_2).min(*n_splines_2);
@@ -228,19 +228,20 @@ fn finite_range(x: &Array1<f64>, col: &str) -> Result<(f64, f64), GamlssError> {
     Ok((lo, hi))
 }
 
-/// Sorted distinct string levels of a grouping column (sorted for determinism —
-/// first-occurrence order would make the coefficient layout depend on the row
-/// order of the training data).
+/// Sorted distinct string levels of a grouping column, sorted numerically (not
+/// lexicographically) via [`distinct_levels`] for determinism: first-occurrence
+/// order would make the coefficient layout depend on the row order of the
+/// training data, and string sorting would order "10" before "2".
 fn sorted_levels(x: &Array1<f64>) -> Vec<String> {
-    let mut levels: Vec<String> = x.iter().map(|v| v.to_string()).collect();
-    levels.sort();
-    levels.dedup();
-    levels
+    distinct_levels(x)
+        .into_iter()
+        .map(|v| v.to_string())
+        .collect()
 }
 
-/// Sorted distinct numeric level codes of a categorical column. Mirrors the
-/// `RandomEffect` level-walk but yields a deterministic, sorted ordering so the
-/// treatment baseline (`levels[0]`) and contrast columns are reproducible.
+/// Sorted distinct numeric level codes of a categorical column, in ascending
+/// numeric order so the treatment baseline (`levels[0]`) and contrast columns
+/// are reproducible. Shared by `Factor` and (via [`sorted_levels`]) `RandomEffect`.
 fn distinct_levels(x: &Array1<f64>) -> Vec<f64> {
     let mut seen: Vec<f64> = Vec::new();
     for &v in x.iter() {
@@ -351,6 +352,23 @@ fn row_kronecker_block(left: &Array2<f64>, right: &Array2<f64>, n_obs: usize) ->
     out
 }
 
+/// Sum-to-zero (Householder null-space) reparameterization shared by every
+/// smooth type that centers against an Intercept sharing its parameter:
+/// `Z = sum_to_zero_basis(k)` projects `basis` and each of `penalties` onto
+/// the sum-to-zero subspace, removing the direction collinear with the
+/// intercept (or, for a CR spline's `pc` constraint, the direction collinear
+/// with `f(pc) = 0`).
+fn apply_sum_to_zero(
+    basis: &Array2<f64>,
+    penalties: &[&Array2<f64>],
+    k: usize,
+) -> (Array2<f64>, Vec<Array2<f64>>) {
+    let z = sum_to_zero_basis(k);
+    let basis_c = basis.dot(&z);
+    let penalties_c = penalties.iter().map(|p| z.t().dot(*p).dot(&z)).collect();
+    (basis_c, penalties_c)
+}
+
 fn assemble_smooth(
     data: &DataSet,
     n_obs: usize,
@@ -370,10 +388,11 @@ fn assemble_smooth(
             let penalty = create_penalty_matrix(*n_splines, *penalty_order);
 
             if apply_constraint && *n_splines >= 2 {
-                let z = sum_to_zero_basis(*n_splines);
-                let basis_c = basis.dot(&z);
-                let penalty_c = z.t().dot(&penalty).dot(&z);
-                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+                let (basis_c, penalties_c) = apply_sum_to_zero(&basis, &[&penalty], *n_splines);
+                Ok((
+                    basis_c,
+                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
+                ))
             } else {
                 Ok((basis, vec![PenaltyMatrix(penalty)]))
             }
@@ -396,29 +415,24 @@ fn assemble_smooth(
             let mut basis = create_cr_basis_matrix(x_col, knots);
             let penalty = create_cr_penalty_matrix(knots);
 
+            // pc replaces centering: pin f(pc_val) = 0. The pc-shifted basis
+            // maps the coefficient direction 1_k to the zero function
+            // (B_pc·1 = 1·(1 − Σb_j(pc)) = 0) while S·1 = 0 too, so keeping all
+            // k columns leaves a zero-design, zero-penalty direction and
+            // X'WX + λS is singular: it needs the same Householder null-space
+            // transform as centering (below) whenever k ≥ 2, regardless of
+            // `apply_constraint`; f(pc) = 0 is preserved for every β in the
+            // reduced space.
+            let needs_zero_sum = pc.is_some() || apply_constraint;
             if let Some(pc_val) = pc {
-                // pc replaces centering: pin f(pc_val) = 0, skip sum_to_zero.
                 apply_cr_pc_constraint(&mut basis, knots, *pc_val);
-                // The pc-shifted basis maps the coefficient direction 1_k to the
-                // zero function (B_pc·1 = 1·(1 − Σb_j(pc)) = 0) while S·1 = 0 too,
-                // so keeping all k columns leaves a zero-design, zero-penalty
-                // direction and X'WX + λS is singular. Drop that direction with
-                // the same Householder null-space transform used for centering;
-                // f(pc) = 0 is preserved for every β in the reduced space.
-                if *k >= 2 {
-                    let z = sum_to_zero_basis(*k);
-                    let basis_c = basis.dot(&z);
-                    let penalty_c = z.t().dot(&penalty).dot(&z);
-                    Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
-                } else {
-                    Ok((basis, vec![PenaltyMatrix(penalty)]))
-                }
-            } else if apply_constraint && *k >= 2 {
-                // Same sum-to-zero reparameterization as PSpline1D.
-                let z = sum_to_zero_basis(*k);
-                let basis_c = basis.dot(&z);
-                let penalty_c = z.t().dot(&penalty).dot(&z);
-                Ok((basis_c, vec![PenaltyMatrix(penalty_c)]))
+            }
+            if needs_zero_sum && *k >= 2 {
+                let (basis_c, penalties_c) = apply_sum_to_zero(&basis, &[&penalty], *k);
+                Ok((
+                    basis_c,
+                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
+                ))
             } else {
                 Ok((basis, vec![PenaltyMatrix(penalty)]))
             }
@@ -456,18 +470,19 @@ fn assemble_smooth(
 
             // When an Intercept shares the parameter, apply ONE sum-to-zero
             // constraint to the FULL tensor basis (removing only the overall
-            // constant), transforming both penalties with the same Z — exactly
+            // constant), transforming both penalties with the same Z: exactly
             // mgcv's te() treatment (k1·k2 − 1 coefficients). Centering each
-            // *marginal* before the Kronecker (the previous behaviour) removes
+            // *marginal* before the Kronecker (the previous behavior) removes
             // every function of the form f(x1)·1 and 1·g(x2), i.e. both main
-            // effects — silently reducing te() to a ti()-style pure interaction
+            // effects, silently reducing te() to a ti()-style pure interaction
             // that cannot represent additive structure.
             if apply_constraint && n_full >= 2 {
-                let z = sum_to_zero_basis(n_full);
-                let basis_c = basis.dot(&z);
-                let p1_c = z.t().dot(&penalty_1).dot(&z);
-                let p2_c = z.t().dot(&penalty_2).dot(&z);
-                Ok((basis_c, vec![PenaltyMatrix(p1_c), PenaltyMatrix(p2_c)]))
+                let (basis_c, penalties_c) =
+                    apply_sum_to_zero(&basis, &[&penalty_1, &penalty_2], n_full);
+                Ok((
+                    basis_c,
+                    penalties_c.into_iter().map(PenaltyMatrix).collect(),
+                ))
             } else {
                 Ok((
                     basis,

@@ -19,6 +19,87 @@ use std::collections::HashMap;
 /// dominating.
 const FD_EPS: f64 = 1e-5;
 
+/// Reject a response whose length does not match a wrapper's stored per-row state.
+///
+/// `name` identifies the wrapper and the field (e.g. `"Censored: status"`), so the
+/// message reads as `"<name> length {stored} does not match response length {n}"`.
+pub(crate) fn check_state_len(name: &str, stored: usize, n: usize) -> Result<(), GamlssError> {
+    if stored != n {
+        return Err(GamlssError::Input(format!(
+            "{name} length {stored} does not match response length {n}"
+        )));
+    }
+    Ok(())
+}
+
+/// Emit `Distribution` methods that are pure one-line passthroughs to `self.base`.
+///
+/// Each wrapper lists only the methods it genuinely forwards unchanged; anything
+/// the wrapper reshapes (e.g. `Truncated::cdf`, which renormalizes) stays
+/// hand-written. Requires `Array1`, `HashMap`, `Link` and `GamlssError` in scope
+/// at the call site.
+macro_rules! delegate_to_base {
+    (@method parameters) => {
+        fn parameters(&self) -> &[&'static str] {
+            self.base.parameters()
+        }
+    };
+    (@method default_link) => {
+        fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+            self.base.default_link(param)
+        }
+    };
+    (@method initial_value) => {
+        fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+            self.base.initial_value(param, y)
+        }
+    };
+    (@method is_discrete) => {
+        fn is_discrete(&self) -> bool {
+            self.base.is_discrete()
+        }
+    };
+    (@method variance) => {
+        fn variance(
+            &self,
+            params: &HashMap<&str, &Array1<f64>>,
+        ) -> Result<Array1<f64>, GamlssError> {
+            self.base.variance(params)
+        }
+    };
+    (@method expected_value) => {
+        fn expected_value(
+            &self,
+            params: &HashMap<&str, &Array1<f64>>,
+        ) -> Result<Array1<f64>, GamlssError> {
+            self.base.expected_value(params)
+        }
+    };
+    (@method cdf) => {
+        fn cdf(
+            &self,
+            y: &Array1<f64>,
+            params: &HashMap<&str, &Array1<f64>>,
+        ) -> Result<Array1<f64>, GamlssError> {
+            self.base.cdf(y, params)
+        }
+    };
+    (@method quantile) => {
+        fn quantile(
+            &self,
+            p: &Array1<f64>,
+            params: &HashMap<&str, &Array1<f64>>,
+        ) -> Result<Array1<f64>, GamlssError> {
+            self.base.quantile(p, params)
+        }
+    };
+    ($($m:ident),* $(,)?) => {
+        $(delegate_to_base!(@method $m);)*
+    };
+}
+
+pub(crate) use delegate_to_base;
+
 /// `(∂F/∂η, ∂²F/∂η²)` at the points `at`, for every parameter of `base`.
 ///
 /// Analytic for the parameters `base.cdf_eta_derivatives` supplies; a central
