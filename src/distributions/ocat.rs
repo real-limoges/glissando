@@ -59,7 +59,7 @@ impl Ocat {
     }
 
     /// Static parameter name for the k-th threshold (k = 1..=4).
-    fn threshold_param_name(k: usize) -> &'static str {
+    pub(crate) fn threshold_param_name(k: usize) -> &'static str {
         match k {
             1 => "delta_1",
             2 => "delta_2",
@@ -91,7 +91,7 @@ impl Ocat {
     /// Calling with a specific `i` is necessary for finite-difference derivative
     /// checking, which perturbs one observation at a time.  During the fitting loop
     /// all elements are equal, so the result is the same for every `i`.
-    fn compute_thresholds_at(
+    pub(crate) fn compute_thresholds_at(
         params: &HashMap<&str, &Array1<f64>>,
         n_thresholds: usize,
         i: usize,

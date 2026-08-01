@@ -42,7 +42,8 @@ pub struct MixtureModel {
     pub weights: Vec<f64>,
     /// Mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` at convergence.
     pub log_likelihood: f64,
-    /// Whether the EM loop met the relative log-likelihood tolerance.
+    /// Whether the EM loop met the absolute log-likelihood tolerance
+    /// (`FitConfig::gd_tolerance`, in deviance-equivalent log-likelihood units).
     pub converged: bool,
     /// Number of EM outer iterations performed.
     pub iterations: usize,
@@ -210,8 +211,8 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
             }
         }
 
-        let rel = (log_likelihood - prev_ll).abs() / (log_likelihood.abs() + 0.1);
-        if iter > 0 && rel < tol {
+        let abs_change = (log_likelihood - prev_ll).abs();
+        if iter > 0 && abs_change < tol {
             converged = true;
             break;
         }

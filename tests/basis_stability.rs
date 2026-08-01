@@ -151,7 +151,7 @@ fn tensor_with_intercept_recovers_main_effects() {
         .map(|_| rng.uniform() * std::f64::consts::TAU)
         .collect();
     let x2: Vec<f64> = (0..n).map(|_| rng.uniform()).collect();
-    // Purely additive truth — zero interaction.
+    // Purely additive truth: zero interaction.
     let f = |a: f64, b: f64| a.sin() + 2.0 * (b - 0.5) * (b - 0.5);
     let y_vec: Vec<f64> = x1
         .iter()

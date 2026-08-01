@@ -18,7 +18,7 @@
 //! Like the other structural wrappers it carries per-row state and is excluded
 //! from [`from_name`](super::from_name).
 
-use super::structural::cdf_eta_grads;
+use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
 use super::{DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -56,16 +56,10 @@ impl Truncated {
         &self.upper
     }
 
+    /// Reject a response whose length does not match the stored bound vectors.
     fn check_len(&self, n: usize) -> Result<(), GamlssError> {
-        if self.lower.len() != n || self.upper.len() != n {
-            return Err(GamlssError::Input(format!(
-                "Truncated: bound lengths ({}, {}) do not match response length {}",
-                self.lower.len(),
-                self.upper.len(),
-                n
-            )));
-        }
-        Ok(())
+        check_state_len("Truncated: lower bound", self.lower.len(), n)?;
+        check_state_len("Truncated: upper bound", self.upper.len(), n)
     }
 
     /// `F` and `(∂F/∂η, ∂²F/∂η²)` per parameter, evaluated at a bound array that
@@ -95,21 +89,17 @@ impl Truncated {
 }
 
 impl Distribution for Truncated {
-    fn parameters(&self) -> &[&'static str] {
-        self.base.parameters()
-    }
-
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
-        self.base.default_link(param)
-    }
-
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        self.base.initial_value(param, y)
-    }
-
-    fn is_discrete(&self) -> bool {
-        self.base.is_discrete()
-    }
+    // `cdf` / `quantile` are *not* delegated: they renormalize onto the truncated
+    // support (see below). `variance` / `expected_value` report the untruncated
+    // base moments by design (see the module docs).
+    delegate_to_base!(
+        parameters,
+        default_link,
+        initial_value,
+        is_discrete,
+        variance,
+        expected_value,
+    );
 
     fn loglik_pointwise(
         &self,
@@ -159,17 +149,6 @@ impl Distribution for Truncated {
             out.insert(param.to_string(), (u, w));
         }
         Ok(out)
-    }
-
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        self.base.variance(params)
-    }
-
-    fn expected_value(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.expected_value(params)
     }
 
     fn cdf(

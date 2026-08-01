@@ -14,8 +14,8 @@ pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usi
 /// values at `x[i]` on the uniform knot grid anchored to `range`.
 ///
 /// The fitter resolves each P-spline's training range once and stores it on the
-/// term; prediction passes it back here so new data — a grid, a subset, a
-/// single point — is evaluated on the *training* basis. `None` derives the
+/// term; prediction passes it back here so new data (a grid, a subset, a
+/// single point) is evaluated on the *training* basis. `None` derives the
 /// range from `x` (fit-time resolution and tests only). Without the stored
 /// range, the knots silently followed the prediction data's range and the
 /// coefficients were applied to a different basis.
@@ -63,7 +63,7 @@ pub(crate) fn create_basis_matrix_with_range(
 }
 
 /// Finite `(min, max)` of a column, ignoring NaN/±∞. Returns
-/// `(INFINITY, NEG_INFINITY)` when no finite values exist — callers that
+/// `(INFINITY, NEG_INFINITY)` when no finite values exist; callers that
 /// persist the range must reject that case (see `resolve_terms`).
 pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
     (

@@ -4,7 +4,9 @@ use super::{
     require, DerivativesResult, Distribution, FlooredLogLink, GamlssError, IdentityLink, Link,
     LogLink, MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use crate::math::{
+    digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
+};
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::function::gamma::ln_gamma;
@@ -99,7 +101,7 @@ impl Distribution for StudentT {
 
         // μ derivatives (identity link). The score uses the robustifying weight
         // (that IS dl/dμ); the working weight uses the *expected* information
-        // I_μ = (ν+1)/((ν+3)·σ²) — the same convention as gamlss TF's d2ldm2 —
+        // I_μ = (ν+1)/((ν+3)·σ²), the same convention as gamlss TF's d2ldm2,
         // rather than the data-dependent w_robust/σ², so the PWLS subproblem
         // (and hence λ selection, EDF, and SEs) matches the RS oracle.
         let u_mu = (&w_robust * &z) / sigma;
@@ -123,16 +125,16 @@ impl Distribution for StudentT {
         });
 
         let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
-        // Chain rule for log link: u_η = ν · dl/dν — with an *aggregate* boundary
+        // Chain rule for log link: u_η = ν · dl/dν, with an *aggregate* boundary
         // projection at the ν-floor. Where `FlooredLogLink` binds (ν pinned at
         // NU_FLOOR), dν/dη is genuinely 0, so per-row scores must not be forwarded
         // blindly: a negative aggregate walks η_ν downward forever (Δβ never
         // converges), while a per-row one-sided projection biases the aggregate
         // upward and produces a limit cycle of lift-off/fall-back at the boundary.
         // The KKT-correct rule uses the *summed* score over the pinned rows: if it
-        // is ≤ 0 the constrained optimum is at the boundary — freeze those rows
+        // is ≤ 0 the constrained optimum is at the boundary: freeze those rows
         // (u = 0) so the block reports a zero step and the loop converges; if it
-        // is > 0 the fit should re-enter the interior — forward the full chain
+        // is > 0 the fit should re-enter the interior: forward the full chain
         // rule so the aggregate pull is preserved.
         //
         // Scope: the single summed score is the exact KKT test only when η_ν is
@@ -303,29 +305,6 @@ impl Distribution for StudentT {
     fn name(&self) -> &'static str {
         "StudentT"
     }
-}
-
-/// Median of `y`. Returns 0.0 for an empty slice (`validate_inputs` rejects empty
-/// `y` on the public path, so this is only a defensive default).
-fn median(y: &Array1<f64>) -> f64 {
-    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let m = v.len() / 2;
-    if v.len().is_multiple_of(2) {
-        0.5 * (v[m - 1] + v[m])
-    } else {
-        v[m]
-    }
-}
-
-/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
-fn median_abs_deviation(y: &Array1<f64>) -> f64 {
-    let med = median(y);
-    let dev = y.mapv(|x| (x - med).abs());
-    median(&dev)
 }
 
 #[cfg(test)]

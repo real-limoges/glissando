@@ -14,23 +14,22 @@
 //! respect to the input `models` map, which keeps it unit-testable in isolation.
 
 use super::solver::{
-    fit_pwls, lambda_cost, restart_seed, run_optimization, run_optimization_fellner_schall,
-    run_optimization_reml,
+    fit_pwls, group_penalties, lambda_cost, restart_seed, run_optimization,
+    run_optimization_fellner_schall, run_optimization_reml, WeightedNormalEquations,
 };
-use super::{global_deviance, global_deviance_with, FittingParameter, SmoothingCriterion};
-use crate::distributions::Distribution;
+use super::{
+    global_deviance, global_deviance_with, max_abs_diff, FittingParameter, SmoothingCriterion,
+};
+use crate::distributions::{Distribution, MIN_WEIGHT};
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
 use indexmap::IndexMap;
 use ndarray::{Array1, Zip};
 use std::collections::HashMap;
 
-/// Lower bound for IRLS working weights, preventing division by near-zero.
-const MIN_WEIGHT: f64 = 1e-6;
-
 /// Cap on the per-element Fisher-scoring step `u/w` (in η units): a pure
 /// anti-overflow guard for degenerate score/information combinations, NOT a
-/// robustness device — overshoot control is the job of the deviance-guarded
+/// robustness device. Overshoot control is the job of the deviance-guarded
 /// step-halving (FIT-1), and neither mgcv nor gamlss clips the working
 /// response at all.
 ///
@@ -38,13 +37,23 @@ const MIN_WEIGHT: f64 = 1e-6;
 /// directions: when many rows clip, the update direction is decided by the
 /// *count* of positive vs negative rows instead of the score-weighted
 /// aggregate, which can point the Fisher step uphill (caps ≤ 1e4 break
-/// Student-t ν recovery — legitimate transient steps exceed them). Too loose
+/// Student-t ν recovery; legitimate transient steps exceed them). Too loose
 /// lets a degenerate row (weight at the MIN_WEIGHT floor with an O(1) score,
 /// e.g. a quasi-separated binomial observation) inject a large pseudo-residual
-/// that distorts λ selection — an accepted exposure at 1e6 whose principled
+/// that distorts λ selection: an accepted exposure at 1e6 whose principled
 /// fix is a REML criterion on the true likelihood rather than the working
-/// (z, w) model.
+/// (z, w) model. Applies only when step-halving is enabled; see
+/// `MAX_STEP_NO_HALVING` for the disabled case.
 const MAX_STEP: f64 = 1e6;
+
+/// Fallback safety cap on the per-element accepted η-change when
+/// `FitConfig::step_halving` is `false`. With step-halving on, `MAX_STEP`
+/// above can safely be this loose because the deviance-guarded line search
+/// owns overshoot control; with it off, nothing else bounds the step, so the
+/// caller (`fitting::mod`) scales the raw Fisher step back to this bound
+/// instead. This restores the pre-widening `MAX_STEP` value (20) as the sole
+/// safety net for that path.
+pub(super) const MAX_STEP_NO_HALVING: f64 = 20.0;
 
 /// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
 /// step is accepted regardless so the loop always makes progress.
@@ -89,9 +98,15 @@ pub(super) struct Halved {
     pub hits: usize,
     /// True when the backtracking floor was reached with the penalized deviance
     /// still increasing and the whole block update was rejected (β unchanged).
-    /// The caller must then also keep the previous λ/covariance/EDF — the
+    /// The caller must then also keep the previous λ/covariance/EDF: the
     /// full-step proposal's values describe a state that was never entered.
     pub rejected: bool,
+    /// Max |Δη| actually applied: zero when `rejected`, otherwise the change
+    /// between `eta` here and the pre-step η. Unlike `Update::eta_max_change`
+    /// (the *proposed* full step), this reflects what was accepted, so the
+    /// outer-loop convergence check never mistakes a rejected, re-proposed
+    /// step for ongoing movement.
+    pub eta_max_change: f64,
 }
 
 /// Backtrack a proposed block update on the PENALIZED global deviance, holding
@@ -99,13 +114,13 @@ pub(super) struct Halved {
 ///
 /// The Fisher-scoring direction `d_k = β_new − β_old` is an ascent direction for
 /// the **penalized** log-likelihood, i.e. a descent direction for
-/// `GD_pen(β) = GD(μ(β)) + Σ_j λ_j·βᵀS_jβ` — NOT for the raw deviance. When the
+/// `GD_pen(β) = GD(μ(β)) + Σ_j λ_j·βᵀS_jβ`, NOT for the raw deviance. When the
 /// current β is wigglier than the penalized optimum β*(λ) (e.g. λ grew across
 /// cycles), every move toward β*(λ) legitimately *raises* the raw deviance;
 /// backtracking on raw GD then rejects the step at every α and the fit freezes
 /// at a non-stationary point (observed as a permanent poisson-smooth
-/// non-convergence). Backtracking on `GD_pen` — evaluated at the *proposed*
-/// step's λ so the objective is consistent along the α-path — restores the
+/// non-convergence). Backtracking on `GD_pen`, evaluated at the *proposed*
+/// step's λ so the objective is consistent along the α-path, restores the
 /// guaranteed-descent property that makes halving terminate.
 ///
 /// Returns the accepted step; `hits` is the number of halvings (`0` = full step).
@@ -153,17 +168,19 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
 
         // Accept on no-increase of the penalized deviance.
         if gd_a - gd0 + delta_pen <= slack {
+            let eta_max_change = max_abs_diff(&eta_a, &model.eta);
             return Ok(Halved {
                 beta: Coefficients(beta_a),
                 eta: eta_a,
                 mu: mu_a,
                 hits,
                 rejected: false,
+                eta_max_change,
             });
         }
         // At the backtracking floor the direction is uphill at every step size:
         // *reject* the block update (α = 0). Forcing a micro-step instead would
-        // creep the parameter uphill every cycle — an unbounded slow divergence.
+        // creep the parameter uphill every cycle: an unbounded slow divergence.
         // Rejection preserves the monotone-descent guarantee exactly; a block at
         // its optimum has a tiny full step and never reaches this branch.
         if alpha <= min_alpha {
@@ -173,6 +190,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
                 mu: model.mu.clone(),
                 hits,
                 rejected: true,
+                eta_max_change: 0.0,
             });
         }
         alpha *= 0.5;
@@ -276,18 +294,30 @@ pub(super) fn step<D: Distribution + ?Sized>(
     //      the zero-λ fast path inside `run_opt`.
     let penalties = &target.penalty_matrices;
 
-    // Run the configured criterion's λ optimizer from `init`.
-    let run_opt = |init: Option<&Array1<f64>>| -> Result<Array1<f64>, GamlssError> {
+    // `X`, `z`, and `w` are fixed for the rest of this function: every λ
+    // evaluation below (L-BFGS/Fellner-Schall iterations, the collapse-guarded
+    // restart's basin probes, the coarse grid search) re-solves the same
+    // weighted normal equations at a different λ. Building them once here
+    // turns each evaluation's dominant cost from O(n·p²) into O(p²)–O(p³);
+    // `group_penalties` similarly caches the (λ-independent) coefficient-block
+    // structure instead of re-scanning every penalty matrix on every call.
+    let nfo = WeightedNormalEquations::new(&target.x_matrix, &z, &w);
+    let groups = group_penalties(penalties);
+
+    // Run the configured criterion's λ optimizer from `init`. `polish` only
+    // affects the Reml branch: `true` on the adopted-λ path, `false` for cheap
+    // basin-probe screening (see `run_optimization_reml`'s doc comment).
+    let run_opt = |init: Option<&Array1<f64>>, polish: bool| -> Result<Array1<f64>, GamlssError> {
         if penalties.is_empty() {
             return Ok(Array1::zeros(0));
         }
         match criterion {
-            SmoothingCriterion::Gcv => run_optimization(&target.x_matrix, &z, &w, penalties, init),
+            SmoothingCriterion::Gcv => run_optimization(&nfo, penalties, init),
             SmoothingCriterion::Reml => {
-                run_optimization_reml(&target.x_matrix, &z, &w, penalties, init)
+                run_optimization_reml(&target.x_matrix, &nfo, penalties, &groups, init, polish)
             }
             SmoothingCriterion::FellnerSchall => {
-                run_optimization_fellner_schall(&target.x_matrix, &z, &w, penalties, init)
+                run_optimization_fellner_schall(&target.x_matrix, &nfo, penalties, &groups, init)
             }
         }
     };
@@ -299,8 +329,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         (Coefficients, CovarianceMatrix, f64, Vec<f64>),
         GamlssError,
     > {
-        let (beta, cov, edf, edf_per_coeff) =
-            fit_pwls(&target.x_matrix, &z, &w, penalties, lambdas)?;
+        let (beta, cov, edf, edf_per_coeff) = fit_pwls(&nfo, penalties, lambdas)?;
         let mut term_edf = Vec::with_capacity(target.term_layouts.len());
         let mut offset = 0usize;
         for layout in &target.term_layouts {
@@ -325,14 +354,19 @@ pub(super) fn step<D: Distribution + ?Sized>(
     // analogue of a collapsed term: for a tensor smooth, one margin can be
     // driven to the ceiling while the term's TOTAL EDF still sits far above its
     // null-space dimension, so the EDF test alone cannot see it. A pinned λ is
-    // never a genuine interior optimum — it deserves the same restart probe.
+    // never a genuine interior optimum: it deserves the same restart probe.
+    let lambda_bounds = || -> (f64, f64) {
+        (
+            (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp(),
+            (-super::solver::LOG_LAMBDA_CLAMP + 1e-6).exp(),
+        )
+    };
     let lambda_at_bound = |lambdas: &Array1<f64>| -> bool {
-        let hi = (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp();
-        let lo = (-super::solver::LOG_LAMBDA_CLAMP + 1e-6).exp();
+        let (hi, lo) = lambda_bounds();
         lambdas.iter().any(|&l| l >= hi || l <= lo)
     };
 
-    let best_lambdas = run_opt(Some(&target.lambdas))?;
+    let best_lambdas = run_opt(Some(&target.lambdas), true)?;
     let (best_lambdas, new_beta, cov_matrix, edf, term_edf) = {
         let (beta, cov, edf, term_edf) = fit_and_terms(&best_lambdas)?;
 
@@ -347,19 +381,19 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // spuriously collapsed signal-bearing fit is repaired.
         // The trigger is the CHEAP suspicion set only: a collapsed term, or a λ
         // pinned at the log-clamp ceiling / MIN_LAMBDA floor. It re-runs every
-        // cycle the state stays suspicious — deliberately: λ can reach a bound on
+        // cycle the state stays suspicious, deliberately: λ can reach a bound on
         // cycle 1–2 while the working (z, w) still reflect a poor scale estimate,
         // so an early probe finds nothing and a skip-once rule would never
         // re-probe at the converged state where the rescue is actually decidable.
         //
         // A prior revision ALSO probed every multi-penalty (anisotropic-tensor)
         // cycle unconditionally, to catch the one spurious shape the cheap set
-        // misses — a margin's λ "merely very large" but not at a bound while the
+        // misses: a margin's λ "merely very large" but not at a bound while the
         // term EDF sits above its null dim. That was ruinously expensive: each
         // firing runs a 7^k derivative-free grid plus several full
         // L-BFGS/Fellner-Schall optimizations, every one an eigendecomposition on
         // the term's k₁k₂ coefficient block, so a single default-10×10 tensor fit
-        // ran ~30 s (OpenBLAS) to >2 min (pure-rust/nalgebra) in a debug build —
+        // ran ~30 s (OpenBLAS) to >2 min (pure-rust/nalgebra) in a debug build,
         // hanging the pre-push/CI suites, which build unoptimized and run both
         // backends. Nothing runnable guarded the payoff: the merely-large-λ
         // rescue is validated only by the `#[ignore]`d, data-gated
@@ -372,7 +406,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         // on tensor EDF parity for a new seed.
         if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
             let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
-                lambda_cost(criterion, &target.x_matrix, &z, &w, penalties, lams)
+                lambda_cost(criterion, &nfo, penalties, &groups, lams)
             };
             let mut winner = best_lambdas.clone();
             let mut winner_cost = cost_of(&winner)?;
@@ -380,20 +414,19 @@ pub(super) fn step<D: Distribution + ?Sized>(
             // Probe alternative basins and keep the best-scoring λ:
             //  1. the low-λ restart seed (below the high-λ collapse shelf);
             //  2. a fresh cold start (`initial_lambdas = None`), which explores
-            //     the surface unanchored — warm-start history can pin λ in a
+            //     the surface unanchored: warm-start history can pin λ in a
             //     corner basin that a cold start correctly avoids;
             //  3. for multi-penalty terms, PER-COORDINATE variants of the
             //     incumbent with each bound-pinned λ_j individually dropped to
             //     the restart level. Anisotropic tensor smooths develop corner
             //     traps where one margin's λ sits at the ceiling while the true
-            //     LAML optimum has that margin interior — a geometry the
+            //     LAML optimum has that margin interior, a geometry the
             //     all-coordinates seeds (1) and (2) can both miss because they
             //     descend into a different stationary point.
             let restart = restart_seed(&target.x_matrix, penalties);
             let mut seeds: Vec<Option<Array1<f64>>> = vec![Some(restart.clone()), None];
             if best_lambdas.len() > 1 {
-                let hi = (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp();
-                let lo = (-super::solver::LOG_LAMBDA_CLAMP + 1e-6).exp();
+                let (hi, lo) = lambda_bounds();
                 for j in 0..best_lambdas.len() {
                     if best_lambdas[j] >= hi || best_lambdas[j] <= lo {
                         let mut s = best_lambdas.clone();
@@ -432,9 +465,18 @@ pub(super) fn step<D: Distribution + ?Sized>(
                     seeds.push(Some(cell));
                 }
             }
+            // Screen candidates cheaply (no polish) and keep the best-scoring
+            // one; a seed that combines an extreme pinned λ on one margin with
+            // a tiny restart value on another can make the speculative solve
+            // ill-conditioned, so a failed candidate is skipped rather than
+            // aborting the whole fit, mirroring the grid-cell loop above.
             for seed in seeds {
-                let candidate = run_opt(seed.as_ref())?;
-                let cost = cost_of(&candidate)?;
+                let Ok(candidate) = run_opt(seed.as_ref(), false) else {
+                    continue;
+                };
+                let Ok(cost) = cost_of(&candidate) else {
+                    continue;
+                };
                 if cost < winner_cost {
                     winner_cost = cost;
                     winner = candidate;
@@ -454,10 +496,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
 
     let new_eta = target.x_matrix.dot(&new_beta.0) + &target.offset; // η = X·β + offset
     let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
-    let max_diff = (&new_beta.0 - &target.beta.0)
-        .iter()
-        .map(|x| x.abs())
-        .fold(0.0_f64, |a, b| a.max(b));
+    let max_diff = max_abs_diff(&new_beta.0, &target.beta.0);
     let eta_abs_diff = (&new_eta - &target.eta).mapv(f64::abs);
     let eta_max_change = eta_abs_diff.iter().copied().fold(0.0_f64, f64::max);
     let eta_change = eta_abs_diff.sum();

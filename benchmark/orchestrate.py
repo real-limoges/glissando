@@ -326,7 +326,7 @@ def write_parquet(data: dict[str, np.ndarray], path: Path) -> None:
 
 
 # Per-fit wall-clock budget. A well-behaved fit finishes in seconds; a hung
-# solver (or R session) must not stall the whole comparison run — kill it and
+# solver (or R session) must not stall the whole comparison run: kill it and
 # record the scenario as failed instead.
 FIT_TIMEOUT_S = 600
 

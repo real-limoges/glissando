@@ -19,7 +19,7 @@
 //! string cannot, so it is excluded from [`from_name`](super::from_name); build
 //! it through this typed API and serialize it via the family descriptor (SER-1).
 
-use super::structural::cdf_eta_grads;
+use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
 use super::{DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -104,33 +104,21 @@ impl Censored {
 
     /// Reject a response whose length does not match the stored `status` vector.
     fn check_len(&self, n: usize) -> Result<(), GamlssError> {
-        if self.status.len() != n {
-            return Err(GamlssError::Input(format!(
-                "Censored: status length {} does not match response length {}",
-                self.status.len(),
-                n
-            )));
-        }
-        Ok(())
+        check_state_len("Censored: status", self.status.len(), n)
     }
 }
 
 impl Distribution for Censored {
-    fn parameters(&self) -> &[&'static str] {
-        self.base.parameters()
-    }
-
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
-        self.base.default_link(param)
-    }
-
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        self.base.initial_value(param, y)
-    }
-
-    fn is_discrete(&self) -> bool {
-        self.base.is_discrete()
-    }
+    delegate_to_base!(
+        parameters,
+        default_link,
+        initial_value,
+        is_discrete,
+        variance,
+        expected_value,
+        cdf,
+        quantile,
+    );
 
     fn loglik_pointwise(
         &self,
@@ -220,33 +208,6 @@ impl Distribution for Censored {
             out.insert(param.to_string(), (u, w));
         }
         Ok(out)
-    }
-
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        self.base.variance(params)
-    }
-
-    fn expected_value(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.expected_value(params)
-    }
-
-    fn cdf(
-        &self,
-        y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.cdf(y, params)
-    }
-
-    fn quantile(
-        &self,
-        p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.quantile(p, params)
     }
 
     fn name(&self) -> &'static str {

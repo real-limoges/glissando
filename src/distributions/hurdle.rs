@@ -18,7 +18,7 @@
 //! zero-truncation machinery (STRUCT-2). Like the other structural wrappers it is
 //! excluded from [`from_name`](super::from_name).
 
-use super::structural::cdf_eta_grads;
+use super::structural::{cdf_eta_grads, delegate_to_base};
 use super::{DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -79,9 +79,7 @@ impl Distribution for Hurdle {
         }
     }
 
-    fn is_discrete(&self) -> bool {
-        self.base.is_discrete()
-    }
+    delegate_to_base!(is_discrete, expected_value, cdf, quantile);
 
     fn loglik_pointwise(
         &self,
@@ -166,29 +164,6 @@ impl Distribution for Hurdle {
         // Reports the untruncated base variance (the zero atom and truncation are
         // not folded in — a known diagnostic approximation, as for Truncated).
         self.base.variance(params)
-    }
-
-    fn expected_value(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.expected_value(params)
-    }
-
-    fn cdf(
-        &self,
-        y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.cdf(y, params)
-    }
-
-    fn quantile(
-        &self,
-        p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.quantile(p, params)
     }
 
     fn name(&self) -> &'static str {

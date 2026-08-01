@@ -3,10 +3,10 @@
 
 mod common;
 
-use common::{cr_spline, linear_intercepts, smooth_intercepts, Generator};
+use common::{cr_spline, linear_intercepts, random, smooth_intercepts, Generator};
 use glissando::{
     distributions::{Gaussian, Poisson},
-    DataSet, Formula, GamlssModel, Term,
+    DataSet, Formula, GamlssModel, Smooth, Term,
 };
 use ndarray::Array1;
 use rand::RngExt;
@@ -734,5 +734,69 @@ fn quantile_prediction_matches_per_row_levels() {
     let fitted = model.predict(&data, &Gaussian::new()).unwrap();
     for (&qi, &mui) in q.iter().zip(fitted["mu"].iter()) {
         assert!((qi - mui).abs() < 1e-6);
+    }
+}
+
+/// Regression guard for the `RandomEffect` legacy-compatibility fallback in
+/// `assemble_smooth` (src/fitting/assembler.rs): a model whose stored term has
+/// empty `levels` (`#[serde(default)]`'s value when deserializing a pre-migration
+/// JSON blob that predates the field) must map groups to columns in
+/// first-occurrence order, matching the comment "Legacy models (empty `levels`,
+/// pre-dating the field) fall back to first-occurrence order to reproduce their
+/// fitted layout." `resolve_terms`'s own fallback (`sorted_levels`) resolves the
+/// *same* empty-`levels` case to *sorted* order instead — a different, incompatible
+/// convention. Routing predict through `resolve_terms` (as an earlier, reverted
+/// version of this fix did) would silently swap one for the other, misaligning a
+/// legacy model's coefficients with the wrong columns. This test fits fresh (so
+/// only the *layout*, not real recovery, is at stake), then clears the resolved
+/// `levels` on the stored term to reproduce the legacy shape, and checks the
+/// column layout directly.
+#[test]
+fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
+    // Group codes visited in this row order: 3, 1, 2, 1, 3. First-occurrence
+    // order is [3, 1, 2]; sorted order is [1, 2, 3] — deliberately different so
+    // a regression (silently switching to sorted order) is observable.
+    let g: Vec<f64> = vec![3.0, 1.0, 2.0, 1.0, 3.0];
+    let y: Vec<f64> = vec![10.0, 20.0, 30.0, 21.0, 11.0];
+    let mut data = DataSet::new();
+    data.insert_column("g", Array1::from_vec(g));
+    let y = Array1::from_vec(y);
+
+    // No Intercept on "mu": with one absent, `apply_constraint` is false, so the
+    // RandomEffect basis stays the raw one-hot indicator matrix this test checks
+    // column-by-column, rather than the sum-to-zero-reparameterized version.
+    let mut formula = Formula::new();
+    formula.add_terms("mu", vec![random("g")]);
+    formula.add_terms("sigma", vec![Term::Intercept]);
+
+    let mut model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    // Simulate a model serialized before `RandomEffect::levels` existed: clear
+    // the levels `resolve_terms` filled in at fit time.
+    for term in &mut model.models.get_mut("mu").unwrap().terms {
+        if let Term::Smooth(Smooth::RandomEffect { levels, .. }) = term {
+            levels.clear();
+        }
+    }
+
+    let design = model.design_matrix(&data, "mu").unwrap();
+    assert_eq!(
+        design.ncols(),
+        3,
+        "3 distinct groups should produce 3 ridge-indicator columns"
+    );
+
+    // Expected one-hot column per row under first-occurrence order [3, 1, 2].
+    let expected_col = [0usize, 1, 2, 1, 0];
+    for (i, &col) in expected_col.iter().enumerate() {
+        for j in 0..design.ncols() {
+            let want = if j == col { 1.0 } else { 0.0 };
+            assert_eq!(
+                design[[i, j]],
+                want,
+                "row {i} col {j}: legacy (empty-levels) RandomEffect predict must use \
+                 first-occurrence group order, not sorted order"
+            );
+        }
     }
 }

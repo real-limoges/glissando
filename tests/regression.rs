@@ -71,7 +71,7 @@ fn fmt_vec(v: &Array1<f64>) -> Vec<String> {
 /// flat penalty shelf (e.g. a near-collapsed smooth) is only determined up to
 /// BLAS reduction-order noise (~1e-4 relative), which differs between local
 /// OpenBLAS builds and CI. Coefficients, EDF, and likelihoods are stable at
-/// full precision — only λ's exact position on the shelf is not.
+/// full precision; only λ's exact position on the shelf is not.
 fn fmt_lambda_vec(v: &Array1<f64>) -> Vec<String> {
     v.iter().map(|&x| format!("{:.1e}", x)).collect()
 }

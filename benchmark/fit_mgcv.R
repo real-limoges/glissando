@@ -341,7 +341,7 @@ fit_random_effect <- function(df, output) {
 # Heteroskedastic Gaussian: mean AND log-scale both linear in x, via gaulss.
 # gaulss linear predictors: η₁ = μ (identity); η₂ goes through the logb link
 # (τ = 1/σ = b + exp(η₂), b = 0.01), so σ = 1/linkinv(η₂). Only μ coefficients
-# are emitted — the σ model lives on a different link scale than glissando's
+# are emitted: the σ model lives on a different link scale than glissando's
 # log σ, so coefficient-level σ comparison is not meaningful, but fitted_mu /
 # fitted_sigma / log-likelihood / SE[μ] all are.
 fit_gaussian_heteroskedastic <- function(df, output) {
@@ -426,8 +426,8 @@ fit_gamma_sigma_smooth <- function(df, output) {
   start <- Sys.time()
   m <- gam(list(y ~ 1, ~ s(x, bs = "ps", k = 20)), data = df, family = gammals())
   # gammals linear predictors (predict type="link"):
-  #   η₁ = log(μ)  — "identity" link on the log-mean, so exp(η₁) = E[Y].
-  #   η₂ — the SCALE predictor goes through gammals' `logb` link, NOT a plain
+  #   η₁ = log(μ): "identity" link on the log-mean, so exp(η₁) = E[Y].
+  #   η₂: the SCALE predictor goes through gammals' `logb` link, NOT a plain
   #        log: θ = log(φ) = b + log(1 + exp(η₂)) with b = −7 by default.
   #        Treating η₂ as log(φ) directly (the previous code) produced σ̂ in the
   #        5–20 range for a true CV of 0.2–0.7. Use the family's own linkinv to
