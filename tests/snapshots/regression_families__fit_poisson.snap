@@ -1,0 +1,13 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&Poisson::new(), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "8.0446e-1"
+    - "8.3377e-1"
+edf:
+  mu: "2.0000e0"
+log_likelihood: "-9.6089e1"
+aic: "1.9618e2"

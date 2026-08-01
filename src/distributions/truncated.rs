@@ -222,7 +222,9 @@ impl Distribution for Truncated {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::test_helpers::{check_score_via_finite_diff, params_view};
+    use crate::distributions::test_helpers::{
+        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+    };
     use crate::distributions::Gaussian;
     use ndarray::array;
 
@@ -271,6 +273,23 @@ mod tests {
             let expected = base_ll[i] - (1.0 - f0[i]).ln();
             assert!((ll[i] - expected).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn derivative_keys_and_weights_are_well_formed() {
+        // See the matching test in `censored.rs`: the wrappers had no
+        // `derivative_keys_match_parameters` coverage at all. A two-sided
+        // truncation is used so the normalizer `D = F(hi) − F(lo)` is a genuine
+        // difference rather than collapsing to `1 − F(lo)`.
+        let y = array![1.0, 2.0, 1.5, 3.0];
+        let owned = [
+            ("mu", array![1.0, 1.5, 1.0, 2.0]),
+            ("sigma", array![1.0, 1.2, 0.9, 1.1]),
+        ];
+        let lo = Array1::from_elem(4, 0.0);
+        let hi = Array1::from_elem(4, 5.0);
+        let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
+        derivative_keys_match_parameters(&trunc, params_view(&owned), &y);
     }
 
     #[test]
