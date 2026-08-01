@@ -1,8 +1,8 @@
 //! Beta distribution for proportions on `(0, 1)`.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, LogitLink, MIN_POSITIVE,
-    MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, LogitLink,
+    MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -84,11 +84,13 @@ impl Distribution for Beta {
             + &one_minus_mu * &log_1_minus_y;
         let u_phi = &phi_safe * &dl_dphi;
 
-        // Fisher info for φ on η-scale: w = φ²·(ψ'(φ) − μ²·ψ'(α) − (1−μ)²·ψ'(β)).
+        // Fisher info for φ on η-scale: I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ),
+        // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
+        // expression had the sign inverted and relied on `.abs()` to rescue it.)
         let mu_sq = mu_safe.mapv(|m| m * m);
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v * v);
-        let i_phi = &psi_prime_phi - &mu_sq * &psi_prime_alpha - &one_minus_mu_sq * &psi_prime_beta;
-        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.abs().max(MIN_WEIGHT));
+        let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_beta - &psi_prime_phi;
+        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -156,7 +158,7 @@ impl Distribution for Beta {
             let ph = phii.max(MIN_POSITIVE);
             SBeta::new(m * ph, (1.0 - m) * ph)
                 .expect("valid Beta params")
-                .inverse_cdf(pi.clamp(1e-12, 1.0 - 1e-12))
+                .inverse_cdf(clamp_prob(pi))
         }))
     }
 

@@ -19,10 +19,14 @@
 //! Python `Ocat(n_categories=4)` class.
 
 use super::{require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink};
-use crate::distributions::MIN_WEIGHT;
+use crate::distributions::{MAX_ETA, MIN_ETA, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
 
+/// Floor for cumulative/category probabilities. Deliberately larger (and kept
+/// local to this file) than the shared `distributions::PROB_EPS` (`1e-12`):
+/// probabilities here are summed and renormalized across up to 5 categories, so
+/// a `1e-12` floor would still underflow after normalization.
 const MIN_PROB: f64 = 1e-10;
 
 /// Ordered-categorical GAMLSS distribution with `R` levels.
@@ -59,7 +63,7 @@ impl Ocat {
     }
 
     /// Static parameter name for the k-th threshold (k = 1..=4).
-    fn threshold_param_name(k: usize) -> &'static str {
+    pub(crate) fn threshold_param_name(k: usize) -> &'static str {
         match k {
             1 => "delta_1",
             2 => "delta_2",
@@ -74,7 +78,7 @@ impl Ocat {
     }
 
     fn logistic(x: f64) -> f64 {
-        1.0 / (1.0 + (-x.clamp(-30.0, 30.0)).exp())
+        1.0 / (1.0 + (-x.clamp(MIN_ETA, MAX_ETA)).exp())
     }
 
     fn logistic_density(x: f64) -> f64 {
@@ -91,7 +95,7 @@ impl Ocat {
     /// Calling with a specific `i` is necessary for finite-difference derivative
     /// checking, which perturbs one observation at a time.  During the fitting loop
     /// all elements are equal, so the result is the same for every `i`.
-    fn compute_thresholds_at(
+    pub(crate) fn compute_thresholds_at(
         params: &HashMap<&str, &Array1<f64>>,
         n_thresholds: usize,
         i: usize,

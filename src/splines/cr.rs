@@ -1,6 +1,6 @@
 //! Natural Cubic Regression Splines (mgcv `bs = "cr"`): basis and penalty.
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, ArrayViewMut1};
 
 /// Quantile knot placement for natural cubic regression splines.
 ///
@@ -136,12 +136,19 @@ fn compute_deriv_map(h: &[f64]) -> Array2<f64> {
 ///
 /// # Arguments
 /// * `knots` — knot locations, length k ≥ 2
+/// * `h`     : knot spacings, length k-1 (pre-computed by the caller)
 /// * `g`     — second-derivative map `E⁻¹ D`, shape `(k-2) × k`
-pub(crate) fn eval_cr_row(x: f64, knots: &[f64], g: &Array2<f64>) -> Array1<f64> {
+/// * `row`   : output row, length k, written in place
+pub(crate) fn eval_cr_row(
+    x: f64,
+    knots: &[f64],
+    h: &[f64],
+    g: &Array2<f64>,
+    mut row: ArrayViewMut1<f64>,
+) {
     let k = knots.len();
     debug_assert!(k >= 2);
-    let h: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
-    let mut row = Array1::zeros(k);
+    row.fill(0.0);
 
     if x <= knots[0] {
         // Cardinal value at left boundary: f_m(knots[0]) = δ_{m,0}.
@@ -215,7 +222,6 @@ pub(crate) fn eval_cr_row(x: f64, knots: &[f64], g: &Array2<f64>) -> Array1<f64>
             }
         }
     }
-    row
 }
 
 /// Natural cubic regression spline basis matrix (mgcv `bs = "cr"`).
@@ -238,8 +244,7 @@ pub(crate) fn create_cr_basis_matrix(x: &Array1<f64>, knots: &[f64]) -> Array2<f
 
     let mut basis = Array2::zeros((n_obs, k));
     for (i, &xi) in x.iter().enumerate() {
-        let row = eval_cr_row(xi, knots, &g);
-        basis.row_mut(i).assign(&row);
+        eval_cr_row(xi, knots, &h, &g, basis.row_mut(i));
     }
     basis
 }
@@ -253,8 +258,9 @@ pub(crate) fn create_cr_basis_matrix(x: &Array1<f64>, knots: &[f64]) -> Array2<f
 pub(crate) fn apply_cr_pc_constraint(basis: &mut Array2<f64>, knots: &[f64], pc_val: f64) {
     let h: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
     let g = compute_deriv_map(&h);
-    let b_pc = eval_cr_row(pc_val, knots, &g);
     let k = knots.len();
+    let mut b_pc = Array1::zeros(k);
+    eval_cr_row(pc_val, knots, &h, &g, b_pc.view_mut());
     for j in 0..k {
         let pc_j = b_pc[j];
         basis.column_mut(j).map_inplace(|v| *v -= pc_j);

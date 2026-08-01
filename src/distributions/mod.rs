@@ -23,6 +23,19 @@ pub(crate) use links::{MAX_ETA, MIN_ETA, MIN_POSITIVE};
 /// Lower bound on Fisher-information weights to keep `W` positive definite.
 pub(crate) const MIN_WEIGHT: f64 = 1e-6;
 
+/// Shared probability/mass floor: values are clamped into `[PROB_EPS, 1 − PROB_EPS]`
+/// before a logarithm or division, so a saturated tail can't produce `−inf` / NaN.
+/// Used by the structural wrappers ([`Censored`]/[`Truncated`]/[`Hurdle`]) and by
+/// quantile functions that invert a `[0, 1]` probability. [`Ocat`]'s `MIN_PROB` is
+/// a distinct, larger floor kept local to that file — see its doc comment.
+pub(crate) const PROB_EPS: f64 = 1e-12;
+
+/// Clamp a probability into `[PROB_EPS, 1 − PROB_EPS]` so its logarithm or
+/// reciprocal stays finite.
+pub(crate) fn clamp_prob(p: f64) -> f64 {
+    p.clamp(PROB_EPS, 1.0 - PROB_EPS)
+}
+
 // ============================================================================
 // Distribution trait
 // ============================================================================

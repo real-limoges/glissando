@@ -1,10 +1,12 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    require, DerivativesResult, Distribution, FlooredLogLink, GamlssError, IdentityLink, Link,
-    LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink, GamlssError,
+    IdentityLink, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use crate::math::{
+    digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
+};
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::function::gamma::ln_gamma;
@@ -55,7 +57,7 @@ impl Distribution for StudentT {
     /// the SD overestimates the scale `σ`. Instead:
     /// - `μ` = median(y),
     /// - `σ` = 1.4826·MAD(y) (the MAD-to-σ consistency factor for a normal core),
-    /// - `ν` = [`NU_INIT`] (a fixed moderate seed; see its doc for why a kurtosis
+    /// - `ν` = `NU_INIT` = 5 (a fixed moderate seed; see its doc for why a kurtosis
     ///   estimate is avoided).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
@@ -97,9 +99,15 @@ impl Distribution for StudentT {
         // It → 1 as ν → ∞, recovering Gaussian behavior.
         let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
 
-        // μ derivatives (identity link).
+        // μ derivatives (identity link). The score uses the robustifying weight
+        // (that IS dl/dμ); the working weight uses the *expected* information
+        // I_μ = (ν+1)/((ν+3)·σ²), the same convention as gamlss TF's d2ldm2,
+        // rather than the data-dependent w_robust/σ², so the PWLS subproblem
+        // (and hence λ selection, EDF, and SEs) matches the RS oracle.
         let u_mu = (&w_robust * &z) / sigma;
-        let w_mu = &w_robust / sigma.mapv(|s| s * s);
+        let w_mu = par_zip_map(nu, sigma, |nu_i, s_i| {
+            (nu_i + 1.0) / ((nu_i + 3.0) * s_i * s_i)
+        });
 
         // σ derivatives (log link). Chain rule: dl/dη = σ · dl/dσ = w·z² − 1.
         let u_sigma = &w_robust * &z_sq - 1.0;
@@ -117,17 +125,55 @@ impl Distribution for StudentT {
         });
 
         let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
-        // Chain rule for log link: u_η = ν · dl/dν.
-        let u_nu = &dl_dnu * nu;
+        // Chain rule for log link: u_η = ν · dl/dν, with an *aggregate* boundary
+        // projection at the ν-floor. Where `FlooredLogLink` binds (ν pinned at
+        // NU_FLOOR), dν/dη is genuinely 0, so per-row scores must not be forwarded
+        // blindly: a negative aggregate walks η_ν downward forever (Δβ never
+        // converges), while a per-row one-sided projection biases the aggregate
+        // upward and produces a limit cycle of lift-off/fall-back at the boundary.
+        // The KKT-correct rule uses the *summed* score over the pinned rows: if it
+        // is ≤ 0 the constrained optimum is at the boundary: freeze those rows
+        // (u = 0) so the block reports a zero step and the loop converges; if it
+        // is > 0 the fit should re-enter the interior: forward the full chain
+        // rule so the aggregate pull is preserved.
+        //
+        // Scope: the single summed score is the exact KKT test only when η_ν is
+        // an intercept (the standard TF usage, and all this crate's ν formulas
+        // in practice). Under a covariate/smooth model on ν the pinned rows
+        // load on different coefficients and a per-coefficient projected
+        // gradient X'g⁺ would be needed; derivatives() has no design-matrix
+        // access, so that refinement belongs in the scoring layer if ν
+        // covariates become a supported pattern.
+        let pinned_tol = NU_FLOOR * (1.0 + 1e-9);
+        let pinned_score: f64 = nu
+            .iter()
+            .zip(dl_dnu.iter())
+            .filter(|(&nu_i, _)| nu_i <= pinned_tol)
+            .map(|(_, &g_i)| g_i)
+            .sum();
+        let boundary_frozen = pinned_score <= 0.0;
+        let u_nu = par_zip_map(nu, &dl_dnu, |nu_i, g_i| {
+            if boundary_frozen && nu_i <= pinned_tol {
+                0.0
+            } else {
+                nu_i * g_i
+            }
+        });
 
-        // Fisher information for ν uses trigamma (the second derivative of log-Γ).
+        // Expected Fisher information for ν (Lange–Little–Taylor 1989; identical to
+        // gamlss TF's d2ldv2):
+        //   I_ν = ¼·[ψ'(ν/2) − ψ'((ν+1)/2) − 2(ν+5)/(ν(ν+1)(ν+3))].
+        // Verified against Monte-Carlo E[(ν·dl/dν)²]. The rational term is a small
+        // correction to a near-cancellation: I_ν decays like O(1/ν³), so a sign or
+        // degree error there inflates the weight by orders of magnitude and
+        // effectively freezes ν at its seed.
         let t1 = trigamma_batch(&nu_half);
         let t2 = trigamma_batch(&nu_plus_1_half);
-        let t3: Array1<f64> = nu.mapv(|nu_i| (2.0 * (nu_i + 3.0)) / (nu_i * (nu_i + 1.0)));
-        // The `+ t3` term subtracts from the negative Hessian — sign is correct.
-        let i_nu = 0.25 * (&t1 - &t2 + &t3);
+        let t3: Array1<f64> =
+            nu.mapv(|nu_i| (2.0 * (nu_i + 5.0)) / (nu_i * (nu_i + 1.0) * (nu_i + 3.0)));
+        let i_nu = 0.25 * (&t1 - &t2 - &t3);
         // For log link `W_η = I_ν · ν²`, floored to keep the weight matrix positive definite.
-        let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| (i * nu_i * nu_i).abs().max(MIN_WEIGHT));
+        let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| (i * nu_i * nu_i).max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),
@@ -251,7 +297,7 @@ impl Distribution for StudentT {
             let nu_i = nu[i].max(MIN_POSITIVE);
             out[i] = StudentsT::new(mu[i], s, nu_i)
                 .expect("valid StudentsT params")
-                .inverse_cdf(p[i].clamp(1e-12, 1.0 - 1e-12));
+                .inverse_cdf(clamp_prob(p[i]));
         }
         Ok(out)
     }
@@ -259,29 +305,6 @@ impl Distribution for StudentT {
     fn name(&self) -> &'static str {
         "StudentT"
     }
-}
-
-/// Median of `y`. Returns 0.0 for an empty slice (`validate_inputs` rejects empty
-/// `y` on the public path, so this is only a defensive default).
-fn median(y: &Array1<f64>) -> f64 {
-    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let m = v.len() / 2;
-    if v.len().is_multiple_of(2) {
-        0.5 * (v[m - 1] + v[m])
-    } else {
-        v[m]
-    }
-}
-
-/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
-fn median_abs_deviation(y: &Array1<f64>) -> f64 {
-    let med = median(y);
-    let dev = y.mapv(|x| (x - med).abs());
-    median(&dev)
 }
 
 #[cfg(test)]

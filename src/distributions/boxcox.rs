@@ -7,6 +7,8 @@
 //! derivative, and the inverse used by the quantile.
 
 use super::MIN_POSITIVE;
+use crate::math::{median, median_abs_deviation};
+use ndarray::Array1;
 
 /// Threshold below which `ν` is treated as 0 for the *inverse* transform, where
 /// `(1 + νσz)^{1/ν}` would raise a near-1 base to a huge power and lose precision.
@@ -51,4 +53,51 @@ pub(super) fn boxcox_inv(mu: f64, sigma: f64, nu: f64, z: f64) -> f64 {
     } else {
         mu * (1.0 + nu * sigma * z).max(MIN_POSITIVE).powf(1.0 / nu)
     }
+}
+
+/// Robust `mu`/`sigma`/`nu` initial-value seeds shared by BCCG/BCT/BCPE: `mu`
+/// seeds the median, `sigma` a robust coefficient of variation
+/// (`1.4826·MAD(y)/median(y)`, clamped so the first RS iteration is not dragged
+/// by skew/outliers), and `nu` starts symmetric (the identity of the Box-Cox
+/// power). Returns `None` for any other parameter name so each family can layer
+/// its own extra parameter (`tau`) seed on top.
+pub(super) fn boxcox_seed(param: &str, y: &Array1<f64>) -> Option<f64> {
+    match param {
+        "mu" => Some(median(y)),
+        "sigma" => {
+            let med = median(y);
+            let cv = 1.4826 * median_abs_deviation(y) / med.abs().max(MIN_POSITIVE);
+            Some(cv.clamp(0.01, 10.0))
+        }
+        "nu" => Some(1.0),
+        _ => None,
+    }
+}
+
+/// Second-order Box-Cox mean approximation shared by BCCG/BCT/BCPE:
+/// `E[Y] ≈ μ·(1 + ½σ²(1−ν))`, exact at `ν = 1` (symmetric, mean = μ) and at
+/// `ν = 0` (log-normal, `μ·e^{σ²/2}` to `O(σ²)`). `μ` is the median, not the mean;
+/// the approximation depends on `z`'s distribution only through its first two
+/// moments (mean 0, variance 1), so it is identical whether `z` is normal,
+/// Student-t, or power-exponential.
+pub(super) fn boxcox_expected_value(
+    mu: &Array1<f64>,
+    sigma: &Array1<f64>,
+    nu: &Array1<f64>,
+) -> Array1<f64> {
+    let n = mu.len();
+    let mut out = Array1::<f64>::zeros(n);
+    for i in 0..n {
+        out[i] = mu[i] * (1.0 + 0.5 * sigma[i] * sigma[i] * (1.0 - nu[i]));
+    }
+    out
+}
+
+/// First-order coefficient-of-variation variance approximation `(σ·μ)²` shared by
+/// BCCG and BCPE (and the base BCT layers its `t`-distribution inflation factor
+/// on top of): `σ` is (approximately) the CV in the Box-Cox parameterization.
+/// Used only for Pearson residuals; the preferred randomized-quantile residuals
+/// go through `cdf`.
+pub(super) fn boxcox_cv_variance(mu: &Array1<f64>, sigma: &Array1<f64>) -> Array1<f64> {
+    crate::math::par_zip_map(mu, sigma, |m, s| (s * m) * (s * m))
 }

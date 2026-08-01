@@ -18,15 +18,12 @@
 //! zero-truncation machinery (STRUCT-2). Like the other structural wrappers it is
 //! excluded from [`from_name`](super::from_name).
 
-use super::structural::cdf_eta_grads;
-use super::{DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT};
+use super::structural::{cdf_eta_grads, delegate_to_base};
+use super::{
+    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT, PROB_EPS,
+};
 use ndarray::Array1;
 use std::collections::HashMap;
-
-/// The positive-part normalizer `1 − F(0)` is clamped to at least this.
-const MASS_FLOOR: f64 = 1e-12;
-/// `xi` is clamped into `[XI_FLOOR, 1 − XI_FLOOR]` before a log / division.
-const XI_FLOOR: f64 = 1e-12;
 
 /// A base family augmented with a zero atom: zeros come from a logit-linked
 /// probability `xi`, positive values from the zero-truncated base.
@@ -79,9 +76,7 @@ impl Distribution for Hurdle {
         }
     }
 
-    fn is_discrete(&self) -> bool {
-        self.base.is_discrete()
-    }
+    delegate_to_base!(is_discrete, expected_value, cdf, quantile);
 
     fn loglik_pointwise(
         &self,
@@ -100,11 +95,11 @@ impl Distribution for Hurdle {
 
         let mut out = base_ll;
         for i in 0..y.len() {
-            let xi_i = xi[i].clamp(XI_FLOOR, 1.0 - XI_FLOOR);
+            let xi_i = clamp_prob(xi[i]);
             if Self::is_zero(y[i]) {
                 out[i] = xi_i.ln();
             } else {
-                let mass = (1.0 - f0[i]).max(MASS_FLOOR);
+                let mass = (1.0 - f0[i]).max(PROB_EPS);
                 out[i] = (1.0 - xi_i).ln() + out[i] - mass.ln();
             }
         }
@@ -140,7 +135,7 @@ impl Distribution for Hurdle {
                     w[i] = MIN_WEIGHT;
                 } else {
                     // Zero-truncation at 0: D = 1 − F(0), D' = −F'(0), D'' = −F''(0).
-                    let dmass = (1.0 - f0[i]).max(MASS_FLOOR);
+                    let dmass = (1.0 - f0[i]).max(PROB_EPS);
                     u[i] += d1_0[i] / dmass; // u_base − D'/D = u_base + F'(0)/D
                     w[i] = (w[i] - d2_0[i] / dmass - (d1_0[i] / dmass).powi(2)).max(MIN_WEIGHT);
                 }
@@ -153,7 +148,7 @@ impl Distribution for Hurdle {
         let mut u_xi = Array1::<f64>::zeros(y.len());
         let mut w_xi = Array1::<f64>::zeros(y.len());
         for i in 0..y.len() {
-            let xi_i = xi[i].clamp(XI_FLOOR, 1.0 - XI_FLOOR);
+            let xi_i = clamp_prob(xi[i]);
             let z = if Self::is_zero(y[i]) { 1.0 } else { 0.0 };
             u_xi[i] = z - xi_i;
             w_xi[i] = (xi_i * (1.0 - xi_i)).max(MIN_WEIGHT);
@@ -166,29 +161,6 @@ impl Distribution for Hurdle {
         // Reports the untruncated base variance (the zero atom and truncation are
         // not folded in — a known diagnostic approximation, as for Truncated).
         self.base.variance(params)
-    }
-
-    fn expected_value(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.expected_value(params)
-    }
-
-    fn cdf(
-        &self,
-        y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.cdf(y, params)
-    }
-
-    fn quantile(
-        &self,
-        p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.quantile(p, params)
     }
 
     fn name(&self) -> &'static str {

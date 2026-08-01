@@ -4,7 +4,7 @@ use super::{
     discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use crate::math::{digamma_batch, par_zip3_map, par_zip_map};
 use ndarray::Array1;
 use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
@@ -32,6 +32,30 @@ impl Distribution for NegativeBinomial {
         match param {
             "mu" | "sigma" => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
+        }
+    }
+
+    /// NB2 σ is the overdispersion coefficient (`Var = μ + σμ²`), not a standard
+    /// deviation: the trait default of `sd(y)` is on the wrong scale entirely
+    /// (often 10–30× too large for count data). Seed it with the method-of-moments
+    /// estimate `(var(y) − mean(y))/mean(y)²`, floored at 0.1 like gamlss NBI's
+    /// `sigma.initial`.
+    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        match param {
+            "mu" => y.mean().expect("validate_inputs rejects empty y"),
+            "sigma" => {
+                let m = y.mean().expect("validate_inputs rejects empty y");
+                let v = y.std(1.0).powi(2);
+                let mom = (v - m) / (m * m).max(MIN_POSITIVE);
+                // n = 1 gives std(ddof=1) = NaN; fall back to a moderate seed
+                // rather than letting NaN poison the whole fit.
+                if mom.is_finite() {
+                    mom.clamp(0.1, 10.0)
+                } else {
+                    0.5
+                }
+            }
+            _ => 0.1,
         }
     }
 
@@ -67,10 +91,13 @@ impl Distribution for NegativeBinomial {
 
         let u_sigma = (-1.0 / &sigma_safe) * (&psi_y_r - &psi_r - &log_term + &ratio_term);
 
-        // Fisher info for σ ≈ ψ'(r)/σ², floored at MIN_WEIGHT.
-        let psi_prime_r = trigamma_batch(&r);
-        let sigma_sq = sigma_safe.mapv(|s| s * s);
-        let w_sigma = (&psi_prime_r / &sigma_sq).mapv(|v| v.abs().max(MIN_WEIGHT));
+        // Working weight for σ: gamlss NBI's squared-score convention
+        // (d2ldd2 = −dldd², i.e. w_η = u_η²), floored at MIN_WEIGHT. The exact
+        // expected information has no closed form (it involves E[ψ'(y+r)]); the
+        // previous ψ'(r)/σ² approximation dropped same-order terms and behaved
+        // like 1/σ near the Poisson boundary, over-damping σ updates and pushing
+        // λ/EDF for σ smooths away from the gamlss oracle.
+        let w_sigma = u_sigma.mapv(|u| (u * u).max(MIN_WEIGHT));
 
         Ok(HashMap::from([
             ("mu".to_string(), (u_mu, w_mu)),

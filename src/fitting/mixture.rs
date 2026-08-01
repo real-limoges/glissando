@@ -22,6 +22,8 @@ use crate::FitConfig;
 use ndarray::{Array1, Array2};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 /// Maximum EM outer iterations.
 const EM_MAX_ITER: usize = 200;
@@ -42,7 +44,8 @@ pub struct MixtureModel {
     pub weights: Vec<f64>,
     /// Mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` at convergence.
     pub log_likelihood: f64,
-    /// Whether the EM loop met the relative log-likelihood tolerance.
+    /// Whether the EM loop met the absolute log-likelihood tolerance
+    /// (`FitConfig::gd_tolerance`, in deviance-equivalent log-likelihood units).
     pub converged: bool,
     /// Number of EM outer iterations performed.
     pub iterations: usize,
@@ -165,12 +168,49 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         floor_and_normalize_rows(&mut resp);
 
         // M-step: refit each component with its responsibility column as weights.
+        // The k component fits are independent (only the responsibility column
+        // varies), so run them in parallel; row-count validation and the weight
+        // bookkeeping stay serial since they're cheap and need `n`/`k`.
+        let wj_cols: Vec<Array1<f64>> = (0..k).map(|j| resp.column(j).to_owned()).collect();
+        let fit_results: Vec<Result<GamlssModel, GamlssError>> = {
+            #[cfg(feature = "parallel")]
+            {
+                wj_cols
+                    .par_iter()
+                    .map(|wj| {
+                        GamlssModel::fit_with_config(
+                            data,
+                            y,
+                            Some(wj),
+                            formula,
+                            family,
+                            config.clone(),
+                        )
+                    })
+                    .collect()
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                wj_cols
+                    .iter()
+                    .map(|wj| {
+                        GamlssModel::fit_with_config(
+                            data,
+                            y,
+                            Some(wj),
+                            formula,
+                            family,
+                            config.clone(),
+                        )
+                    })
+                    .collect()
+            }
+        };
+
         components.clear();
         let mut raw_weights = Vec::with_capacity(k);
-        for j in 0..k {
-            let wj = resp.column(j).to_owned();
-            let comp =
-                GamlssModel::fit_with_config(data, y, Some(&wj), formula, family, config.clone())?;
+        for (wj, fit) in wj_cols.iter().zip(fit_results) {
+            let comp = fit?;
             // Mixture math indexes fitted values against y; a row-drop would break that.
             let fitted_len = comp
                 .models
@@ -210,8 +250,8 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
             }
         }
 
-        let rel = (log_likelihood - prev_ll).abs() / (log_likelihood.abs() + 0.1);
-        if iter > 0 && rel < tol {
+        let abs_change = (log_likelihood - prev_ll).abs();
+        if iter > 0 && abs_change < tol {
             converged = true;
             break;
         }

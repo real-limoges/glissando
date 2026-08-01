@@ -12,9 +12,11 @@
 //! `log h(z) = N(τ) − ½|z/c|^τ`, `N(τ) = log τ − log 2 − \tfrac{3}{2}\logΓ(1/τ) + \tfrac{1}{2}\logΓ(3/τ)`.
 //! Shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCT.
 
-use super::boxcox::{boxcox_inv, boxcox_z, boxcox_z_dz_dnu};
+use super::boxcox::{
+    boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
+};
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{digamma, trigamma};
@@ -73,23 +75,12 @@ impl Distribution for BCPE {
     /// Robust seeds: `μ₀ = median(y)`, `σ₀` = robust CV, `ν₀ = 1` (symmetric),
     /// `τ₀ = 2` (start at the normal / BCCG).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        match param {
-            "mu" => median(y),
-            "sigma" => {
-                let med = median(y);
-                let cv = 1.4826 * median_abs_deviation(y) / med.abs().max(MIN_POSITIVE);
-                cv.clamp(0.01, 10.0)
+        boxcox_seed(param, y).unwrap_or_else(|| {
+            if param != "tau" {
+                debug_assert!(false, "BCPE has no parameter '{param}'");
             }
-            "nu" => 1.0,
-            "tau" => TAU_INIT,
-            other => {
-                debug_assert!(
-                    matches!(other, "mu" | "sigma" | "nu" | "tau"),
-                    "BCPE has no parameter '{other}'"
-                );
-                TAU_INIT
-            }
-        }
+            TAU_INIT
+        })
     }
 
     fn derivatives(
@@ -220,9 +211,7 @@ impl Distribution for BCPE {
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        Ok(crate::math::par_zip_map(mu, sigma, |m, s| {
-            (s * m) * (s * m)
-        }))
+        Ok(boxcox_cv_variance(mu, sigma))
     }
 
     /// `μ` is the median; the second-order mean approximation matches BCCG (the PE
@@ -234,12 +223,7 @@ impl Distribution for BCPE {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
-        let n = mu.len();
-        let mut out = Array1::<f64>::zeros(n);
-        for i in 0..n {
-            out[i] = mu[i] * (1.0 + 0.5 * sigma[i] * sigma[i] * (1.0 - nu[i]));
-        }
-        Ok(out)
+        Ok(boxcox_expected_value(mu, sigma, nu))
     }
 
     fn cdf(
@@ -289,7 +273,7 @@ impl Distribution for BCPE {
             let s = sigma[i].max(MIN_POSITIVE);
             let t = tau[i].max(MIN_POSITIVE);
             let c = pe_c(t);
-            let pi = p[i].clamp(1e-12, 1.0 - 1e-12);
+            let pi = clamp_prob(p[i]);
             let zp = if pi == 0.5 {
                 0.0
             } else {
@@ -311,29 +295,6 @@ impl Distribution for BCPE {
     fn name(&self) -> &'static str {
         "BCPE"
     }
-}
-
-/// Median of `y` (finite entries). Returns 0.0 for an empty slice (`validate_inputs`
-/// rejects empty `y` on the public path, so this is only a defensive default).
-fn median(y: &Array1<f64>) -> f64 {
-    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let m = v.len() / 2;
-    if v.len().is_multiple_of(2) {
-        0.5 * (v[m - 1] + v[m])
-    } else {
-        v[m]
-    }
-}
-
-/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
-fn median_abs_deviation(y: &Array1<f64>) -> f64 {
-    let med = median(y);
-    let dev = y.mapv(|x| (x - med).abs());
-    median(&dev)
 }
 
 #[cfg(test)]
