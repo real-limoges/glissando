@@ -11,11 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
-use crate::distributions::{
-    Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Ocat, Poisson, StudentT, Weibull, BCCG,
-    BCPE, BCT,
-};
-use crate::ffi::FamilyType;
+use crate::distributions::{CensorStatus, FamilyDescriptor};
+use crate::ffi::FamilyHandle;
 use crate::fitting::selection::{self, Direction, StepScope};
 use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
@@ -76,6 +73,112 @@ impl PyOcat {
             return Err(PyValueError::new_err("Ocat: n_categories must be 2–5"));
         }
         Ok(Self { n_categories })
+    }
+}
+
+/// Censored responses (STRUCT-1): wraps `base` with per-row censoring `status`.
+///
+/// `status` entries are `"event"`, `"left"`, `"right"`, or `"interval"`
+/// (case-insensitive). `upper` gives interval upper bounds (only read on
+/// `"interval"` rows) and defaults to zeros when omitted.
+#[pyclass(name = "Censored", frozen)]
+struct PyCensored {
+    descriptor: FamilyDescriptor,
+}
+
+#[pymethods]
+impl PyCensored {
+    #[new]
+    #[pyo3(signature = (base, status, upper=None))]
+    fn new(
+        base: &Bound<'_, PyAny>,
+        status: Vec<String>,
+        upper: Option<Vec<f64>>,
+    ) -> PyResult<Self> {
+        let base_descriptor = extract_descriptor(base)?;
+        let parsed_status: Vec<CensorStatus> = status
+            .iter()
+            .map(|s| parse_censor_status(s))
+            .collect::<PyResult<_>>()?;
+        let n = parsed_status.len();
+        let upper = match upper {
+            Some(u) if u.len() == n => u,
+            Some(_) => {
+                return Err(PyValueError::new_err(
+                    "Censored: 'upper' must be the same length as 'status'",
+                ))
+            }
+            None => vec![0.0; n],
+        };
+        Ok(Self {
+            descriptor: FamilyDescriptor::Censored {
+                base: Box::new(base_descriptor),
+                status: parsed_status,
+                upper,
+            },
+        })
+    }
+}
+
+/// Truncated responses (STRUCT-2): restricts `base` to the per-row open
+/// interval `(lower, upper)`. Use `float("-inf")` / `float("inf")` for an
+/// unbounded side.
+#[pyclass(name = "Truncated", frozen)]
+struct PyTruncated {
+    descriptor: FamilyDescriptor,
+}
+
+#[pymethods]
+impl PyTruncated {
+    #[new]
+    fn new(base: &Bound<'_, PyAny>, lower: Vec<f64>, upper: Vec<f64>) -> PyResult<Self> {
+        if lower.len() != upper.len() {
+            return Err(PyValueError::new_err(
+                "Truncated: 'lower' and 'upper' must be the same length",
+            ));
+        }
+        let base_descriptor = extract_descriptor(base)?;
+        Ok(Self {
+            descriptor: FamilyDescriptor::Truncated {
+                base: Box::new(base_descriptor),
+                lower,
+                upper,
+            },
+        })
+    }
+}
+
+/// Hurdle / two-part models (STRUCT-3): adds a logit-linked zero atom on top
+/// of a zero-truncated `base`.
+#[pyclass(name = "Hurdle", frozen)]
+struct PyHurdle {
+    descriptor: FamilyDescriptor,
+}
+
+#[pymethods]
+impl PyHurdle {
+    #[new]
+    fn new(base: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let base_descriptor = extract_descriptor(base)?;
+        Ok(Self {
+            descriptor: FamilyDescriptor::Hurdle {
+                base: Box::new(base_descriptor),
+            },
+        })
+    }
+}
+
+/// Parse a `Censored` status string (`"event"`, `"left"`, `"right"`, `"interval"`).
+fn parse_censor_status(s: &str) -> PyResult<CensorStatus> {
+    match s.to_ascii_lowercase().as_str() {
+        "event" => Ok(CensorStatus::Event),
+        "left" => Ok(CensorStatus::Left),
+        "right" => Ok(CensorStatus::Right),
+        "interval" => Ok(CensorStatus::Interval),
+        other => Err(PyValueError::new_err(format!(
+            "Unknown censor status '{}', expected 'event', 'left', 'right', or 'interval'",
+            other
+        ))),
     }
 }
 
@@ -191,53 +294,78 @@ fn parse_direction(direction: &str) -> PyResult<Direction> {
     }
 }
 
-fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyType> {
+/// Build a [`FamilyDescriptor`] from a Python family object, recursing into
+/// `base` for the structural wrappers. Routing through the same descriptor
+/// [`GamlssModel::to_json`](crate::GamlssModel::to_json) uses for
+/// serialization means every family it can describe — including
+/// `Censored`/`Truncated`/`Hurdle` — is reachable here with no separate name
+/// roster to keep in sync.
+fn extract_descriptor(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyDescriptor> {
     if family_obj.extract::<PyRef<PyGaussian>>().is_ok() {
-        return Ok(FamilyType::Gaussian(Gaussian::new()));
+        return Ok(FamilyDescriptor::Named("Gaussian".to_string()));
     }
     if family_obj.extract::<PyRef<PyPoisson>>().is_ok() {
-        return Ok(FamilyType::Poisson(Poisson::new()));
+        return Ok(FamilyDescriptor::Named("Poisson".to_string()));
     }
     if let Ok(b) = family_obj.extract::<PyRef<PyBinomial>>() {
-        return Ok(FamilyType::Binomial(Binomial::with_trials(
-            Array1::from_vec(b.n_trials.clone()),
-        )));
+        return Ok(FamilyDescriptor::Binomial {
+            n_trials: b.n_trials.clone(),
+        });
     }
     if family_obj.extract::<PyRef<PyGamma>>().is_ok() {
-        return Ok(FamilyType::Gamma(Gamma::new()));
+        return Ok(FamilyDescriptor::Named("Gamma".to_string()));
     }
     if family_obj.extract::<PyRef<PyNegativeBinomial>>().is_ok() {
-        return Ok(FamilyType::NegativeBinomial(NegativeBinomial::new()));
+        return Ok(FamilyDescriptor::Named("NegativeBinomial".to_string()));
     }
     if family_obj.extract::<PyRef<PyBeta>>().is_ok() {
-        return Ok(FamilyType::Beta(Beta::new()));
+        return Ok(FamilyDescriptor::Named("Beta".to_string()));
     }
     if family_obj.extract::<PyRef<PyStudentT>>().is_ok() {
-        return Ok(FamilyType::StudentT(StudentT::new()));
+        return Ok(FamilyDescriptor::Named("StudentT".to_string()));
     }
     if family_obj.extract::<PyRef<PyWeibull>>().is_ok() {
-        return Ok(FamilyType::Weibull(Weibull::new()));
+        return Ok(FamilyDescriptor::Named("Weibull".to_string()));
     }
     if family_obj.extract::<PyRef<PyBCCG>>().is_ok() {
-        return Ok(FamilyType::BCCG(BCCG::new()));
+        return Ok(FamilyDescriptor::Named("BCCG".to_string()));
     }
     if family_obj.extract::<PyRef<PyBCT>>().is_ok() {
-        return Ok(FamilyType::BCT(BCT::new()));
+        return Ok(FamilyDescriptor::Named("BCT".to_string()));
     }
     if family_obj.extract::<PyRef<PyBCPE>>().is_ok() {
-        return Ok(FamilyType::BCPE(BCPE::new()));
+        return Ok(FamilyDescriptor::Named("BCPE".to_string()));
     }
     if let Ok(o) = family_obj.extract::<PyRef<PyOcat>>() {
-        return Ok(FamilyType::Ocat(Ocat::new(o.n_categories)));
+        return Ok(FamilyDescriptor::Ocat {
+            n_categories: o.n_categories,
+        });
+    }
+    if let Ok(c) = family_obj.extract::<PyRef<PyCensored>>() {
+        return Ok(c.descriptor.clone());
+    }
+    if let Ok(t) = family_obj.extract::<PyRef<PyTruncated>>() {
+        return Ok(t.descriptor.clone());
+    }
+    if let Ok(h) = family_obj.extract::<PyRef<PyHurdle>>() {
+        return Ok(h.descriptor.clone());
     }
 
     Err(PyValueError::new_err(
-        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), NegativeBinomial(), Beta(), StudentT(), Weibull(), BCCG(), BCT(), BCPE(), or Ocat(n_categories)",
+        "Unknown distribution type. Use Gaussian(), Poisson(), Binomial(), Gamma(), \
+         NegativeBinomial(), Beta(), StudentT(), Weibull(), BCCG(), BCT(), BCPE(), \
+         Ocat(n_categories), Censored(base, status, upper=None), Truncated(base, lower, upper), \
+         or Hurdle(base)",
     ))
 }
 
+fn extract_family(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyHandle> {
+    let descriptor = extract_descriptor(family_obj)?;
+    FamilyHandle::from_descriptor(descriptor).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 fn fit_with_family(
-    family: &FamilyType,
+    family: &FamilyHandle,
     data: &DataSet,
     y: &Array1<f64>,
     weights: Option<&Array1<f64>>,
@@ -255,7 +383,7 @@ fn fit_with_family(
 }
 
 fn predict_with_family(
-    family: &FamilyType,
+    family: &FamilyHandle,
     model: &GamlssModel,
     new_data: &DataSet,
 ) -> PyResult<HashMap<String, Array1<f64>>> {
@@ -267,7 +395,7 @@ fn predict_with_family(
 #[pyclass(name = "GamlssModel")]
 struct PyGamlssModel {
     inner: GamlssModel,
-    family: FamilyType,
+    family: FamilyHandle,
 }
 
 #[pymethods]
@@ -304,10 +432,10 @@ impl PyGamlssModel {
         let y_array = y.as_array().to_owned();
         let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
-        let family_type = extract_family(family)?;
+        let family_handle = extract_family(family)?;
 
         let model = fit_with_family(
-            &family_type,
+            &family_handle,
             &dataset,
             &y_array,
             w_array.as_ref(),
@@ -316,7 +444,7 @@ impl PyGamlssModel {
 
         Ok(Self {
             inner: model,
-            family: family_type,
+            family: family_handle,
         })
     }
 
@@ -346,7 +474,7 @@ impl PyGamlssModel {
         let y_array = y.as_array().to_owned();
         let w_array = weights.as_ref().map(|w| w.as_array().to_owned());
         let rust_formula = py_dict_to_formula(formula)?;
-        let family_type = extract_family(family)?;
+        let family_handle = extract_family(family)?;
 
         let fit_config = parse_fit_config(config)?;
 
@@ -355,14 +483,14 @@ impl PyGamlssModel {
             &y_array,
             w_array.as_ref(),
             &rust_formula,
-            family_type.as_distribution(),
+            family_handle.as_distribution(),
             fit_config,
         )
         .map_err(|e| PyRuntimeError::new_err(format!("Fit failed: {}", e)))?;
 
         Ok(Self {
             inner: model,
-            family: family_type,
+            family: family_handle,
         })
     }
 
@@ -530,7 +658,7 @@ impl PyGamlssModel {
         let dataset = py_dict_to_dataset(new_data)?;
         let probs = self
             .inner
-            .predict_class_probabilities(&dataset, ocat)
+            .predict_class_probabilities(&dataset, &ocat)
             .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))?;
         Ok(probs.to_pyarray(py))
     }
@@ -712,7 +840,7 @@ impl PyGamlssModel {
     ) -> PyResult<Py<PyDict>> {
         let dataset = py_dict_to_dataset(data)?;
         let y_array = y.as_array().to_owned();
-        let family_type = extract_family(family)?;
+        let family_handle = extract_family(family)?;
         let start_formula = py_dict_to_formula(start)?;
         let scope_vec = py_dict_to_scope(scope)?;
         let dir = parse_direction(direction)?;
@@ -724,7 +852,7 @@ impl PyGamlssModel {
         let result = selection::step_gaic(
             &dataset,
             &y_array,
-            family_type.as_distribution(),
+            family_handle.as_distribution(),
             start_formula,
             &scope_vec,
             k,
@@ -743,7 +871,7 @@ impl PyGamlssModel {
         }
         let model = PyGamlssModel {
             inner: result.model,
-            family: family_type,
+            family: family_handle,
         };
         let out = PyDict::new(py);
         out.set_item("model", Py::new(py, model)?)?;
@@ -767,5 +895,8 @@ fn glissando(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyBCT>()?;
     m.add_class::<PyBCPE>()?;
     m.add_class::<PyOcat>()?;
+    m.add_class::<PyCensored>()?;
+    m.add_class::<PyTruncated>()?;
+    m.add_class::<PyHurdle>()?;
     Ok(())
 }
