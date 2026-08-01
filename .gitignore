@@ -17,6 +17,7 @@ docs/*
 !docs/planning/
 docs/planning/feature-brainstorm.md
 !docs/planning/ROADMAP.html
+docs/planning/code-quality-backlog.md
 
 # Accidental root-level npm scaffolding — the published npm package is pkg/.
 /package.json
