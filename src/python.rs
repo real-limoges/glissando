@@ -240,17 +240,8 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     }
     if let Some(v) = config.get_item("criterion")? {
         let s: String = v.extract()?;
-        fit_config.criterion = match s.to_ascii_lowercase().as_str() {
-            "gcv" => SmoothingCriterion::Gcv,
-            "reml" => SmoothingCriterion::Reml,
-            "fellner_schall" => SmoothingCriterion::FellnerSchall,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
-                    other
-                )))
-            }
-        };
+        fit_config.criterion =
+            SmoothingCriterion::from_name(&s).map_err(|e| PyValueError::new_err(e.to_string()))?;
     }
     if let Some(v) = config.get_item("step_halving")? {
         fit_config.step_halving = v.extract()?;
@@ -279,19 +270,6 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
         };
     }
     Ok(fit_config)
-}
-
-/// Parse the `direction` string for stepwise selection.
-fn parse_direction(direction: &str) -> PyResult<Direction> {
-    match direction.to_ascii_lowercase().as_str() {
-        "forward" => Ok(Direction::Forward),
-        "backward" => Ok(Direction::Backward),
-        "both" => Ok(Direction::Both),
-        other => Err(PyValueError::new_err(format!(
-            "Unknown direction '{}', expected 'forward', 'backward', or 'both'",
-            other
-        ))),
-    }
 }
 
 /// Build a [`FamilyDescriptor`] from a Python family object, recursing into
@@ -843,7 +821,8 @@ impl PyGamlssModel {
         let family_handle = extract_family(family)?;
         let start_formula = py_dict_to_formula(start)?;
         let scope_vec = py_dict_to_scope(scope)?;
-        let dir = parse_direction(direction)?;
+        let dir =
+            Direction::from_name(direction).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let fit_config = match config {
             Some(c) => parse_fit_config(c)?,
             None => FitConfig::default(),

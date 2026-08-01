@@ -16,7 +16,7 @@ use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
 };
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{digamma, trigamma};
@@ -273,7 +273,7 @@ impl Distribution for BCPE {
             let s = sigma[i].max(MIN_POSITIVE);
             let t = tau[i].max(MIN_POSITIVE);
             let c = pe_c(t);
-            let pi = p[i].clamp(1e-12, 1.0 - 1e-12);
+            let pi = clamp_prob(p[i]);
             let zp = if pi == 0.5 {
                 0.0
             } else {

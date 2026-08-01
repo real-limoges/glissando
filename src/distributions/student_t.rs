@@ -1,8 +1,8 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    require, DerivativesResult, Distribution, FlooredLogLink, GamlssError, IdentityLink, Link,
-    LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink, GamlssError,
+    IdentityLink, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{
     digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
@@ -297,7 +297,7 @@ impl Distribution for StudentT {
             let nu_i = nu[i].max(MIN_POSITIVE);
             out[i] = StudentsT::new(mu[i], s, nu_i)
                 .expect("valid StudentsT params")
-                .inverse_cdf(p[i].clamp(1e-12, 1.0 - 1e-12));
+                .inverse_cdf(clamp_prob(p[i]));
         }
         Ok(out)
     }

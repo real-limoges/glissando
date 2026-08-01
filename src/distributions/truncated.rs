@@ -19,12 +19,9 @@
 //! from [`from_name`](super::from_name).
 
 use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
-use super::{DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
+use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT, PROB_EPS};
 use ndarray::Array1;
 use std::collections::HashMap;
-
-/// In-support mass is clamped to at least this, so a vanishing window can't divide by zero.
-const MASS_FLOOR: f64 = 1e-12;
 
 /// A base family restricted to per-observation support `(lower, upper)`.
 #[derive(Debug)]
@@ -112,7 +109,7 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut out = base_ll;
         for i in 0..y.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
             out[i] -= mass.ln();
         }
         Ok(out)
@@ -140,7 +137,7 @@ impl Distribution for Truncated {
             let (d1_lo, d2_lo) = &grad_lo[param];
             let (d1_hi, d2_hi) = &grad_hi[param];
             for i in 0..y.len() {
-                let dmass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+                let dmass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
                 let d1 = d1_hi[i] - d1_lo[i];
                 let d2 = d2_hi[i] - d2_lo[i];
                 u[i] -= d1 / dmass;
@@ -167,7 +164,7 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut out = f_y;
         for i in 0..out.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
             out[i] = ((out[i] - f_lo[i]) / mass).clamp(0.0, 1.0);
         }
         Ok(out)
@@ -188,8 +185,8 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut p_base = Array1::<f64>::zeros(p.len());
         for i in 0..p.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
-            p_base[i] = (f_lo[i] + p[i].clamp(0.0, 1.0) * mass).clamp(1e-12, 1.0 - 1e-12);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
+            p_base[i] = clamp_prob(f_lo[i] + p[i].clamp(0.0, 1.0) * mass);
         }
         self.base.quantile(&p_base, params)
     }
