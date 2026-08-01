@@ -1,7 +1,8 @@
 //! Gamma distribution for positive continuous data.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE,
+    MIN_WEIGHT,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -186,7 +187,7 @@ impl Distribution for Gamma {
             let rate = 1.0 / (mui.max(MIN_POSITIVE) * s * s);
             SGamma::new(shape, rate)
                 .expect("valid Gamma params")
-                .inverse_cdf(pi.clamp(1e-12, 1.0 - 1e-12))
+                .inverse_cdf(clamp_prob(pi))
         }))
     }
 

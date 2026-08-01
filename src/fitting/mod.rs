@@ -65,6 +65,24 @@ pub enum SmoothingCriterion {
     FellnerSchall,
 }
 
+impl SmoothingCriterion {
+    /// Parse a `SmoothingCriterion` from its wire name (`"gcv"`, `"reml"`,
+    /// `"fellner_schall"`, case-insensitive). `json.rs` gets this for free via
+    /// serde's `rename_all = "snake_case"`; this gives `python.rs` the same
+    /// mapping without hand-rolling it.
+    pub fn from_name(name: &str) -> Result<SmoothingCriterion, GamlssError> {
+        match name.to_ascii_lowercase().as_str() {
+            "gcv" => Ok(SmoothingCriterion::Gcv),
+            "reml" => Ok(SmoothingCriterion::Reml),
+            "fellner_schall" => Ok(SmoothingCriterion::FellnerSchall),
+            other => Err(GamlssError::Input(format!(
+                "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
+                other
+            ))),
+        }
+    }
+}
+
 /// How the fitter treats rows carrying a missing (non-finite) value in the
 /// response or any formula-referenced column (DATA-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -241,6 +259,11 @@ pub struct FittedParameter {
     pub lambdas: Array1<f64>,
     pub eta: Array1<f64>,
     pub fitted_values: Array1<f64>,
+    /// Total EDF, always populated as `term_edf.iter().sum()` at construction
+    /// time. Kept as its own stored field, rather than a computed method like
+    /// `FittingParameter::edf`, because this type round-trips through
+    /// `to_json`/`from_json` and other FFI surfaces: removing the field would
+    /// break wire compatibility for existing consumers.
     pub edf: f64,
     /// Per-term EDF aligned with `terms`, summing to `edf`. An entry at the
     /// term's penalty null-space dimension means the smooth collapsed to its
@@ -279,7 +302,6 @@ pub(super) struct FittingParameter {
     pub(super) offset: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
-    pub(super) edf: f64,
     /// Latest per-term EDF (aligned with `terms`); updated each RS cycle.
     pub(super) term_edf: Vec<f64>,
 }
@@ -427,7 +449,6 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 offset,
                 lambdas,
                 covariance: None,
-                edf: 0.0,
                 term_edf: vec![0.0; n_terms],
             },
         );
@@ -547,7 +568,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 ParamDiagnostic {
                     final_eta_change: update.eta_change,
                     final_lambda_change: update.lambda_change,
-                    edf: update.edf,
+                    edf: update.edf(),
                     weight_floor_hits: update.weight_floor_hits,
                     step_cap_hits: update.step_cap_hits,
                     step_halving_hits: accepted.hits,
@@ -575,7 +596,6 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             if !accepted.rejected || model.covariance.is_none() {
                 model.lambdas = update.lambdas;
                 model.covariance = Some(update.covariance);
-                model.edf = update.edf;
                 model.term_edf = update.term_edf;
             }
         }
@@ -660,7 +680,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             eta: model.eta,
             // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
             fitted_values: model.mu,
-            edf: model.edf,
+            // Summed from `term_edf` (`FittingParameter` no longer stores a
+            // separate total) so the two can never drift apart.
+            edf: model.term_edf.iter().sum(),
             term_edf: model.term_edf,
             term_blocks,
             link,

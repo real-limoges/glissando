@@ -13,7 +13,7 @@ use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
 };
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
 use crate::math::{std_normal_cdf, std_normal_quantile};
@@ -192,7 +192,7 @@ impl Distribution for BCCG {
             let m = mu[i].max(MIN_POSITIVE);
             let s = sigma[i].max(MIN_POSITIVE);
             let nu_i = nu[i];
-            let zp = std_normal_quantile(p[i].clamp(1e-12, 1.0 - 1e-12));
+            let zp = std_normal_quantile(clamp_prob(p[i]));
             out[i] = boxcox_inv(m, s, nu_i, zp);
         }
         Ok(out)

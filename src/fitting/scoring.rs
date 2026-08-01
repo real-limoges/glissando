@@ -14,8 +14,9 @@
 //! respect to the input `models` map, which keeps it unit-testable in isolation.
 
 use super::solver::{
-    fit_pwls, group_penalties, lambda_cost, restart_seed, run_optimization,
-    run_optimization_fellner_schall, run_optimization_reml, WeightedNormalEquations,
+    fit_pwls, group_penalties, initial_log_lambda, lambda_cost, restart_seed_from_heuristic,
+    run_optimization, run_optimization_fellner_schall, run_optimization_reml,
+    WeightedNormalEquations,
 };
 use super::{
     global_deviance, global_deviance_with, max_abs_diff, FittingParameter, SmoothingCriterion,
@@ -25,6 +26,8 @@ use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
 use indexmap::IndexMap;
 use ndarray::{Array1, Zip};
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// Cap on the per-element Fisher-scoring step `u/w` (in η units): a pure
@@ -67,8 +70,7 @@ pub(super) struct Update {
     /// Smoothing parameters on the response scale (not log-scale).
     pub lambdas: Array1<f64>,
     pub covariance: CovarianceMatrix,
-    pub edf: f64,
-    /// Per-term EDF, summing to `edf`.
+    /// Per-term EDF.
     pub term_edf: Vec<f64>,
     /// Max |Δβ|; reported in diagnostics (`final_change`).
     pub max_diff: f64,
@@ -83,6 +85,14 @@ pub(super) struct Update {
     pub weight_floor_hits: usize,
     /// Observations whose `u/w` step was clipped at `±MAX_STEP`.
     pub step_cap_hits: usize,
+}
+
+impl Update {
+    /// Total EDF, derived from the per-term breakdown rather than tracked
+    /// separately so the two can never drift apart.
+    pub(super) fn edf(&self) -> f64 {
+        self.term_edf.iter().sum()
+    }
 }
 
 /// A (possibly damped) block update accepted by [`step_halving`].
@@ -322,20 +332,18 @@ pub(super) fn step<D: Distribution + ?Sized>(
     // Solve PWLS at `lambdas` and attribute EDF to each term by summing its
     // contiguous block of the per-coefficient EDF diagonal (column order matches
     // `term_layouts`).
-    let fit_and_terms = |lambdas: &Array1<f64>| -> Result<
-        (Coefficients, CovarianceMatrix, f64, Vec<f64>),
-        GamlssError,
-    > {
-        let (beta, cov, edf, edf_per_coeff) = fit_pwls(&nfo, penalties, lambdas)?;
-        let mut term_edf = Vec::with_capacity(target.term_layouts.len());
-        let mut offset = 0usize;
-        for layout in &target.term_layouts {
-            let end = offset + layout.n_coeffs;
-            term_edf.push((offset..end).map(|k| edf_per_coeff[k]).sum());
-            offset = end;
-        }
-        Ok((beta, cov, edf, term_edf))
-    };
+    let fit_and_terms =
+        |lambdas: &Array1<f64>| -> Result<(Coefficients, CovarianceMatrix, Vec<f64>), GamlssError> {
+            let (beta, cov, _edf, edf_per_coeff) = fit_pwls(&nfo, penalties, lambdas)?;
+            let mut term_edf = Vec::with_capacity(target.term_layouts.len());
+            let mut offset = 0usize;
+            for layout in &target.term_layouts {
+                let end = offset + layout.n_coeffs;
+                term_edf.push((offset..end).map(|k| edf_per_coeff[k]).sum());
+                offset = end;
+            }
+            Ok((beta, cov, term_edf))
+        };
 
     // A smooth term whose EDF has decayed to its penalty null-space dimension has
     // collapsed onto the unpenalized polynomial remainder (e.g. a straight line).
@@ -364,8 +372,8 @@ pub(super) fn step<D: Distribution + ?Sized>(
     };
 
     let best_lambdas = run_opt(Some(&target.lambdas), true)?;
-    let (best_lambdas, new_beta, cov_matrix, edf, term_edf) = {
-        let (beta, cov, edf, term_edf) = fit_and_terms(&best_lambdas)?;
+    let (best_lambdas, new_beta, cov_matrix, term_edf) = {
+        let (beta, cov, term_edf) = fit_and_terms(&best_lambdas)?;
 
         // Collapse-guarded restart. The LAML/GCV objective is unimodal in λ but
         // carries a flat high-λ shelf where a smooth sits in its penalty null
@@ -420,7 +428,8 @@ pub(super) fn step<D: Distribution + ?Sized>(
             //     LAML optimum has that margin interior, a geometry the
             //     all-coordinates seeds (1) and (2) can both miss because they
             //     descend into a different stationary point.
-            let restart = restart_seed(&target.x_matrix, penalties);
+            let heur = initial_log_lambda(&target.x_matrix, penalties);
+            let restart = restart_seed_from_heuristic(&heur);
             let mut seeds: Vec<Option<Array1<f64>>> = vec![Some(restart.clone()), None];
             if best_lambdas.len() > 1 {
                 let (hi, lo) = lambda_bounds();
@@ -441,21 +450,46 @@ pub(super) fn step<D: Distribution + ?Sized>(
             // every gradient-started probe on some datasets); a grid evaluation
             // is derivative-free and cannot be captured by a basin boundary.
             if best_lambdas.len() <= 2 {
-                let heur = super::solver::initial_log_lambda(&target.x_matrix, penalties);
                 let offsets: [f64; 7] = [-16.0, -12.0, -8.0, -4.0, 0.0, 4.0, 8.0];
-                let mut best_cell: Option<(f64, Array1<f64>)> = None;
-                let mut cell = Array1::zeros(best_lambdas.len());
-                let n_cells = offsets.len().pow(best_lambdas.len() as u32);
-                for idx in 0..n_cells {
+                let n_dims = best_lambdas.len();
+                let n_cells = offsets.len().pow(n_dims as u32);
+                let cell_at = |idx: usize| -> Array1<f64> {
+                    let mut cell = Array1::zeros(n_dims);
                     let mut rem = idx;
-                    for j in 0..best_lambdas.len() {
+                    for j in 0..n_dims {
                         cell[j] = (heur[j] + offsets[rem % offsets.len()]).exp();
                         rem /= offsets.len();
                     }
-                    if let Ok(c) = cost_of(&cell) {
-                        if best_cell.as_ref().is_none_or(|(bc, _)| c < *bc) {
-                            best_cell = Some((c, cell.clone()));
-                        }
+                    cell
+                };
+                // Every grid cell's cost is independent of the others (at most
+                // 7² = 49 cells), so evaluate them in parallel; picking the
+                // best-scoring cell stays a serial reduction over the results.
+                let cell_costs: Vec<Option<(f64, Array1<f64>)>> = {
+                    #[cfg(feature = "parallel")]
+                    {
+                        (0..n_cells)
+                            .into_par_iter()
+                            .map(|idx| {
+                                let cell = cell_at(idx);
+                                cost_of(&cell).ok().map(|c| (c, cell))
+                            })
+                            .collect()
+                    }
+                    #[cfg(not(feature = "parallel"))]
+                    {
+                        (0..n_cells)
+                            .map(|idx| {
+                                let cell = cell_at(idx);
+                                cost_of(&cell).ok().map(|c| (c, cell))
+                            })
+                            .collect()
+                    }
+                };
+                let mut best_cell: Option<(f64, Array1<f64>)> = None;
+                for result in cell_costs.into_iter().flatten() {
+                    if best_cell.as_ref().is_none_or(|(bc, _)| result.0 < *bc) {
+                        best_cell = Some(result);
                     }
                 }
                 if let Some((_, cell)) = best_cell {
@@ -466,28 +500,49 @@ pub(super) fn step<D: Distribution + ?Sized>(
             // one; a seed that combines an extreme pinned λ on one margin with
             // a tiny restart value on another can make the speculative solve
             // ill-conditioned, so a failed candidate is skipped rather than
-            // aborting the whole fit, mirroring the grid-cell loop above.
-            for seed in seeds {
-                let Ok(candidate) = run_opt(seed.as_ref(), false) else {
-                    continue;
-                };
-                let Ok(cost) = cost_of(&candidate) else {
-                    continue;
-                };
-                if cost < winner_cost {
-                    winner_cost = cost;
-                    winner = candidate;
+            // aborting the whole fit, mirroring the grid-cell loop above. Each
+            // seed's optimization is independent, so it runs in parallel too;
+            // the winner-tracking reduction stays serial so a tie keeps the
+            // earliest-listed seed, matching the sequential behavior.
+            let seed_results: Vec<Option<(f64, Array1<f64>)>> = {
+                #[cfg(feature = "parallel")]
+                {
+                    seeds
+                        .par_iter()
+                        .map(|seed| {
+                            let candidate = run_opt(seed.as_ref(), false).ok()?;
+                            let cost = cost_of(&candidate).ok()?;
+                            Some((cost, candidate))
+                        })
+                        .collect()
+                }
+                #[cfg(not(feature = "parallel"))]
+                {
+                    seeds
+                        .iter()
+                        .map(|seed| {
+                            let candidate = run_opt(seed.as_ref(), false).ok()?;
+                            let cost = cost_of(&candidate).ok()?;
+                            Some((cost, candidate))
+                        })
+                        .collect()
+                }
+            };
+            for result in seed_results.into_iter().flatten() {
+                if result.0 < winner_cost {
+                    winner_cost = result.0;
+                    winner = result.1;
                 }
             }
 
             if winner.iter().zip(best_lambdas.iter()).any(|(a, b)| a != b) {
-                let (rb, rc, re, rte) = fit_and_terms(&winner)?;
-                (winner, rb, rc, re, rte)
+                let (rb, rc, rte) = fit_and_terms(&winner)?;
+                (winner, rb, rc, rte)
             } else {
-                (best_lambdas, beta, cov, edf, term_edf)
+                (best_lambdas, beta, cov, term_edf)
             }
         } else {
-            (best_lambdas, beta, cov, edf, term_edf)
+            (best_lambdas, beta, cov, term_edf)
         }
     };
 
@@ -503,7 +558,6 @@ pub(super) fn step<D: Distribution + ?Sized>(
         eta: new_eta,
         lambdas: best_lambdas,
         covariance: cov_matrix,
-        edf,
         term_edf,
         max_diff,
         eta_max_change,
@@ -550,7 +604,6 @@ mod tests {
             offset: Array1::zeros(n),
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
-            edf: 0.0,
             term_edf: vec![0.0],
         }
     }
@@ -572,7 +625,6 @@ mod tests {
             offset: Array1::zeros(n),
             lambdas: Array1::<f64>::zeros(0),
             covariance: None,
-            edf: 0.0,
             term_edf: vec![0.0],
         }
     }
@@ -608,7 +660,7 @@ mod tests {
         assert!(update.max_diff.is_finite() && update.max_diff > 0.0);
         assert!(update.eta_change.is_finite() && update.eta_change > 0.0);
         assert!(update.lambda_change.is_finite());
-        assert!(update.edf.is_finite());
+        assert!(update.edf().is_finite());
     }
 
     #[test]
@@ -660,7 +712,6 @@ mod tests {
             offset: Array1::zeros(n),
             lambdas: Array1::ones(1),
             covariance: None,
-            edf: 0.0,
             term_edf: vec![0.0],
         };
         let sigma = intercept_only_log(0.0, n);
@@ -672,7 +723,7 @@ mod tests {
         let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
         assert_eq!(update.lambdas.len(), 1);
         assert!(update.lambdas[0].is_finite() && update.lambdas[0] > 0.0);
-        assert!(update.edf > 0.0 && update.edf <= n_splines as f64);
+        assert!(update.edf() > 0.0 && update.edf() <= n_splines as f64);
         assert!(update.beta.0.iter().all(|b| b.is_finite()));
     }
 
@@ -711,7 +762,6 @@ mod tests {
             // Collapsed warm start: λ on the shelf.
             lambdas: Array1::from_elem(1, 1e12),
             covariance: None,
-            edf: 0.0,
             term_edf: vec![0.0],
         };
         let sigma = intercept_only_log(0.0, n);
@@ -763,7 +813,6 @@ mod tests {
             eta: array![beta_val],
             lambdas: Array1::<f64>::zeros(0),
             covariance: CovarianceMatrix(Array2::zeros((1, 1))),
-            edf: 0.0,
             term_edf: vec![0.0],
             max_diff: 0.0,
             eta_max_change: 0.0,

@@ -473,17 +473,7 @@ pub fn step_gaic(
     let start = parse_formula(start_formula_json)?;
     let family = from_name(distribution)?;
     let scope: Vec<StepScope> = serde_json::from_str(scope_json).map_err(json_err)?;
-    let dir = match direction.to_ascii_lowercase().as_str() {
-        "forward" => Direction::Forward,
-        "backward" => Direction::Backward,
-        "both" => Direction::Both,
-        other => {
-            return Err(GamlssError::Input(format!(
-                "Unknown direction '{}', expected 'forward', 'backward', or 'both'",
-                other
-            )))
-        }
-    };
+    let dir = Direction::from_name(direction)?;
     let config = match config_json {
         Some(c) => parse_config(c)?,
         None => FitConfig::default(),

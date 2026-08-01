@@ -775,8 +775,15 @@ pub(super) fn initial_log_lambda(
     x_matrix: &ModelMatrix,
     penalty_matrices: &[PenaltyMatrix],
 ) -> Array1<f64> {
-    let x_t_x = x_matrix.0.t().dot(&x_matrix.0);
-    let tr_xtx = x_t_x.diag().sum().max(MIN_LAMBDA);
+    // tr(X'X) = sum_ij X[i,j]^2: the diagonal entry (X'X)_jj is sum_i X[i,j]^2,
+    // so summing the diagonal is just summing every squared entry of X. Avoids
+    // materializing the full p×p X'X (O(n·p) instead of O(n·p²)).
+    let tr_xtx = x_matrix
+        .0
+        .iter()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {
         let tr_sj = s_j.0.diag().sum().max(MIN_LAMBDA);
         (tr_xtx / tr_sj)
@@ -787,15 +794,13 @@ pub(super) fn initial_log_lambda(
 
 /// Low-λ seed for the collapse-guarded restart (see [`RESTART_LOG_OFFSET`]).
 ///
-/// Derived from the scale-aware cold-start heuristic so it adapts to the basis /
+/// Derived from the scale-aware cold-start heuristic (an already-computed
+/// [`initial_log_lambda`], so a caller needing both the raw heuristic and the
+/// restart seed pays for one call, not two) so it adapts to the basis /
 /// response scale, then shifted several decades down to sit below the high-λ
 /// collapse shelf.
-pub(super) fn restart_seed(
-    x_matrix: &ModelMatrix,
-    penalty_matrices: &[PenaltyMatrix],
-) -> Array1<f64> {
-    initial_log_lambda(x_matrix, penalty_matrices)
-        .mapv(|log_lambda| (log_lambda - RESTART_LOG_OFFSET).exp().max(MIN_LAMBDA))
+pub(super) fn restart_seed_from_heuristic(heur: &Array1<f64>) -> Array1<f64> {
+    heur.mapv(|log_lambda| (log_lambda - RESTART_LOG_OFFSET).exp().max(MIN_LAMBDA))
 }
 
 /// Value of the objective the given criterion minimizes, evaluated at a fixed λ.

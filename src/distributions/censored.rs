@@ -20,13 +20,9 @@
 //! it through this typed API and serialize it via the family descriptor (SER-1).
 
 use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
-use super::{DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
+use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
 use ndarray::Array1;
 use std::collections::HashMap;
-
-/// Probabilities are clamped into `[PROB_FLOOR, 1 − PROB_FLOOR]` before taking a
-/// logarithm or dividing by them, so a saturated tail can't produce `−inf` / NaN.
-const PROB_FLOOR: f64 = 1e-12;
 
 /// Per-observation censoring code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,11 +217,6 @@ impl Distribution for Censored {
             upper: super::descriptor::encode_bounds(&self.upper),
         }
     }
-}
-
-/// Clamp a probability away from `0` and `1` so its logarithm / reciprocal stays finite.
-fn clamp_prob(p: f64) -> f64 {
-    p.clamp(PROB_FLOOR, 1.0 - PROB_FLOOR)
 }
 
 #[cfg(test)]
