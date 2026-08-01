@@ -189,10 +189,75 @@ pub fn log_det_robust(a: &ndarray::Array2<f64>) -> Result<f64> {
     Ok(eigvals.iter().map(|&v| v.max(1e-300_f64).ln()).sum())
 }
 
+/// Symmetric pseudo-inverse via eigendecomposition, falling back from the direct
+/// LU/Cholesky-based [`inv`].
+///
+/// `X'WX + S_λ` is symmetric positive definite in exact arithmetic (the penalty's
+/// null space, e.g. the polynomial trend a P-spline doesn't penalize, is always
+/// covered by `X'WX` for a well-posed design). In floating point it can still
+/// develop a near-zero pivot — the same failure mode documented on
+/// [`log_det_robust`] — which trips a hard LAPACK error (`dgesv`/`dpotrf`
+/// returning a nonzero info code) in [`inv`] on some BLAS builds but not others,
+/// so a design that fits locally can fail only on CI. Eigenvalues below a
+/// relative tolerance are treated as numerically zero and dropped from the
+/// pseudo-inverse rather than inverted, which avoids amplifying floating-point
+/// noise into a huge coefficient.
+pub fn inv_robust(a: &ndarray::Array2<f64>) -> Result<ndarray::Array2<f64>> {
+    // Fast path: well-conditioned matrices skip the eigensolver.
+    if let Ok(v) = inv(a) {
+        return Ok(v);
+    }
+    let (eigvals, eigvecs) = symmetric_eigh(a)?;
+    let n = eigvals.len();
+    let d_max = eigvals.iter().cloned().fold(0.0_f64, f64::max);
+    let tau = (d_max * n as f64 * f64::EPSILON).max(1e-300);
+
+    let mut d_inv = ndarray::Array1::<f64>::zeros(n);
+    for i in 0..n {
+        if eigvals[i] > tau {
+            d_inv[i] = 1.0 / eigvals[i];
+        }
+    }
+    let scaled = &eigvecs * &d_inv.view().insert_axis(ndarray::Axis(0));
+    Ok(scaled.dot(&eigvecs.t()))
+}
+
+/// Solves `A x = b`, falling back to [`inv_robust`]'s pseudo-inverse when the
+/// direct solve hard-fails on a near-singular `A`. See [`inv_robust`] for why
+/// that can happen only on some BLAS builds.
+///
+/// Kept as a fallback around [`solve`] rather than always routing through
+/// `inv_robust(a).dot(b)`: the two use different LAPACK paths (`dgesv` vs
+/// `dsyev`) whose floating-point rounding differs, and callers that iterate
+/// (e.g. the REML smoothing-parameter search) can be sensitive enough to that
+/// rounding to converge to a different optimum. Only reach for the
+/// pseudo-inverse when the fast path actually fails.
+pub fn solve_robust(
+    a: &ndarray::Array2<f64>,
+    b: &ndarray::Array1<f64>,
+) -> Result<ndarray::Array1<f64>> {
+    if let Ok(x) = solve(a, b) {
+        return Ok(x);
+    }
+    let v = inv_robust(a)?;
+    Ok(v.dot(b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ndarray::array;
+
+    #[test]
+    fn test_inv() {
+        let a = array![[4.0, 2.0], [2.0, 3.0]];
+        let a_inv = inv(&a).unwrap();
+        let identity = a.dot(&a_inv);
+        assert!((identity[[0, 0]] - 1.0).abs() < 1e-10);
+        assert!((identity[[1, 1]] - 1.0).abs() < 1e-10);
+        assert!(identity[[0, 1]].abs() < 1e-10);
+        assert!(identity[[1, 0]].abs() < 1e-10);
+    }
 
     #[test]
     fn test_solve() {
@@ -205,14 +270,47 @@ mod tests {
     }
 
     #[test]
-    fn test_inv() {
+    fn test_solve_robust_singular_falls_back() {
+        // Consistent singular system (b is in the range of A): the pseudo-inverse
+        // fallback should return the minimum-norm solution.
+        let a = array![[1.0, 1.0], [1.0, 1.0]];
+        assert!(solve(&a, &array![2.0, 2.0]).is_err());
+
+        let x = solve_robust(&a, &array![2.0, 2.0]).unwrap();
+        let ax = a.dot(&x);
+        assert!((ax[0] - 2.0).abs() < 1e-8);
+        assert!((ax[1] - 2.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_inv_robust_matches_inv_when_well_conditioned() {
         let a = array![[4.0, 2.0], [2.0, 3.0]];
         let a_inv = inv(&a).unwrap();
-        let identity = a.dot(&a_inv);
-        assert!((identity[[0, 0]] - 1.0).abs() < 1e-10);
-        assert!((identity[[1, 1]] - 1.0).abs() < 1e-10);
-        assert!(identity[[0, 1]].abs() < 1e-10);
-        assert!(identity[[1, 0]].abs() < 1e-10);
+        let a_inv_robust = inv_robust(&a).unwrap();
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!((a_inv[[i, j]] - a_inv_robust[[i, j]]).abs() < 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn test_inv_robust_singular_returns_pseudo_inverse() {
+        // Rank-1 matrix: `inv` fails outright, `inv_robust` should fall back to
+        // the Moore-Penrose pseudo-inverse via eigendecomposition rather than
+        // erroring, mirroring the near-singular normal-equations matrices this
+        // guards against in `fit_pwls`.
+        let a = array![[1.0, 1.0], [1.0, 1.0]];
+        assert!(inv(&a).is_err());
+
+        let pinv = inv_robust(&a).unwrap();
+        // Moore-Penrose property: A · A⁺ · A ≈ A.
+        let reconstructed = a.dot(&pinv).dot(&a);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!((reconstructed[[i, j]] - a[[i, j]]).abs() < 1e-8);
+            }
+        }
     }
 
     #[test]
