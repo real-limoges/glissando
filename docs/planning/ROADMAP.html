@@ -90,7 +90,7 @@
 <div class="wrap">
   <h1>glissando <span class="sub">· feature-completeness roadmap</span></h1>
   <p class="lede">Target: <b style="color:#fff">parity with R <code>gamlss</code> / <code>mgcv</code></b> as a GAMLSS engine. Presented two ways — <b style="color:#fff">Part 1</b> groups every gap into workstreams of similar work (good for assigning / batching); <b style="color:#fff">Part 2</b> is a single flat stack-ranking by importance (good for deciding what to do next). The same items appear in both; IDs like <span class="id">DIST-1</span> are shared so you can cross-reference.</p>
-  <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall, step-halving, and global-deviance convergence; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 11 distributions with <code>cdf</code>/<code>pdf</code>/<code>quantile</code> (incl. the Box-Cox family BCCG/BCT/BCPE); 10 links with <code>mu_eta</code>; native + WASM + Python + JSON surfaces; AIC/BIC/EDF + GAIC(k), stepwise selection, ANOVA / LR test; Pearson, response, and randomized-quantile residuals; centiles / quantile prediction; posterior sampling. Nothing is published.</p>
+  <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall, step-halving, and global-deviance convergence; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 11 distributions with <code>cdf</code>/<code>pdf</code>/<code>quantile</code> (incl. the Box-Cox family BCCG/BCT/BCPE); 10 links with <code>mu_eta</code> (selectable, but only the family <i>default</i> link fits correctly today; see B); native + WASM + Python + JSON surfaces; AIC/BIC/EDF + GAIC(k), stepwise selection, ANOVA / LR test; Pearson, response, and randomized-quantile residuals; centiles / quantile prediction; posterior sampling. Nothing is published.</p>
 
   <h2 class="part ship">✅ Recently shipped</h2>
   <div class="ns">
@@ -134,13 +134,15 @@
   <div class="loop">
     <table>
       <tr class="done"><td class="k"><span class="id done">TRAIT-1</span></td><td>✓ <code>cdf(y, params)</code>, <code>pdf(y, params)</code>, <code>quantile(p, params)</code> (+ <code>is_discrete</code>) on the <code>Distribution</code> trait, implemented for all 8 families.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">TRAIT-2</span></td><td>✓ <code>Link</code> derivative method (<code>mu_eta</code> / <code>g'(μ)</code>) on the <code>Link</code> trait (finite-difference default + analytic overrides for Identity/Log/FlooredLog/Logit). Unblocks B; the generic-weight refactor that routes <code>derivatives</code> through it is folded into the link-expansion items.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">TRAIT-2</span></td><td>✓ <code>Link</code> derivative method (<code>mu_eta</code> / <code>g'(μ)</code>) on the <code>Link</code> trait (finite-difference default + analytic overrides for Identity/Log/FlooredLog/Logit). Unblocks B. <b>The generic-weight refactor that routes <code>derivatives</code> through <code>mu_eta</code> was folded into the link-expansion items and never actually done</b>, so <code>mu_eta</code> is still dead outside its own unit tests. See the warning under B.</td></tr>
     </table>
   </div>
 
   <h2>B · Link functions</h2>
   <div class="ns">
     <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them. The six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span>) are done; the one remaining item is the shifted / bounded "own"-logit variant. <b>Implementation guide:</b> <a href="../guides/GUIDE-bounded-shifted-links.html">bounded / shifted links (LINK-7)</a>.</p>
+
+    <p><b>⚠ The ✓ below means "constructible and selectable", not "fits correctly".</b> Every family hardcodes the chain rule for <i>its own default link</i> inside <code>Distribution::derivatives</code>, and <code>fitting/scoring.rs</code> never corrects for the link the caller actually chose. Since the IRLS fixed point solves <code>Σᵢ (dμ/dη)ᵢ·(∂l/∂μ)ᵢ·xᵢⱼ = 0</code>, a wrong <code>dμ/dη</code> moves the estimate; the weights additionally move SEs, EDF and λ selection. Measured against an independent maximum-likelihood optimizer (<code>tests/link_mle_oracle.rs</code>), the fitted log-likelihood falls short of the true maximum by <b>45.5</b> for gamma/inverse, 8.5e-3 for binomial/probit, 1.0e-4 for poisson/sqrt and 6.4e-5 for binomial/cloglog. Default links are unaffected and verified correct by the same oracle. The fix is the generic-weight refactor (Altitude #1 in <a href="code-quality-backlog.md">the code-quality backlog</a>); its test scaffolding landed 2026-08-01 and the four failing cases above are committed as <code>#[ignore]</code>d acceptance gates.</p>
   </div>
   <div class="loop">
     <table>

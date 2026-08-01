@@ -1,6 +1,6 @@
 // Per-family end-to-end fit snapshots.
 //
-// `tests/regression.rs` snapshots three Gaussian fits — 1 of 15 families. This
+// `tests/regression.rs` snapshots three Gaussian fits, 1 of 15 families. This
 // file covers the rest, so that a change to any family's `derivatives()` shows
 // up as fitted-coefficient drift rather than passing unnoticed.
 //
@@ -174,7 +174,7 @@ fn fit_negative_binomial() {
     // Genuinely overdispersed draws, not smooth jitter. With deterministic
     // jitter the sample variance sits *below* the mean, so σ collapses toward
     // its numerical floor (σ ≈ 1e-10, the Poisson limit) and its coefficient is
-    // then determined by where that floor bites — which differs between the
+    // then determined by where that floor bites, which differs between the
     // openblas and pure-rust backends and made the snapshot backend-dependent.
     // Drawing from NB(μ, σ) with σ = 0.4 keeps σ identifiable and the snapshot
     // stable across both.
@@ -207,7 +207,7 @@ fn fit_weibull() {
 #[test]
 fn fit_student_t() {
     // ν must be intercept-only (the KKT projection at the ν floor is exact only
-    // for a constant η_ν — `student_t.rs:140-146`), which `formula_for` gives.
+    // for a constant η_ν; `student_t.rs:140-146`), which `formula_for` gives.
     let x = x_grid();
     let y: Array1<f64> = (0..N).map(|i| 1.0 + 2.0 * x[i] + 0.5 * jitter(i)).collect();
     insta::assert_yaml_snapshot!(fit_and_snapshot(&StudentT::new(), &y, &x));
@@ -222,7 +222,7 @@ fn fit_student_t() {
 // from smooth deterministic jitter: τ drifts toward its boundary and the fit
 // stops at the iteration limit. A non-converged snapshot would pin
 // iteration-limit behavior rather than a fitted optimum, so these three draw
-// from the actual family via the shared seeded generators — the same
+// from the actual family via the shared seeded generators, the same
 // `Generator::new(42)` pattern `tests/regression.rs` already uses.
 
 #[test]

@@ -2,9 +2,9 @@
 //
 // WHAT THIS PROVES. With only `Intercept` + `Linear` terms there are no
 // penalties, so a glissando fit is a plain unpenalized MLE. This file computes
-// that same MLE a second way — by directly maximizing `loglik_pointwise` over
+// that same MLE a second way, by directly maximizing `loglik_pointwise` over
 // the coefficient vector with a generic Newton optimizer whose gradient and
-// Hessian are pure central differences — and asserts the two agree.
+// Hessian are pure central differences, and asserts the two agree.
 //
 // WHY IT IS A GENUINE ORACLE. The optimizer never touches
 // `Distribution::derivatives`, `Link::mu_eta`, `fitting::scoring`, or the PWLS
@@ -18,7 +18,7 @@
 // fixture; a live optimizer is reproducible, extends to any family/link pair,
 // and runs in CI.
 //
-// CURRENT STATUS — Altitude #1. The non-default-link cases below are expected
+// CURRENT STATUS (Altitude #1). The non-default-link cases below are expected
 // to FAIL against the current tree. Every family hardcodes the chain rule for
 // its own default link (`src/distributions/mod.rs:65-71` vs. the resolved link
 // at `src/fitting/mod.rs:394-400`), so an overridden link gives IRLS the wrong
@@ -226,8 +226,8 @@ fn maximize<D: Distribution + ?Sized>(
             None => g.clone(), // singular Hessian: fall back to gradient ascent
         };
 
-        // Where the observed Hessian is indefinite — which happens routinely for
-        // a scale parameter far from its optimum — the Newton direction can
+        // Where the observed Hessian is indefinite (which happens routinely for
+        // a scale parameter far from its optimum), the Newton direction can
         // point *downhill*. Backtracking only shortens a step, it never flips
         // it, so such a direction stalls the search at a non-stationary point.
         // Guard by falling back to steepest ascent whenever the direction is
@@ -304,7 +304,7 @@ fn fitted_coefficients<D: Distribution + ?Sized>(model: &GamlssModel, family: &D
 /// The primary assertion is on the **log-likelihood**, not the coefficients:
 /// `ll(fitted) >= ll(oracle)` up to a small slack. That is immune to
 /// coefficient ordering, parameterization, and any flat direction in the
-/// surface — if an independent optimizer finds a strictly higher likelihood,
+/// surface: if an independent optimizer finds a strictly higher likelihood,
 /// the fit is definitively not at the MLE, and the size of the gap says how
 /// badly.
 ///
@@ -416,7 +416,7 @@ fn positive_data() -> (DataSet, Array1<f64>, Array1<f64>) {
 // Control: the oracle agrees with glissando on every DEFAULT link
 // ---------------------------------------------------------------------------
 
-// If these ever fail, the oracle is broken, not the fitter — check here first
+// If these ever fail, the oracle is broken, not the fitter; check here first
 // before believing any of the override tests below.
 
 #[test]
@@ -471,7 +471,7 @@ fn default_link_fits_reach_the_mle() {
         );
     }
 
-    // Gaussian / identity + log σ — two parameters, so this also checks the
+    // Gaussian / identity + log σ: two parameters, so this also checks the
     // oracle's handling of a nuisance parameter.
     {
         let (data, y, x) = positive_data();
