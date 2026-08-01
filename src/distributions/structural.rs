@@ -9,7 +9,7 @@
 //! `base.cdf` on that parameter's η. Location/scale parameters land on the
 //! analytic path; non-elementary shape parameters fall back to the numeric one.
 
-use super::{CdfEtaResult, Distribution, GamlssError, Link};
+use super::{CdfEtaResult, DerivativesResult, Distribution, GamlssError, Link};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -109,6 +109,7 @@ pub(crate) use delegate_to_base;
 pub(crate) fn cdf_eta_grads(
     base: &dyn Distribution,
     at: &Array1<f64>,
+    f0: &Array1<f64>,
     params: &HashMap<&str, &Array1<f64>>,
 ) -> CdfEtaResult {
     let analytic = base.cdf_eta_derivatives(at, params)?;
@@ -118,7 +119,7 @@ pub(crate) fn cdf_eta_grads(
             out.insert(p.to_string(), v.clone());
         } else {
             let link = base.default_link(p)?;
-            let grads = numeric_cdf_grad(base, at, params, p, link.as_ref())?;
+            let grads = numeric_cdf_grad(base, at, f0, params, p, link.as_ref())?;
             out.insert(p.to_string(), grads);
         }
     }
@@ -126,10 +127,13 @@ pub(crate) fn cdf_eta_grads(
 }
 
 /// Central-difference `(∂F/∂η, ∂²F/∂η²)` for a single parameter, perturbing it on
-/// the η-scale through `link` and re-evaluating `base.cdf` at `at`.
+/// the η-scale through `link` and re-evaluating `base.cdf` at `at`. `f0` is
+/// `base.cdf(at, params)` — every caller already has it, so it's passed in
+/// rather than recomputed here.
 fn numeric_cdf_grad(
     base: &dyn Distribution,
     at: &Array1<f64>,
+    f0: &Array1<f64>,
     params: &HashMap<&str, &Array1<f64>>,
     param: &str,
     link: &dyn Link,
@@ -148,7 +152,6 @@ fn numeric_cdf_grad(
         minus[i] = link.inv_link(eta - FD_EPS);
     }
 
-    let f0 = base.cdf(at, params)?;
     let mut p_plus = params.clone();
     p_plus.insert(param, &plus);
     let f_plus = base.cdf(at, &p_plus)?;
@@ -157,6 +160,39 @@ fn numeric_cdf_grad(
     let f_minus = base.cdf(at, &p_minus)?;
 
     let d1 = (&f_plus - &f_minus) / (2.0 * FD_EPS);
-    let d2 = (&f_plus - 2.0 * &f0 + &f_minus) / (FD_EPS * FD_EPS);
+    let d2 = (&f_plus - 2.0 * f0 + &f_minus) / (FD_EPS * FD_EPS);
     Ok((d1, d2))
+}
+
+/// Rewrite each base parameter's `(score, weight)` in place. Shared by the three
+/// structural wrappers' `derivatives`: each already has `base_derivs` (the base
+/// family's own `(u, w)` per parameter) and a per-row rule for overwriting some
+/// or all of it; this factors out only the "loop over `base.parameters()`, take
+/// that parameter's `(u, w)` out of `base_derivs`, hand it to the caller, put the
+/// result back into a fresh map" bookkeeping — not the per-row logic itself.
+///
+/// `rewrite(param, u, w)` is called once per parameter in `base.parameters()`
+/// order with `u`/`w` (the base family's score/weight for that parameter, moved
+/// out of `base_derivs`) to mutate in place. It loops over rows itself, matching
+/// how each wrapper already loops: this is deliberately a whole-array callback,
+/// not a per-row one, so callers whose body branches on per-row state (e.g.
+/// `Censored`'s 4-way `CensorStatus` match) stay a single ordinary loop rather
+/// than an indirect call per row.
+///
+/// Returns `Err` (via `base.unknown_param`) if `base_derivs` is missing an entry
+/// for one of `base.parameters()` — mirrors each wrapper's previous inline check.
+pub(crate) fn rewrite_base_derivatives(
+    base: &dyn Distribution,
+    mut base_derivs: HashMap<String, (Array1<f64>, Array1<f64>)>,
+    mut rewrite: impl FnMut(&str, &mut Array1<f64>, &mut Array1<f64>),
+) -> DerivativesResult {
+    let mut out: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
+    for &param in base.parameters() {
+        let (mut u, mut w) = base_derivs
+            .remove(param)
+            .ok_or_else(|| base.unknown_param(param))?;
+        rewrite(param, &mut u, &mut w);
+        out.insert(param.to_string(), (u, w));
+    }
+    Ok(out)
 }

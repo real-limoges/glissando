@@ -18,7 +18,9 @@
 //! Like the other structural wrappers it carries per-row state and is excluded
 //! from [`from_name`](super::from_name).
 
-use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
+use super::structural::{
+    cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
+};
 use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT, PROB_EPS};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -59,6 +61,27 @@ impl Truncated {
         check_state_len("Truncated: upper bound", self.upper.len(), n)
     }
 
+    /// `F` at a bound array that may contain `±∞`, without the per-parameter
+    /// gradients `cdf_and_grads_at` also computes — cheaper, for the call sites
+    /// that only need `F` (`loglik_pointwise`, `cdf`, `quantile`; only
+    /// `derivatives` needs the gradients). Infinite rows saturate to the limit
+    /// (`+∞ → F=1`, `−∞ → F=0`) without ever passing `±∞` into the base family.
+    fn cdf_at(
+        &self,
+        bound: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let sanitized = bound.mapv(|v| if v.is_finite() { v } else { 0.0 });
+        let mut f = self.base.cdf(&sanitized, params)?;
+        for i in 0..bound.len() {
+            if bound[i].is_finite() {
+                continue;
+            }
+            f[i] = if bound[i] > 0.0 { 1.0 } else { 0.0 };
+        }
+        Ok(f)
+    }
+
     /// `F` and `(∂F/∂η, ∂²F/∂η²)` per parameter, evaluated at a bound array that
     /// may contain `±∞`. Infinite rows are computed as the saturating limit
     /// (`+∞ → F=1`, `−∞ → F=0`, derivatives `0`) without ever passing `±∞` into
@@ -68,14 +91,13 @@ impl Truncated {
         bound: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<(Array1<f64>, super::CdfEtaMap), GamlssError> {
+        let f = self.cdf_at(bound, params)?;
         let sanitized = bound.mapv(|v| if v.is_finite() { v } else { 0.0 });
-        let mut f = self.base.cdf(&sanitized, params)?;
-        let mut grads = cdf_eta_grads(self.base.as_ref(), &sanitized, params)?;
+        let mut grads = cdf_eta_grads(self.base.as_ref(), &sanitized, &f, params)?;
         for i in 0..bound.len() {
             if bound[i].is_finite() {
                 continue;
             }
-            f[i] = if bound[i] > 0.0 { 1.0 } else { 0.0 };
             for (d1, d2) in grads.values_mut() {
                 d1[i] = 0.0;
                 d2[i] = 0.0;
@@ -105,8 +127,8 @@ impl Distribution for Truncated {
     ) -> Result<Array1<f64>, GamlssError> {
         self.check_len(y.len())?;
         let base_ll = self.base.loglik_pointwise(y, params)?;
-        let (f_lo, _) = self.cdf_and_grads_at(&self.lower, params)?;
-        let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
+        let f_lo = self.cdf_at(&self.lower, params)?;
+        let f_hi = self.cdf_at(&self.upper, params)?;
         let mut out = base_ll;
         for i in 0..y.len() {
             let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
@@ -128,12 +150,7 @@ impl Distribution for Truncated {
         let (f_lo, grad_lo) = self.cdf_and_grads_at(&self.lower, params)?;
         let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params)?;
 
-        let mut out: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
-        for &param in self.base.parameters() {
-            let (mut u, mut w) = base_derivs
-                .get(param)
-                .cloned()
-                .ok_or_else(|| self.base.unknown_param(param))?;
+        rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
             let (d1_lo, d2_lo) = &grad_lo[param];
             let (d1_hi, d2_hi) = &grad_hi[param];
             for i in 0..y.len() {
@@ -143,9 +160,7 @@ impl Distribution for Truncated {
                 u[i] -= d1 / dmass;
                 w[i] = (w[i] + d2 / dmass - (d1 / dmass).powi(2)).max(MIN_WEIGHT);
             }
-            out.insert(param.to_string(), (u, w));
-        }
-        Ok(out)
+        })
     }
 
     fn cdf(
@@ -160,8 +175,8 @@ impl Distribution for Truncated {
             return self.base.cdf(y, params);
         }
         let f_y = self.base.cdf(y, params)?;
-        let (f_lo, _) = self.cdf_and_grads_at(&self.lower, params)?;
-        let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
+        let f_lo = self.cdf_at(&self.lower, params)?;
+        let f_hi = self.cdf_at(&self.upper, params)?;
         let mut out = f_y;
         for i in 0..out.len() {
             let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
@@ -181,8 +196,8 @@ impl Distribution for Truncated {
         if self.lower.len() != p.len() {
             return self.base.quantile(p, params);
         }
-        let (f_lo, _) = self.cdf_and_grads_at(&self.lower, params)?;
-        let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
+        let f_lo = self.cdf_at(&self.lower, params)?;
+        let f_hi = self.cdf_at(&self.upper, params)?;
         let mut p_base = Array1::<f64>::zeros(p.len());
         for i in 0..p.len() {
             let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
