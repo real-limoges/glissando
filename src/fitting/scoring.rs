@@ -64,9 +64,6 @@ pub(super) const MIN_STEP_ALPHA: f64 = 1.0 / 1024.0;
 pub(super) struct Update {
     pub beta: Coefficients,
     pub eta: Array1<f64>,
-    /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
-    /// `inv_link` passes per Fisher-scoring step.
-    pub mu: Array1<f64>,
     /// Smoothing parameters on the response scale (not log-scale).
     pub lambdas: Array1<f64>,
     pub covariance: CovarianceMatrix,
@@ -495,7 +492,6 @@ pub(super) fn step<D: Distribution + ?Sized>(
     };
 
     let new_eta = target.x_matrix.dot(&new_beta.0) + &target.offset; // η = X·β + offset
-    let new_mu = new_eta.mapv(|e| target.link.inv_link(e));
     let max_diff = max_abs_diff(&new_beta.0, &target.beta.0);
     let eta_abs_diff = (&new_eta - &target.eta).mapv(f64::abs);
     let eta_max_change = eta_abs_diff.iter().copied().fold(0.0_f64, f64::max);
@@ -505,7 +501,6 @@ pub(super) fn step<D: Distribution + ?Sized>(
     Ok(Update {
         beta: new_beta,
         eta: new_eta,
-        mu: new_mu,
         lambdas: best_lambdas,
         covariance: cov_matrix,
         edf,
@@ -766,7 +761,6 @@ mod tests {
         Update {
             beta: Coefficients(array![beta_val]),
             eta: array![beta_val],
-            mu: array![beta_val],
             lambdas: Array1::<f64>::zeros(0),
             covariance: CovarianceMatrix(Array2::zeros((1, 1))),
             edf: 0.0,

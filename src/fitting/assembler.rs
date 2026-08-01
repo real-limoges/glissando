@@ -587,25 +587,7 @@ pub(crate) fn assemble_model_matrices(
 
     for term in terms {
         match term {
-            Term::Intercept => {
-                let part = Array1::ones(n_obs).insert_axis(Axis(1));
-                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, part);
-            }
-            Term::Linear { col_name } => {
-                let x_col_vec = get_col(data, col_name)?;
-                let part: Array2<f64> = x_col_vec.to_owned().insert_axis(Axis(1));
-                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, part);
-            }
-            Term::Factor {
-                col_name,
-                contrast,
-                levels,
-                ..
-            } => {
-                let block = factor_columns(data, n_obs, col_name, *contrast, levels)?;
-                total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, block);
-            }
-            Term::Interaction(..) => {
+            Term::Intercept | Term::Linear { .. } | Term::Factor { .. } | Term::Interaction(..) => {
                 let block = term_columns(data, n_obs, term)?;
                 total_coeffs += push_parametric(&mut model_matrix_parts, &mut term_layouts, block);
             }
