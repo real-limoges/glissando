@@ -484,34 +484,26 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 // directly) keeps η = X·β + offset exact.
                 let pre_model = &models[*param_name];
                 let raw_max_change = update.eta_max_change;
+                // scale == 1.0 reproduces the full-step proposal exactly, so a
+                // single unconditional construction covers both the clamped
+                // and unclamped cases.
                 let scale = if raw_max_change > scoring::MAX_STEP_NO_HALVING {
                     scoring::MAX_STEP_NO_HALVING / raw_max_change
                 } else {
                     1.0
                 };
-                if scale < 1.0 {
-                    let dir = &update.beta.0 - &pre_model.beta.0;
-                    let beta = &pre_model.beta.0 + &(scale * &dir);
-                    let eta = pre_model.x_matrix.0.dot(&beta) + &pre_model.offset;
-                    let mu = eta.mapv(|e| pre_model.link.inv_link(e));
-                    let eta_max_change = max_abs_diff(&eta, &pre_model.eta);
-                    scoring::Halved {
-                        beta: Coefficients(beta),
-                        eta,
-                        mu,
-                        hits: 0,
-                        rejected: false,
-                        eta_max_change,
-                    }
-                } else {
-                    scoring::Halved {
-                        beta: update.beta.clone(),
-                        eta: update.eta.clone(),
-                        mu: update.mu.clone(),
-                        hits: 0,
-                        rejected: false,
-                        eta_max_change: update.eta_max_change,
-                    }
+                let dir = &update.beta.0 - &pre_model.beta.0;
+                let beta = &pre_model.beta.0 + &(scale * &dir);
+                let eta = pre_model.x_matrix.0.dot(&beta) + &pre_model.offset;
+                let mu = eta.mapv(|e| pre_model.link.inv_link(e));
+                let eta_max_change = max_abs_diff(&eta, &pre_model.eta);
+                scoring::Halved {
+                    beta: Coefficients(beta),
+                    eta,
+                    mu,
+                    hits: 0,
+                    rejected: false,
+                    eta_max_change,
                 }
             };
 

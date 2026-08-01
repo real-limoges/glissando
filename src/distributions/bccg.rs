@@ -9,12 +9,14 @@
 //! (Student-t tail) and BCPE (power-exponential kurtosis) extend the same spine,
 //! changing only the distribution `z` follows and the extra parameter column.
 
-use super::boxcox::{boxcox_inv, boxcox_z, boxcox_z_dz_dnu};
+use super::boxcox::{
+    boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
+};
 use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{median, median_abs_deviation, std_normal_cdf, std_normal_quantile};
+use crate::math::{std_normal_cdf, std_normal_quantile};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -55,22 +57,10 @@ impl Distribution for BCCG {
     /// identity of the Box-Cox power). Mirrors `StudentT`'s median/MAD seeding so the
     /// first RS iteration is not dragged by skew/outliers.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        match param {
-            "mu" => median(y),
-            "sigma" => {
-                let med = median(y);
-                let cv = 1.4826 * median_abs_deviation(y) / med.abs().max(MIN_POSITIVE);
-                cv.clamp(0.01, 10.0)
-            }
-            "nu" => 1.0,
-            other => {
-                debug_assert!(
-                    matches!(other, "mu" | "sigma" | "nu"),
-                    "BCCG has no parameter '{other}'"
-                );
-                1.0
-            }
-        }
+        boxcox_seed(param, y).unwrap_or_else(|| {
+            debug_assert!(false, "BCCG has no parameter '{param}'");
+            1.0
+        })
     }
 
     fn derivatives(
@@ -149,9 +139,7 @@ impl Distribution for BCCG {
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        Ok(crate::math::par_zip_map(mu, sigma, |m, s| {
-            (s * m) * (s * m)
-        }))
+        Ok(boxcox_cv_variance(mu, sigma))
     }
 
     /// `μ` is the **median**, not the mean. The exact mean has no closed form; this
@@ -164,12 +152,7 @@ impl Distribution for BCCG {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
-        let n = mu.len();
-        let mut out = Array1::<f64>::zeros(n);
-        for i in 0..n {
-            out[i] = mu[i] * (1.0 + 0.5 * sigma[i] * sigma[i] * (1.0 - nu[i]));
-        }
-        Ok(out)
+        Ok(boxcox_expected_value(mu, sigma, nu))
     }
 
     fn cdf(

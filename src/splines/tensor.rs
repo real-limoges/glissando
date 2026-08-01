@@ -1,6 +1,6 @@
 //! Kronecker product utilities for tensor product smooth terms.
 
-use ndarray::{s, Array2, ArrayView1, ArrayViewMut1};
+use ndarray::{s, Array2, ArrayView1, ArrayViewMut1, Zip};
 
 /// Compute the Kronecker product of two matrices: C = A ⊗ B.
 ///
@@ -15,8 +15,10 @@ pub(crate) fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64>
     for i in 0..m {
         for j in 0..n {
             let a_scalar = a[[i, j]];
-            let mut block = c.slice_mut(s![i * p..(i + 1) * p, j * q..(j + 1) * q]);
-            block.assign(&(b * a_scalar));
+            let block = c.slice_mut(s![i * p..(i + 1) * p, j * q..(j + 1) * q]);
+            Zip::from(block).and(b).for_each(|c_val, &b_val| {
+                *c_val = a_scalar * b_val;
+            });
         }
     }
     c

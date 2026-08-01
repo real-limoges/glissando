@@ -9,12 +9,14 @@
 //! distribution `z` follows (here Student-`t`) and the extra `τ` column differ. The
 //! `τ` score/Fisher pair mirror [`StudentT`](super::StudentT)'s df parameter.
 
-use super::boxcox::{boxcox_inv, boxcox_z, boxcox_z_dz_dnu};
+use super::boxcox::{
+    boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
+};
 use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE, MIN_WEIGHT,
 };
-use crate::math::{digamma, median, median_abs_deviation, trigamma};
+use crate::math::{digamma, trigamma};
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::function::gamma::ln_gamma;
@@ -57,23 +59,12 @@ impl Distribution for BCT {
     /// `τ₀` a fixed moderate df (see [`TAU_INIT`]). A fixed `τ` seed is preferred to
     /// a kurtosis estimate for the same reason as [`StudentT`](super::StudentT).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        match param {
-            "mu" => median(y),
-            "sigma" => {
-                let med = median(y);
-                let cv = 1.4826 * median_abs_deviation(y) / med.abs().max(MIN_POSITIVE);
-                cv.clamp(0.01, 10.0)
+        boxcox_seed(param, y).unwrap_or_else(|| {
+            if param != "tau" {
+                debug_assert!(false, "BCT has no parameter '{param}'");
             }
-            "nu" => 1.0,
-            "tau" => TAU_INIT,
-            other => {
-                debug_assert!(
-                    matches!(other, "mu" | "sigma" | "nu" | "tau"),
-                    "BCT has no parameter '{other}'"
-                );
-                TAU_INIT
-            }
-        }
+            TAU_INIT
+        })
     }
 
     fn derivatives(
@@ -181,12 +172,12 @@ impl Distribution for BCT {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let tau = require(self, params, "tau")?;
+        let cv2 = boxcox_cv_variance(mu, sigma);
         let n = mu.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
-            let cv2 = (sigma[i] * mu[i]) * (sigma[i] * mu[i]);
             let infl = tau[i] / (tau[i] - 2.0).max(MIN_POSITIVE);
-            out[i] = cv2 * infl;
+            out[i] = cv2[i] * infl;
         }
         Ok(out)
     }
@@ -200,12 +191,7 @@ impl Distribution for BCT {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
-        let n = mu.len();
-        let mut out = Array1::<f64>::zeros(n);
-        for i in 0..n {
-            out[i] = mu[i] * (1.0 + 0.5 * sigma[i] * sigma[i] * (1.0 - nu[i]));
-        }
-        Ok(out)
+        Ok(boxcox_expected_value(mu, sigma, nu))
     }
 
     fn cdf(
