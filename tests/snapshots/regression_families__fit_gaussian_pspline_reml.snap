@@ -1,0 +1,24 @@
+---
+source: tests/regression_families.rs
+expression: "snapshot(&model, &family, &y)"
+---
+converged: true
+coefficients:
+  mu:
+    - "-1.2689e-2"
+    - "1.9765e-1"
+    - "9.8780e-1"
+    - "1.2761e0"
+    - "6.7440e-1"
+    - "-2.7990e-1"
+    - "-9.5666e-1"
+    - "-7.7930e-1"
+    - "-4.8717e-3"
+    - "6.0994e-1"
+  sigma:
+    - "-2.3494e0"
+edf:
+  mu: "7.7312e0"
+  sigma: "1.0000e0"
+log_likelihood: "5.5830e1"
+aic: "-9.4198e1"

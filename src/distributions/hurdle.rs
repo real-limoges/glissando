@@ -171,7 +171,9 @@ impl Distribution for Hurdle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::test_helpers::{check_score_via_finite_diff, params_view};
+    use crate::distributions::test_helpers::{
+        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+    };
     use crate::distributions::Gamma;
     use ndarray::array;
 
@@ -181,6 +183,17 @@ mod tests {
             ("sigma", array![0.5, 0.4, 0.6, 0.3]),
             ("xi", array![0.3, 0.3, 0.3, 0.3]),
         ]
+    }
+
+    #[test]
+    fn derivative_keys_and_weights_are_well_formed() {
+        // See the matching test in `censored.rs`. Mixed zero / positive rows so
+        // both the structural-zero mask and the zero-truncated base path are
+        // exercised in one call.
+        let y = array![0.0, 2.0, 0.0, 4.0];
+        let owned = gamma_hurdle_owned();
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        derivative_keys_match_parameters(&h, params_view(&owned), &y);
     }
 
     #[test]

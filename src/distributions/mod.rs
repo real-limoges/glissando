@@ -366,7 +366,11 @@ pub(crate) mod test_helpers {
     }
 
     /// Check that the analytic score `u` returned by `derivatives()` matches the
-    /// central difference of `loglik_pointwise` for `target` on the η-scale.
+    /// central difference of `loglik_pointwise` for `target` on the η-scale,
+    /// under the family's *default* link.
+    ///
+    /// Thin wrapper over [`check_eta_score_via_finite_diff`], which takes the
+    /// link explicitly.
     pub fn check_score_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
@@ -374,11 +378,45 @@ pub(crate) mod test_helpers {
         target: &str,
         tol: f64,
     ) {
+        let link = family.default_link(target).unwrap();
+        check_eta_score_via_finite_diff(family, y, owned, target, link.as_ref(), tol);
+    }
+
+    /// Check the analytic η-scale score `u` for `target` against a central
+    /// difference of `loglik_pointwise` taken on the η of an **explicitly
+    /// supplied** link.
+    ///
+    /// This is the contract the fitting loop actually needs: `u` must be
+    /// `∂l/∂η` for *whichever* link the caller selected via
+    /// [`FitConfig::with_link`](crate::FitConfig::with_link), not only the
+    /// family's default. Taking the link as a parameter does two things the
+    /// default-link-only version cannot:
+    ///
+    /// 1. It gives the seven identity-link parameters (Gaussian μ, StudentT μ,
+    ///    BCCG/BCT/BCPE ν, Ocat μ and `delta_1`) a non-trivial check at all —
+    ///    under the identity link `∂l/∂η ≡ ∂l/∂θ`, so the default-link check is
+    ///    vacuously satisfied by any correct natural-scale score.
+    /// 2. It is the post-refactor contract for the generic chain rule
+    ///    (Altitude #1), so call sites written against it stay valid across the
+    ///    change.
+    ///
+    /// Note this asserts on the *score* only. The Fisher weight has no generic
+    /// finite-difference oracle — several families deliberately return expected
+    /// information or a squared-score surrogate rather than `−∂²l/∂η²` — and is
+    /// covered by the golden characterization tables in
+    /// `tests/derivative_golden.rs` instead.
+    pub fn check_eta_score_via_finite_diff<D: Distribution + ?Sized>(
+        family: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        target: &str,
+        link: &dyn Link,
+        tol: f64,
+    ) {
         let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let derivs = family.derivatives(y, &p).unwrap();
         let analytic_u = derivs.get(target).unwrap().0.clone();
 
-        let link = family.default_link(target).unwrap();
         let eps: f64 = 1e-6;
         let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
 
@@ -417,8 +455,12 @@ pub(crate) mod test_helpers {
 
     /// Check the analytic `(∂F/∂η, ∂²F/∂η²)` returned by [`Distribution::cdf_eta_derivatives`]
     /// for `target` against central differences of [`Distribution::cdf`] on the
-    /// η-scale. Skips silently if the family does not supply `target` analytically
-    /// (the wrapper's numeric fallback covers those parameters).
+    /// η-scale.
+    ///
+    /// **Fails** if the family does not supply `target` analytically. A silent
+    /// skip was the previous behavior and it was a coverage hole: a family that
+    /// stopped emitting an analytic entry would quietly degrade to the
+    /// structural wrappers' numeric fallback with every test still green.
     pub fn check_cdf_eta_derivatives_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
@@ -429,7 +471,14 @@ pub(crate) mod test_helpers {
         let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let derivs = family.cdf_eta_derivatives(y, &p).unwrap();
         let Some((analytic_d1, analytic_d2)) = derivs.get(target) else {
-            return; // family leaves this parameter to the numeric fallback
+            panic!(
+                "{}::{} supplies no analytic cdf_eta_derivatives entry, so this \
+                 check would be vacuous. The structural wrappers fall back to a \
+                 central difference for such parameters — cover it there, or \
+                 stop asserting on it here.",
+                family.name(),
+                target
+            )
         };
 
         let link = family.default_link(target).unwrap();
@@ -601,6 +650,7 @@ pub(crate) mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::array;
 
     // Link-function tests live alongside the link impls in `links.rs`.
 
@@ -676,5 +726,129 @@ mod tests {
             }
             other => panic!("expected UnknownParameter, got {:?}", other),
         }
+    }
+
+    // --- Altitude #1: the non-default-link contract ---
+
+    // The tests below pin the *current, broken* behavior at the derivative
+    // level: `derivatives()` hardcodes each family's default-link chain rule,
+    // so its score is not `∂l/∂η` for any other link. They are the derivative-
+    // level counterpart to the end-to-end oracles in `tests/link_selection.rs`.
+    //
+    // Each is written as an assertion that the analytic score DISAGREES with a
+    // finite difference on the overridden link's η. When the generic chain rule
+    // lands, these must be inverted into
+    // `check_eta_score_via_finite_diff(...)` calls that assert agreement — the
+    // failure of these tests is the signal the refactor worked.
+
+    /// Central difference of `∂l/∂η` for `target` under an explicit `link`.
+    fn fd_eta_score<D: Distribution + ?Sized>(
+        family: &D,
+        y: &Array1<f64>,
+        owned: &[(&'static str, Array1<f64>)],
+        target: &str,
+        link: &dyn Link,
+    ) -> Array1<f64> {
+        let eps = 1e-6;
+        let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
+        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
+            owned.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let mut out = Array1::zeros(y.len());
+        for i in 0..y.len() {
+            let orig = owned[idx].1[i];
+            let eta = link.link(orig);
+            perturbed[idx].1[i] = link.inv_link(eta + eps);
+            let pp: HashMap<&str, &Array1<f64>> = perturbed.iter().map(|(k, v)| (*k, v)).collect();
+            let l_plus = family.loglik_pointwise(y, &pp).unwrap()[i];
+            perturbed[idx].1[i] = link.inv_link(eta - eps);
+            let pm: HashMap<&str, &Array1<f64>> = perturbed.iter().map(|(k, v)| (*k, v)).collect();
+            let l_minus = family.loglik_pointwise(y, &pm).unwrap()[i];
+            perturbed[idx].1[i] = orig;
+            out[i] = (l_plus - l_minus) / (2.0 * eps);
+        }
+        out
+    }
+
+    #[test]
+    fn binomial_score_is_wrong_under_a_probit_link_today() {
+        // Binomial μ folds the *logit* chain rule into `u = y − n·μ`
+        // (`binomial.rs:64-70`). Under a probit link the correct score is
+        // `φ(η)·∂l/∂μ`, which differs by `φ(η)/(μ(1−μ))`.
+        let y = array![0.0, 3.0, 5.0, 8.0, 10.0];
+        let owned = [("mu", array![0.15, 0.35, 0.5, 0.8, 0.93])];
+        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let analytic = Binomial::new(10).derivatives(&y, &p).unwrap()["mu"]
+            .0
+            .clone();
+        let numeric = fd_eta_score(&Binomial::new(10), &y, &owned, "mu", &ProbitLink);
+
+        // Sanity: the same family agrees with its own default link.
+        let logit_fd = fd_eta_score(&Binomial::new(10), &y, &owned, "mu", &LogitLink);
+        for i in 0..y.len() {
+            assert!(
+                (analytic[i] - logit_fd[i]).abs() / analytic[i].abs().max(1.0) < 1e-5,
+                "logit (default) must already agree at obs {i}"
+            );
+        }
+
+        // The bug: probit disagrees, and not marginally.
+        let max_rel: f64 = (0..y.len())
+            .map(|i| (analytic[i] - numeric[i]).abs() / numeric[i].abs().max(1.0))
+            .fold(0.0, f64::max);
+        assert!(
+            max_rel > 0.1,
+            "expected the probit score to be badly wrong today, max rel diff {max_rel:.3e}"
+        );
+    }
+
+    #[test]
+    fn poisson_score_is_wrong_under_a_sqrt_link_today() {
+        // Poisson μ folds the *log* chain rule into `u = y − μ`
+        // (`poisson.rs:41-44`). Under `sqrt`, `dμ/dη = 2η = 2√μ`.
+        let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
+        let owned = [("mu", array![0.5, 1.5, 3.0, 8.0, 5.0])];
+        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let analytic = Poisson.derivatives(&y, &p).unwrap()["mu"].0.clone();
+        let numeric = fd_eta_score(&Poisson, &y, &owned, "mu", &SqrtLink);
+
+        let max_rel: f64 = (0..y.len())
+            .map(|i| (analytic[i] - numeric[i]).abs() / numeric[i].abs().max(1.0))
+            .fold(0.0, f64::max);
+        assert!(
+            max_rel > 0.1,
+            "expected the sqrt score to be badly wrong today, max rel diff {max_rel:.3e}"
+        );
+    }
+
+    #[test]
+    fn identity_link_parameters_are_only_checked_vacuously_today() {
+        // Gaussian μ has an identity default link, so the default-link finite
+        // difference cannot distinguish a natural-scale score from an η-scale
+        // one. Passing a non-identity link is what makes the check bite — and
+        // today it fails, because `gaussian.rs:52` returns `(y−μ)/σ²` with no
+        // `dμ/dη` factor at all.
+        let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
+        let owned = [
+            ("mu", array![1.0, 1.5, 2.5, 3.0, 4.0]),
+            ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0]),
+        ];
+        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let analytic = Gaussian.derivatives(&y, &p).unwrap()["mu"].0.clone();
+
+        // Identity: vacuously fine.
+        let id_fd = fd_eta_score(&Gaussian, &y, &owned, "mu", &IdentityLink);
+        for i in 0..y.len() {
+            assert!((analytic[i] - id_fd[i]).abs() / analytic[i].abs().max(1.0) < 1e-5);
+        }
+
+        // Log link on μ: the score should gain a factor of μ, and does not.
+        let log_fd = fd_eta_score(&Gaussian, &y, &owned, "mu", &LogLink);
+        let max_rel: f64 = (0..y.len())
+            .map(|i| (analytic[i] - log_fd[i]).abs() / log_fd[i].abs().max(1.0))
+            .fold(0.0, f64::max);
+        assert!(
+            max_rel > 0.1,
+            "expected the log-link μ score to be wrong today, max rel diff {max_rel:.3e}"
+        );
     }
 }

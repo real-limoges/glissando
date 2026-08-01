@@ -1,0 +1,13 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&Binomial::new(1), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "-6.5880e0"
+    - "1.2545e1"
+edf:
+  mu: "2.0000e0"
+log_likelihood: "-1.5575e1"
+aic: "3.5150e1"

@@ -1,0 +1,22 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot_with_data(&BCPE::new(), &y, &data)"
+---
+converged: true
+coefficients:
+  mu:
+    - "-3.4702e-2"
+    - "1.0375e0"
+  nu:
+    - "5.6495e-1"
+  sigma:
+    - "-1.6187e0"
+  tau:
+    - "8.7826e-1"
+edf:
+  mu: "2.0000e0"
+  nu: "1.0000e0"
+  sigma: "1.0000e0"
+  tau: "1.0000e0"
+log_likelihood: "-5.4782e1"
+aic: "1.1956e2"

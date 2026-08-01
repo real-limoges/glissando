@@ -222,7 +222,9 @@ impl Distribution for Censored {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::test_helpers::{check_score_via_finite_diff, params_view};
+    use crate::distributions::test_helpers::{
+        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+    };
     use crate::distributions::Gaussian;
     use ndarray::array;
 
@@ -314,6 +316,25 @@ mod tests {
         let cens = Censored::new(Box::new(Gaussian::new()), status);
         check_score_via_finite_diff(&cens, &y, &owned, "mu", 1e-4);
         check_score_via_finite_diff(&cens, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn derivative_keys_and_weights_are_well_formed() {
+        // The structural wrappers had no `derivative_keys_match_parameters`
+        // coverage, so nothing checked that they emit an entry per parameter
+        // with finite, non-negative weights. All four status arms are present so
+        // each overwrite branch is exercised.
+        let y = array![0.3, 0.7, 1.1, -0.2];
+        let owned = gaussian_owned();
+        let upper = array![1.0, 1.5, 2.0, 0.5];
+        let status = array![
+            CensorStatus::Event,
+            CensorStatus::Right,
+            CensorStatus::Left,
+            CensorStatus::Interval,
+        ];
+        let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
+        derivative_keys_match_parameters(&cens, params_view(&owned), &y);
     }
 
     #[test]
