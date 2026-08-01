@@ -265,6 +265,7 @@ fn test_spline_smooth_recovery() {
             n_splines: 15,
             degree: 3,
             penalty_order: 2,
+            range: None,
         })],
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);

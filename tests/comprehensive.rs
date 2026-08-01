@@ -100,6 +100,8 @@ fn test_tensor_product_complexity() {
             n_splines_2: 5,
             penalty_order_2: 2,
             degree: 3,
+            range_1: None,
+            range_2: None,
         })],
     );
     formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);

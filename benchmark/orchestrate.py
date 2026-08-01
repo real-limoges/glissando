@@ -279,7 +279,7 @@ def gen_b2_weighted(rng, n):
 SCENARIOS: list[Scenario] = [
     # ── Original scenarios (seeds stable) ─────────────────────────────────
     Scenario("gaussian_linear",          False, True,  None,   gen_gaussian_linear),
-    Scenario("gaussian_heteroskedastic", False, False, None,   gen_gaussian_heteroskedastic),
+    Scenario("gaussian_heteroskedastic", False, True,  None,   gen_gaussian_heteroskedastic),
     Scenario("gaussian_smooth",          True,  True,  None,   gen_gaussian_smooth),
     Scenario("gaussian_multiple",        False, True,  None,   gen_gaussian_multiple),
     Scenario("gaussian_large",           False, True,  10_000, gen_gaussian_linear),
@@ -325,12 +325,21 @@ def write_parquet(data: dict[str, np.ndarray], path: Path) -> None:
     df.write_parquet(path)
 
 
+# Per-fit wall-clock budget. A well-behaved fit finishes in seconds; a hung
+# solver (or R session) must not stall the whole comparison run: kill it and
+# record the scenario as failed instead.
+FIT_TIMEOUT_S = 600
+
+
 def run_subprocess(cmd: list[str], output_path: Path, label: str) -> Optional[dict]:
     """Execute `cmd` and return the JSON it wrote to `output_path`, or None on failure."""
     if output_path.exists():
         output_path.unlink()
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=FIT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        print(f"[{label}] timed out after {FIT_TIMEOUT_S}s", flush=True)
+        return None
     except subprocess.CalledProcessError as e:
         print(f"[{label}] failed: {e.stderr.strip()}", flush=True)
         return None

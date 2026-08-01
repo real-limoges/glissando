@@ -196,6 +196,14 @@ pub enum Smooth {
         degree: usize,
         /// 1 = linear trends, 2 = constant second differences.
         penalty_order: usize,
+        /// Training-data range `(min, max)` the uniform knot grid is anchored
+        /// to. **Leave `None` when building a formula**: it is resolved once
+        /// from training data at fit time and stored here so prediction reuses
+        /// the identical basis (previously the knots were silently re-derived
+        /// from the *prediction* data's range, corrupting out-of-range or
+        /// subset predictions).
+        #[cfg_attr(feature = "serde", serde(default))]
+        range: Option<(f64, f64)>,
     },
     /// 2D tensor product of two P-spline bases: f(x₁, x₂).
     TensorProduct {
@@ -209,6 +217,13 @@ pub enum Smooth {
 
         /// Shared across both marginal bases.
         degree: usize,
+
+        /// Training ranges of the two margins; same fit-time resolution
+        /// contract as [`Smooth::PSpline1D`]'s `range`.
+        #[cfg_attr(feature = "serde", serde(default))]
+        range_1: Option<(f64, f64)>,
+        #[cfg_attr(feature = "serde", serde(default))]
+        range_2: Option<(f64, f64)>,
     },
     /// 1D natural cubic regression spline (mgcv `bs = "cr"`).
     ///
@@ -221,7 +236,7 @@ pub enum Smooth {
     /// whose null space is spanned by constants and linear functions (rank k-2).
     CrSpline1D {
         col_name: String,
-        /// mgcv default: 6.
+        /// glissando default: 6 (mgcv's own bs="cr" default is k = 10).
         k: usize,
         /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` for
         /// concessions dollars). When set, replaces the sum-to-zero centering
@@ -236,7 +251,16 @@ pub enum Smooth {
     },
     /// Random intercept term indexed by a grouping variable.
     /// Assumes each group has its own random intercept ~ N(0, σ²_u).
-    RandomEffect { col_name: String },
+    RandomEffect {
+        col_name: String,
+        /// Group levels in column order, resolved once from training data at
+        /// fit time (sorted for determinism) and stored so prediction maps
+        /// groups to the same coefficient columns. **Leave empty when building
+        /// a formula.** Prediction rows with a level not seen in training are
+        /// an error, matching mgcv's factor semantics.
+        #[cfg_attr(feature = "serde", serde(default))]
+        levels: Vec<String>,
+    },
 }
 
 impl Smooth {
@@ -247,7 +271,7 @@ impl Smooth {
     pub const DEFAULT_DEGREE: usize = 3;
     /// Default difference-penalty order (2 ⇒ penalize curvature).
     pub const DEFAULT_PENALTY_ORDER: usize = 2;
-    /// Default CR-spline knot count (matches mgcv's `bs="cr"` default).
+    /// Default CR-spline knot count (glissando default; mgcv's `bs="cr"` default is 10).
     pub const DEFAULT_CR_K: usize = 6;
 
     /// 1D P-spline on `col_name` with default basis size / degree / penalty order.
@@ -259,6 +283,7 @@ impl Smooth {
             n_splines: Self::DEFAULT_N_SPLINES,
             degree: Self::DEFAULT_DEGREE,
             penalty_order: Self::DEFAULT_PENALTY_ORDER,
+            range: None,
         }
     }
 
@@ -279,6 +304,7 @@ impl Smooth {
     pub fn re(col_name: impl Into<String>) -> Self {
         Smooth::RandomEffect {
             col_name: col_name.into(),
+            levels: Vec::new(),
         }
     }
 
@@ -293,6 +319,8 @@ impl Smooth {
             n_splines_2: Self::DEFAULT_N_SPLINES,
             penalty_order_2: Self::DEFAULT_PENALTY_ORDER,
             degree: Self::DEFAULT_DEGREE,
+            range_1: None,
+            range_2: None,
         }
     }
 
@@ -351,7 +379,7 @@ impl Smooth {
                 ..
             } => format!("s({col_name}), pc={v}"),
             Smooth::CrSpline1D { col_name, .. } => format!("s({col_name})"),
-            Smooth::RandomEffect { col_name } => format!("s({col_name})"),
+            Smooth::RandomEffect { col_name, .. } => format!("s({col_name})"),
             Smooth::TensorProduct {
                 col_name_1,
                 col_name_2,
@@ -383,7 +411,7 @@ impl Smooth {
                     format!("s({col_name}, bs=\"cr\", k={k})")
                 }
             }
-            Smooth::RandomEffect { col_name } => format!("s({col_name}, bs=\"re\")"),
+            Smooth::RandomEffect { col_name, .. } => format!("s({col_name}, bs=\"re\")"),
             Smooth::TensorProduct {
                 col_name_1,
                 col_name_2,
@@ -402,7 +430,7 @@ impl Smooth {
                 col_name_2,
                 ..
             } => vec![col_name_1.as_str(), col_name_2.as_str()],
-            Smooth::RandomEffect { col_name } => vec![col_name.as_str()],
+            Smooth::RandomEffect { col_name, .. } => vec![col_name.as_str()],
         }
     }
 }
@@ -419,11 +447,13 @@ mod tests {
                 n_splines,
                 degree,
                 penalty_order,
+                range,
             } => {
                 assert_eq!(col_name, "x");
                 assert_eq!(n_splines, Smooth::DEFAULT_N_SPLINES);
                 assert_eq!(degree, Smooth::DEFAULT_DEGREE);
                 assert_eq!(penalty_order, Smooth::DEFAULT_PENALTY_ORDER);
+                assert_eq!(range, None, "range resolves at fit time");
             }
             other => panic!("expected PSpline1D, got {other:?}"),
         }
@@ -472,7 +502,9 @@ mod tests {
 
     #[test]
     fn re_and_tensor_constructors() {
-        assert!(matches!(Smooth::re("g"), Smooth::RandomEffect { col_name } if col_name == "g"));
+        assert!(
+            matches!(Smooth::re("g"), Smooth::RandomEffect { col_name, .. } if col_name == "g")
+        );
         match Smooth::tensor("a", "b") {
             Smooth::TensorProduct {
                 col_name_1,
@@ -561,7 +593,10 @@ pub(crate) mod py_parse {
                     ));
                 }
                 let col_name: String = tuple.get_item(1)?.extract()?;
-                Ok(Term::Smooth(Smooth::RandomEffect { col_name }))
+                Ok(Term::Smooth(Smooth::RandomEffect {
+                    col_name,
+                    levels: vec![], // resolved from training data at fit time
+                }))
             }
             other => Err(PyValueError::new_err(format!(
                 "Unknown term type: {}. Use 'intercept', 'linear', 'smooth', or 'random'",
@@ -623,6 +658,7 @@ pub(crate) mod py_parse {
                     n_splines,
                     degree,
                     penalty_order,
+                    range: None, // resolved from training data at fit time
                 }))
             }
         }

@@ -4,11 +4,9 @@ use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
     MIN_POSITIVE,
 };
-use crate::math::{par_zip3_map, std_normal_quantile};
+use crate::math::{par_zip3_map, std_normal_cdf, std_normal_pdf, std_normal_quantile};
 use ndarray::Array1;
-use statrs::function::erf::erf;
 use std::collections::HashMap;
-use std::f64::consts::SQRT_2;
 
 /// Gaussian (Normal) distribution.
 ///
@@ -92,7 +90,7 @@ impl Distribution for Gaussian {
         let sigma = require(self, params, "sigma")?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let z = (yi - mui) / si.max(MIN_POSITIVE);
-            0.5 * (1.0 + erf(z / SQRT_2))
+            std_normal_cdf(z)
         }))
     }
 
@@ -107,7 +105,6 @@ impl Distribution for Gaussian {
         //   σ (log):       ∂F/∂η = −zφ,         ∂²F/∂η² = zφ + z²φ' = zφ(1 − z²).
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        let inv_sqrt_2pi = 1.0 / (2.0 * std::f64::consts::PI).sqrt();
 
         let mut d1_mu = Array1::<f64>::zeros(y.len());
         let mut d2_mu = Array1::<f64>::zeros(y.len());
@@ -119,7 +116,7 @@ impl Distribution for Gaussian {
             }
             let s = sigma[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
-            let phi = inv_sqrt_2pi * (-0.5 * z * z).exp();
+            let phi = std_normal_pdf(z);
             d1_mu[i] = -phi / s;
             d2_mu[i] = -z * phi / (s * s);
             d1_sigma[i] = -z * phi;

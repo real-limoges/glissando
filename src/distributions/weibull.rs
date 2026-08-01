@@ -1,7 +1,8 @@
 //! Weibull distribution for positive continuous data
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE,
+    MIN_WEIGHT,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -144,7 +145,7 @@ impl Distribution for Weibull {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
-            let pc = pi.clamp(1e-12, 1.0 - 1e-12);
+            let pc = clamp_prob(pi);
             mui.max(MIN_POSITIVE) * (-(-pc).ln_1p()).powf(1.0 / si.max(MIN_POSITIVE))
         }))
     }

@@ -18,13 +18,10 @@
 //! Like the other structural wrappers it carries per-row state and is excluded
 //! from [`from_name`](super::from_name).
 
-use super::structural::cdf_eta_grads;
-use super::{DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
+use super::structural::{cdf_eta_grads, check_state_len, delegate_to_base};
+use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT, PROB_EPS};
 use ndarray::Array1;
 use std::collections::HashMap;
-
-/// In-support mass is clamped to at least this, so a vanishing window can't divide by zero.
-const MASS_FLOOR: f64 = 1e-12;
 
 /// A base family restricted to per-observation support `(lower, upper)`.
 #[derive(Debug)]
@@ -56,16 +53,10 @@ impl Truncated {
         &self.upper
     }
 
+    /// Reject a response whose length does not match the stored bound vectors.
     fn check_len(&self, n: usize) -> Result<(), GamlssError> {
-        if self.lower.len() != n || self.upper.len() != n {
-            return Err(GamlssError::Input(format!(
-                "Truncated: bound lengths ({}, {}) do not match response length {}",
-                self.lower.len(),
-                self.upper.len(),
-                n
-            )));
-        }
-        Ok(())
+        check_state_len("Truncated: lower bound", self.lower.len(), n)?;
+        check_state_len("Truncated: upper bound", self.upper.len(), n)
     }
 
     /// `F` and `(∂F/∂η, ∂²F/∂η²)` per parameter, evaluated at a bound array that
@@ -95,21 +86,17 @@ impl Truncated {
 }
 
 impl Distribution for Truncated {
-    fn parameters(&self) -> &[&'static str] {
-        self.base.parameters()
-    }
-
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
-        self.base.default_link(param)
-    }
-
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        self.base.initial_value(param, y)
-    }
-
-    fn is_discrete(&self) -> bool {
-        self.base.is_discrete()
-    }
+    // `cdf` / `quantile` are *not* delegated: they renormalize onto the truncated
+    // support (see below). `variance` / `expected_value` report the untruncated
+    // base moments by design (see the module docs).
+    delegate_to_base!(
+        parameters,
+        default_link,
+        initial_value,
+        is_discrete,
+        variance,
+        expected_value,
+    );
 
     fn loglik_pointwise(
         &self,
@@ -122,7 +109,7 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut out = base_ll;
         for i in 0..y.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
             out[i] -= mass.ln();
         }
         Ok(out)
@@ -150,7 +137,7 @@ impl Distribution for Truncated {
             let (d1_lo, d2_lo) = &grad_lo[param];
             let (d1_hi, d2_hi) = &grad_hi[param];
             for i in 0..y.len() {
-                let dmass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+                let dmass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
                 let d1 = d1_hi[i] - d1_lo[i];
                 let d2 = d2_hi[i] - d2_lo[i];
                 u[i] -= d1 / dmass;
@@ -159,17 +146,6 @@ impl Distribution for Truncated {
             out.insert(param.to_string(), (u, w));
         }
         Ok(out)
-    }
-
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        self.base.variance(params)
-    }
-
-    fn expected_value(
-        &self,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<Array1<f64>, GamlssError> {
-        self.base.expected_value(params)
     }
 
     fn cdf(
@@ -188,7 +164,7 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut out = f_y;
         for i in 0..out.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
             out[i] = ((out[i] - f_lo[i]) / mass).clamp(0.0, 1.0);
         }
         Ok(out)
@@ -209,8 +185,8 @@ impl Distribution for Truncated {
         let (f_hi, _) = self.cdf_and_grads_at(&self.upper, params)?;
         let mut p_base = Array1::<f64>::zeros(p.len());
         for i in 0..p.len() {
-            let mass = (f_hi[i] - f_lo[i]).max(MASS_FLOOR);
-            p_base[i] = (f_lo[i] + p[i].clamp(0.0, 1.0) * mass).clamp(1e-12, 1.0 - 1e-12);
+            let mass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
+            p_base[i] = clamp_prob(f_lo[i] + p[i].clamp(0.0, 1.0) * mass);
         }
         self.base.quantile(&p_base, params)
     }

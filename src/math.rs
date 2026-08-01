@@ -117,10 +117,34 @@ pub(crate) fn std_normal_pdf(x: f64) -> f64 {
     (-0.5 * x * x).exp() / (2.0 * std::f64::consts::PI).sqrt()
 }
 
+/// Median of `y` (finite entries only). Returns 0.0 for an empty slice
+/// (`validate_inputs` rejects empty `y` on the public path, so this is only a
+/// defensive default). Shared by the robust `initial_value` seeds of `StudentT`
+/// and the Box-Cox families (`BCCG` / `BCT` / `BCPE`).
+pub(crate) fn median(y: &Array1<f64>) -> f64 {
+    let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let m = v.len() / 2;
+    if v.len().is_multiple_of(2) {
+        0.5 * (v[m - 1] + v[m])
+    } else {
+        v[m]
+    }
+}
+
+/// Median absolute deviation about the median: `median(|yᵢ − median(y)|)`.
+pub(crate) fn median_abs_deviation(y: &Array1<f64>) -> f64 {
+    let med = median(y);
+    let dev = y.mapv(|x| (x - med).abs());
+    median(&dev)
+}
+
 /// Digamma function: psi(x) = d/dx log(Gamma(x)).
 /// Delegates to statrs. For arrays, use [`digamma_batch`] instead.
 #[inline]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn digamma(x: f64) -> f64 {
     statrs_digamma(x)
 }

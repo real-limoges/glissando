@@ -1,11 +1,9 @@
 //! Residual computations: Pearson and response residuals.
 
-use crate::distributions::Distribution;
+use crate::distributions::{Distribution, MIN_POSITIVE};
 use crate::GamlssError;
 use ndarray::Array1;
 use std::collections::HashMap;
-
-const MIN_POSITIVE: f64 = 1e-10;
 
 /// Computes Pearson residuals via the family's marginal moments:
 /// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.

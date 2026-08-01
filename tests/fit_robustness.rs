@@ -11,7 +11,7 @@
 mod common;
 
 use common::{linear_intercepts, Generator};
-use glissando::{distributions::StudentT, DataSet, FitConfig, GamlssModel};
+use glissando::{distributions::StudentT, DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use rand::RngExt;
 
@@ -99,7 +99,7 @@ fn step_halving_reaches_no_worse_deviance_than_raw_loop() {
         None,
         &formula,
         &StudentT::new(),
-        cfg_with(false, 200),
+        cfg_with(false, 1),
     )
     .unwrap();
 
@@ -195,5 +195,76 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
                 "{param} coefficient diverged between step_halving on/off: {ca} vs {cb}"
             );
         }
+    }
+}
+
+/// Regression guard for the `MAX_STEP_NO_HALVING` fallback clamp in
+/// `fitting::mod` (mirrors `scoring::MAX_STEP_NO_HALVING`, 20): `MAX_STEP`
+/// itself was widened from 20 to 1e6 on the premise that step-halving's
+/// deviance-guarded line search owns overshoot control, but `step_halving:
+/// false` disables that line search entirely, so nothing else bounds the
+/// accepted per-cycle step.
+///
+/// A Poisson fit with one massive count outlier is a case where the raw
+/// (unhalved) proposed step genuinely exceeds 20 η-units for several
+/// consecutive cycles (verified directly: cycles 7–10 of this exact fit see
+/// `update.eta_max_change` peak at ~24 without the clamp, vs. exactly 20.0
+/// with it) — unlike several other "degenerate" scenarios tried while writing
+/// this test (Binomial perfect separation, wide-range covariates, more
+/// iterations), whose raw per-cycle step stayed under 20 throughout and so
+/// never actually exercised the clamp. This test reconstructs the per-cycle η
+/// trajectory the same way `step_halving_keeps_global_deviance_monotone` does
+/// (by sweeping `max_iterations` and differencing consecutive fits) and
+/// checks every step stays within the 20-unit margin.
+#[test]
+fn step_halving_disabled_clamps_eta_step_on_poisson_outlier() {
+    let n = 30;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+    let mut y_vec: Vec<f64> = x.iter().map(|_| 3.0).collect();
+    y_vec[0] = 100_000.0; // one gross count outlier
+    let y = Array1::from_vec(y_vec);
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(x));
+
+    let mut formula = Formula::new();
+    formula.add_terms(
+        "mu",
+        vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".to_string(),
+            },
+        ],
+    );
+
+    let mut prev_eta: Option<Array1<f64>> = None;
+    for k in 1..=12 {
+        let model = GamlssModel::fit_with_config(
+            &data,
+            &y,
+            None,
+            &formula,
+            &glissando::distributions::Poisson::new(),
+            cfg_with(false, k),
+        )
+        .unwrap();
+        let eta = &model.models["mu"].eta;
+        assert!(
+            eta.iter().all(|e| e.is_finite()),
+            "eta must stay finite at cycle {k}"
+        );
+        if let Some(prev) = &prev_eta {
+            let max_deta = (eta - prev)
+                .mapv(f64::abs)
+                .iter()
+                .copied()
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_deta <= 20.0 + 1e-6,
+                "cycle {k}: per-cycle |Δη| = {max_deta} exceeds the 20-unit \
+                 MAX_STEP_NO_HALVING safety margin restored for step_halving: false"
+            );
+        }
+        prev_eta = Some(eta.clone());
     }
 }

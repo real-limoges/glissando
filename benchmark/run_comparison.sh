@@ -33,7 +33,7 @@ fi
 
 # Step 2: Check R dependencies
 echo "[2/4] Checking R dependencies..."
-if Rscript -e 'library(arrow); library(mgcv); library(jsonlite)' 2>/dev/null; then
+if Rscript -e 'stopifnot(requireNamespace("arrow", quietly=TRUE) || requireNamespace("nanoparquet", quietly=TRUE)); library(mgcv); library(jsonlite)' 2>/dev/null; then
     R_SCRIPT="${SCRIPT_DIR}/fit_mgcv.R"
     echo "      R/mgcv ready: ${R_SCRIPT}"
 else
@@ -43,7 +43,7 @@ fi
 
 # gamlss is the like-for-like oracle for StudentT (same RS algorithm). It is
 # optional: without it, StudentT falls back to the loose mgcv scat() sanity check.
-if Rscript -e 'library(arrow); library(gamlss); library(jsonlite)' 2>/dev/null; then
+if Rscript -e 'stopifnot(requireNamespace("arrow", quietly=TRUE) || requireNamespace("nanoparquet", quietly=TRUE)); library(gamlss); library(jsonlite)' 2>/dev/null; then
     GAMLSS_SCRIPT="${SCRIPT_DIR}/fit_gamlss.R"
     echo "      R/gamlss ready: ${GAMLSS_SCRIPT}"
 else

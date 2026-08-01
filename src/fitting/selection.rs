@@ -1,4 +1,4 @@
-//! Model selection and comparison over fitted [`GamlssModel`](crate::GamlssModel)s.
+//! Model selection and comparison over fitted [`GamlssModel`]s.
 //!
 //! Three facilities sharing one mechanism — compare models by a penalized
 //! log-likelihood (an information criterion) or a deviance difference — over one
@@ -10,7 +10,7 @@
 //! - [`lr_test`] runs a likelihood-ratio χ² test for a nested pair.
 //! - [`step_gaic`] greedily adds/drops one term at a time to minimize GAIC(k).
 //!
-//! Every score flows through [`compute_gaic`](crate::diagnostics::compute_gaic),
+//! Every score flows through [`compute_gaic`],
 //! so these comparisons stay consistent with `diagnostics(..).aic`/`.bic`.
 
 use super::diagnostics::{compute_gaic, total_edf};
@@ -21,6 +21,8 @@ use crate::FitConfig;
 use crate::GamlssError;
 use crate::GamlssModel;
 use ndarray::Array1;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 use statrs::function::gamma::gamma_ur;
 use std::collections::HashMap;
 
@@ -167,6 +169,23 @@ pub enum Direction {
     Both,
 }
 
+impl Direction {
+    /// Parse a `Direction` from its wire name (`"forward"`, `"backward"`, `"both"`,
+    /// case-insensitive). Shared by the JSON and Python FFI layers so the mapping
+    /// and error text only live once.
+    pub fn from_name(name: &str) -> Result<Direction, GamlssError> {
+        match name.to_ascii_lowercase().as_str() {
+            "forward" => Ok(Direction::Forward),
+            "backward" => Ok(Direction::Backward),
+            "both" => Ok(Direction::Both),
+            other => Err(GamlssError::Input(format!(
+                "Unknown direction '{}', expected 'forward', 'backward', or 'both'",
+                other
+            ))),
+        }
+    }
+}
+
 /// One accepted step in a [`step_gaic`] run.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -256,10 +275,23 @@ pub fn step_gaic<D: Distribution + ?Sized>(
     let mut best_gaic = model.gaic(family, y, k)?;
     let mut trace = Vec::new();
 
+    // One enumerated candidate move: which term, on which param, add or drop,
+    // and the trial formula it produces. Enumeration itself is cheap and reads
+    // `current`, so it stays sequential; only the fit + score per candidate
+    // (below) is parallelized.
+    struct Candidate {
+        is_add: bool,
+        term_name: String,
+        param: String,
+        trial: Formula,
+    }
+    type CandidateOutcome = Result<Option<(f64, f64, String, Formula, GamlssModel)>, GamlssError>;
+
     loop {
-        // Score every candidate move; keep the best-improving fitted model so the
-        // winner is never refit. Deterministic order ⇒ reproducible trace.
-        let mut best: Option<(f64, f64, String, Formula, GamlssModel)> = None;
+        // Enumerate every candidate move in scope order, then candidate order,
+        // so the flattened list preserves the deterministic trace order even
+        // though the fits below run in parallel.
+        let mut candidates: Vec<Candidate> = Vec::new();
         for s in scope {
             for t in &s.candidates {
                 let present = has_term(&current, &s.param, t);
@@ -275,28 +307,54 @@ pub fn step_gaic<D: Distribution + ?Sized>(
                 } else {
                     with_dropped(&current, &s.param, t)
                 };
-                // Skip a move that fails to fit (non-convergence, singular, …).
-                let fit = match GamlssModel::fit_with_config(
-                    data,
-                    y,
-                    None,
-                    &trial,
-                    family,
-                    config.clone(),
-                ) {
+                candidates.push(Candidate {
+                    is_add,
+                    term_name: t.term_name().to_string(),
+                    param: s.param.clone(),
+                    trial,
+                });
+            }
+        }
+
+        // The candidate fits are independent (each refits `data`/`y` at its own
+        // trial formula), so run them in parallel; picking the best-improving
+        // move stays a serial reduction below so ties still resolve to the
+        // first candidate in scope/candidate order, matching the sequential
+        // behavior.
+        let evaluate = |c: &Candidate| -> CandidateOutcome {
+            // Skip a move that fails to fit (non-convergence, singular, …).
+            let fit =
+                match GamlssModel::fit_with_config(data, y, None, &c.trial, family, config.clone())
+                {
                     Ok(m) => m,
-                    Err(_) => continue,
+                    Err(_) => return Ok(None),
                 };
-                let g = fit.gaic(family, y, k)?;
-                let e = total_edf(&fit.models);
-                let label = format!(
-                    "{} {} on {}",
-                    if is_add { "+" } else { "-" },
-                    t.term_name(),
-                    s.param
-                );
-                if best.as_ref().is_none_or(|(bg, ..)| g < *bg) {
-                    best = Some((g, e, label, trial, fit));
+            let g = fit.gaic(family, y, k)?;
+            let e = total_edf(&fit.models);
+            let label = format!(
+                "{} {} on {}",
+                if c.is_add { "+" } else { "-" },
+                c.term_name,
+                c.param
+            );
+            Ok(Some((g, e, label, c.trial.clone(), fit)))
+        };
+        let outcomes: Vec<CandidateOutcome> = {
+            #[cfg(feature = "parallel")]
+            {
+                candidates.par_iter().map(evaluate).collect()
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                candidates.iter().map(evaluate).collect()
+            }
+        };
+
+        let mut best: Option<(f64, f64, String, Formula, GamlssModel)> = None;
+        for outcome in outcomes {
+            if let Some(entry) = outcome? {
+                if best.as_ref().is_none_or(|(bg, ..)| entry.0 < *bg) {
+                    best = Some(entry);
                 }
             }
         }

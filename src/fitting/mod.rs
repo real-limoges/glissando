@@ -5,7 +5,7 @@
 //!
 //! 1. Compute score (u) and Fisher information (w) from the distribution
 //! 2. Form working response: z = η + u/w
-//! 3. Optimize smoothing parameters (λ) via GCV using L-BFGS
+//! 3. Optimize smoothing parameters (λ) via the configured criterion (REML default)
 //! 4. Solve penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z
 //! 5. Update linear predictor: η = X·β
 //!
@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
-/// Default relative tolerance on the global-deviance change (FIT-2).
+/// Default absolute tolerance on the global-deviance change (FIT-2).
 const DEFAULT_GD_TOLERANCE: f64 = 1e-3;
 
 /// How close a smooth term's EDF must sit to its penalty null-space dimension
@@ -63,6 +63,24 @@ pub enum SmoothingCriterion {
     /// (Wood & Fasiolo 2017). Same objective as `Reml`, deterministic update;
     /// no outer L-BFGS, no line search.
     FellnerSchall,
+}
+
+impl SmoothingCriterion {
+    /// Parse a `SmoothingCriterion` from its wire name (`"gcv"`, `"reml"`,
+    /// `"fellner_schall"`, case-insensitive). `json.rs` gets this for free via
+    /// serde's `rename_all = "snake_case"`; this gives `python.rs` the same
+    /// mapping without hand-rolling it.
+    pub fn from_name(name: &str) -> Result<SmoothingCriterion, GamlssError> {
+        match name.to_ascii_lowercase().as_str() {
+            "gcv" => Ok(SmoothingCriterion::Gcv),
+            "reml" => Ok(SmoothingCriterion::Reml),
+            "fellner_schall" => Ok(SmoothingCriterion::FellnerSchall),
+            other => Err(GamlssError::Input(format!(
+                "Unknown criterion '{}', expected 'gcv', 'reml', or 'fellner_schall'",
+                other
+            ))),
+        }
+    }
 }
 
 /// How the fitter treats rows carrying a missing (non-finite) value in the
@@ -102,7 +120,8 @@ pub struct FitConfig {
     /// raw (unguarded) full-step behaviour.
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub step_halving: bool,
-    /// Relative tolerance on the global-deviance change between cycles (FIT-2).
+    /// Absolute tolerance on the global-deviance change between cycles (FIT-2),
+    /// in deviance units: the same convention as R gamlss's `c.crit`.
     /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
@@ -205,9 +224,9 @@ pub struct FitDiagnostics {
     /// cycle ran (e.g. `max_iterations == 0`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance: Option<f64>,
-    /// Relative global-deviance change at the final cycle,
-    /// `|GD_{c−1} − GD_c| / (|GD_c| + 0.1)` (FIT-2). `None` on the first cycle
-    /// (no previous deviance) or if no cycle ran.
+    /// Absolute global-deviance change at the final cycle,
+    /// `|GD_{c−1} − GD_c|` (FIT-2; same units as gamlss's `c.crit`). `None` on
+    /// the first cycle (no previous deviance) or if no cycle ran.
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance_change: Option<f64>,
 }
@@ -240,6 +259,11 @@ pub struct FittedParameter {
     pub lambdas: Array1<f64>,
     pub eta: Array1<f64>,
     pub fitted_values: Array1<f64>,
+    /// Total EDF, always populated as `term_edf.iter().sum()` at construction
+    /// time. Kept as its own stored field, rather than a computed method like
+    /// `FittingParameter::edf`, because this type round-trips through
+    /// `to_json`/`from_json` and other FFI surfaces: removing the field would
+    /// break wire compatibility for existing consumers.
     pub edf: f64,
     /// Per-term EDF aligned with `terms`, summing to `edf`. An entry at the
     /// term's penalty null-space dimension means the smooth collapsed to its
@@ -278,7 +302,6 @@ pub(super) struct FittingParameter {
     pub(super) offset: Array1<f64>,
     pub(super) lambdas: Array1<f64>,
     pub(super) covariance: Option<CovarianceMatrix>,
-    pub(super) edf: f64,
     /// Latest per-term EDF (aligned with `terms`); updated each RS cycle.
     pub(super) term_edf: Vec<f64>,
 }
@@ -297,14 +320,7 @@ pub(super) fn global_deviance<D: Distribution + ?Sized>(
     prior_weights: Option<&Array1<f64>>,
     models: &IndexMap<String, FittingParameter>,
 ) -> Result<f64, GamlssError> {
-    let params: HashMap<&str, &Array1<f64>> =
-        models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
-    let ll_pt = family.loglik_pointwise(y, &params)?;
-    let ll = match prior_weights {
-        Some(w) => (&ll_pt * w).sum(),
-        None => ll_pt.sum(),
-    };
-    Ok(-2.0 * ll)
+    deviance(family, y, prior_weights, models, None)
 }
 
 /// Same as [`global_deviance`], but evaluating one parameter block at a *proposed*
@@ -318,9 +334,34 @@ pub(super) fn global_deviance_with<D: Distribution + ?Sized>(
     param: &str,
     mu_override: &Array1<f64>,
 ) -> Result<f64, GamlssError> {
+    deviance(family, y, prior_weights, models, Some((param, mu_override)))
+}
+
+/// Largest element-wise absolute difference `max|aᵢ − bᵢ|`, the convergence
+/// yardstick used for both η and β moves. Returns `0.0` for empty inputs.
+pub(super) fn max_abs_diff(a: &Array1<f64>, b: &Array1<f64>) -> f64 {
+    (a - b)
+        .iter()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max)
+}
+
+/// Shared body of [`global_deviance`] / [`global_deviance_with`]: assemble the
+/// params view from `models`, optionally swapping in a trial block, and scale the
+/// (prior-weighted) log-likelihood by `−2`.
+fn deviance<'a, D: Distribution + ?Sized>(
+    family: &D,
+    y: &Array1<f64>,
+    prior_weights: Option<&Array1<f64>>,
+    models: &'a IndexMap<String, FittingParameter>,
+    override_: Option<(&'a str, &'a Array1<f64>)>,
+) -> Result<f64, GamlssError> {
     let mut params: HashMap<&str, &Array1<f64>> =
         models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
-    params.insert(param, mu_override); // swap in the trial block
+    if let Some((param, mu_override)) = override_ {
+        params.insert(param, mu_override);
+    }
     let ll_pt = family.loglik_pointwise(y, &params)?;
     let ll = match prior_weights {
         Some(w) => (&ll_pt * w).sum(),
@@ -408,7 +449,6 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 offset,
                 lambdas,
                 covariance: None,
-                edf: 0.0,
                 term_edf: vec![0.0; n_terms],
             },
         );
@@ -457,39 +497,69 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     scoring::MIN_STEP_ALPHA,
                 )?
             } else {
+                // No step-halving: nothing else bounds the accepted step, so
+                // scale the raw Fisher step back to at most `MAX_STEP_NO_HALVING`
+                // per element in η (see that constant's doc comment) instead of
+                // relying on scoring::step's internal MAX_STEP clamp, which is
+                // now far too loose (1e6) to serve alone. Scaling β (not η
+                // directly) keeps η = X·β + offset exact.
+                let pre_model = &models[*param_name];
+                let raw_max_change = update.eta_max_change;
+                // scale == 1.0 reproduces the full-step proposal exactly, so a
+                // single unconditional construction covers both the clamped
+                // and unclamped cases.
+                let scale = if raw_max_change > scoring::MAX_STEP_NO_HALVING {
+                    scoring::MAX_STEP_NO_HALVING / raw_max_change
+                } else {
+                    1.0
+                };
+                let dir = &update.beta.0 - &pre_model.beta.0;
+                let beta = &pre_model.beta.0 + &(scale * &dir);
+                let eta = pre_model.x_matrix.0.dot(&beta) + &pre_model.offset;
+                let mu = eta.mapv(|e| pre_model.link.inv_link(e));
+                let eta_max_change = max_abs_diff(&eta, &pre_model.eta);
                 scoring::Halved {
-                    beta: update.beta.clone(),
-                    eta: update.eta.clone(),
-                    mu: update.mu.clone(),
+                    beta: Coefficients(beta),
+                    eta,
+                    mu,
                     hits: 0,
+                    rejected: false,
+                    eta_max_change,
                 }
             };
 
-            // Per-parameter relative convergence check.
+            // Per-parameter relative convergence check, in FIT SPACE (η = X·β).
             //
-            // The previous (global) test divided the max β-change across *all*
-            // parameters by the max |β| across *all* parameters.  When one parameter
-            // (e.g. mu) has large coefficients while another (e.g. log-scale sigma)
-            // has small ones, the shared denominator is dominated by mu's scale and
-            // the loop could declare convergence while sigma is still drifting.
+            // A coefficient-space (Δβ) test is vulnerable to false negatives on
+            // penalized models: when the smoothing objective has a flat valley,
+            // the per-cycle λ re-optimization can jitter between fit-equivalent
+            // (λ, β) pairs whose linear predictors are identical: β moves along
+            // a fit-irrelevant ridge forever and Δβ never passes, even though
+            // the model (η, μ, deviance) is fully stationary. Measuring the
+            // change of η instead is invariant to such ridges; combined with the
+            // global-deviance test below this is strictly stronger than gamlss's
+            // deviance-only criterion.
             //
-            // Fix: each parameter is checked against its own |β| scale.  The floor of
-            // 1.0 keeps the test equivalent to an absolute threshold when all
-            // coefficients are O(1) (normalised data).
-            //
-            // The Δβ test uses the full-step `update`: as the fit approaches the
-            // optimum the score → 0, so the full step (and `max_diff`) → 0 and
-            // step-halving accepts α = 1. Far from the optimum a large full step
-            // keeps this test conservative (won't declare convergence), which is
-            // exactly when the GD test below is the one that should decide.
-            let param_beta_scale = update
-                .beta
-                .0
+            // Each parameter is checked against its own |η| scale, with a floor
+            // of 1.0 so the test is equivalent to an absolute threshold when the
+            // linear predictor is O(1). The test uses `accepted.eta_max_change`
+            // (what step-halving actually applied), not the full-step proposal:
+            // as the fit approaches the optimum the score → 0, so the full step
+            // → 0 and step-halving accepts α = 1, at which point the two
+            // coincide. They diverge only when the whole block update was
+            // rejected (α = 0, model frozen); using the proposal there would
+            // keep re-flagging "still moving" for a state that hasn't changed
+            // since the first rejection, burning the iteration budget on an
+            // identical re-derived-and-rejected step every cycle. Far from the
+            // optimum a large accepted step keeps this test conservative, which
+            // is exactly when the GD test below is the one that should decide.
+            let param_eta_scale = update
+                .eta
                 .iter()
                 .copied()
                 .map(f64::abs)
                 .fold(1.0_f64, f64::max);
-            if update.max_diff / param_beta_scale >= config.tolerance {
+            if accepted.eta_max_change / param_eta_scale >= config.tolerance {
                 all_converged = false;
             }
 
@@ -498,37 +568,53 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 ParamDiagnostic {
                     final_eta_change: update.eta_change,
                     final_lambda_change: update.lambda_change,
-                    edf: update.edf,
+                    edf: update.edf(),
                     weight_floor_hits: update.weight_floor_hits,
                     step_cap_hits: update.step_cap_hits,
                     step_halving_hits: accepted.hits,
                 },
             );
 
-            let model = models.get_mut(*param_name).ok_or_else(|| {
-                GamlssError::Internal(format!("Model for parameter '{}' not found", param_name))
-            })?;
+            // Infallible: `models` was populated from this same `family.parameters()`
+            // list above and nothing removes entries (see `&models[*param_name]`).
+            let model = &mut models[*param_name];
             // β/η/μ come from the accepted (possibly damped) step; covariance /
             // EDF / λ keep the values `scoring::step` computed at the full step.
             // Near convergence α → 1 so those are evaluated at the right point —
             // matching how gamlss reports them at the converged step.
+            //
+            // When the whole block update was REJECTED (uphill at every α), the
+            // previous λ/covariance/EDF are kept too: the proposal's values
+            // describe a state that was never entered, and installing them
+            // would pair the old β with a covariance/EDF evaluated elsewhere,
+            // corrupting SEs, GAIC, and the collapse warnings. The only
+            // exception is the very first cycle, where there is no previous
+            // covariance yet; the proposal's is then the best available.
             model.beta = accepted.beta;
             model.eta = accepted.eta;
             model.mu = accepted.mu;
-            model.lambdas = update.lambdas;
-            model.covariance = Some(update.covariance);
-            model.edf = update.edf;
-            model.term_edf = update.term_edf;
+            if !accepted.rejected || model.covariance.is_none() {
+                model.lambdas = update.lambdas;
+                model.covariance = Some(update.covariance);
+                model.term_edf = update.term_edf;
+            }
         }
 
         // FIT-2: global-deviance change after the full sweep. Require *both* the
         // Δβ test and the GD test to agree before declaring convergence.
+        //
+        // The change is measured in ABSOLUTE deviance units, matching R gamlss's
+        // `c.crit` (default 0.001). A relative test (|ΔGD|/|GD|) was used
+        // previously, but its slack scales with the deviance magnitude: at
+        // GD ≈ 4000 it declared convergence while the fit was still improving
+        // by ~4 deviance units per cycle, far short of the optimum that gamlss
+        // (absolute criterion) reaches on the same data.
         let gd = global_deviance(family, y, prior_weights, &models)?;
-        let gd_rel = (gd_prev - gd).abs() / (gd.abs() + 0.1);
-        let gd_converged = cycle > 0 && gd_rel < config.gd_tolerance;
+        let gd_abs_change = (gd_prev - gd).abs();
+        let gd_converged = cycle > 0 && gd_abs_change < config.gd_tolerance;
 
         final_deviance = Some(gd);
-        final_deviance_change = if cycle > 0 { Some(gd_rel) } else { None };
+        final_deviance_change = if cycle > 0 { Some(gd_abs_change) } else { None };
         gd_prev = gd;
 
         final_iteration = cycle + 1;
@@ -594,7 +680,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             eta: model.eta,
             // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
             fitted_values: model.mu,
-            edf: model.edf,
+            // Summed from `term_edf` (`FittingParameter` no longer stores a
+            // separate total) so the two can never drift apart.
+            edf: model.term_edf.iter().sum(),
             term_edf: model.term_edf,
             term_blocks,
             link,
@@ -632,16 +720,7 @@ pub fn sample_posterior(
     v_beta: &CovarianceMatrix,
     n_samples: usize,
 ) -> Result<Vec<Array1<f64>>, GamlssError> {
-    let l_factor =
-        linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
-
-    let mut rng_rs = rng();
-    Ok(sample_from_cholesky(
-        &beta_hat.0,
-        &l_factor,
-        n_samples,
-        &mut rng_rs,
-    ))
+    sample_posterior_seeded(beta_hat, v_beta, n_samples, None)
 }
 
 /// Like [`sample_posterior`] with an optional seed; `None` uses the unseeded RNG.

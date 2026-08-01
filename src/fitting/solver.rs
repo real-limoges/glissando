@@ -28,7 +28,7 @@ const REML_RANK_TOL_EPS: f64 = 1e-8;
 /// Clamp on |log λ| applied to REML's optimized output before exponentiation.
 /// Wide enough that no real solution is constrained; narrow enough to keep
 /// L-BFGS from wandering into numerically pathological regions.
-const LOG_LAMBDA_CLAMP: f64 = 30.0;
+pub(super) const LOG_LAMBDA_CLAMP: f64 = 30.0;
 
 /// Decades (in natural-log λ) below the cold-start heuristic to seed the
 /// collapse-guarded restart. The cold start sits *past* the interior LAML
@@ -59,6 +59,84 @@ const FS_NUMERATOR_FLOOR_REL: f64 = 1e-12;
 /// when β̂ sits in the null space of S_j. Prevents division-by-zero.
 const FS_DENOMINATOR_FLOOR: f64 = 1e-12;
 
+/// Precomputed weighted normal-equation quantities for a fixed `(z, w)` pair.
+///
+/// `X`, `z`, and `w` are invariant for the whole duration of one smoothing-
+/// parameter search (only `λ` moves across L-BFGS/Fellner-Schall iterations
+/// and the collapse-guarded restart's basin probes — up to several hundred λ
+/// evaluations per [`super::scoring::step`] call). Building this once and
+/// reusing it turns each λ evaluation's dominant cost from `O(n·p²)` (rebuild
+/// `X'WX`/`X'Wz` from the raw `n`-row design) into `O(p²)`–`O(p³)` (factorize
+/// the already-assembled `p×p` system), which is the difference that matters
+/// whenever `n ≫ p`.
+pub(crate) struct WeightedNormalEquations {
+    x_t_w_x: Array2<f64>,
+    x_t_w_z: Array1<f64>,
+    /// `z'Wz`, used to compute RSS algebraically as
+    /// `z'Wz − 2β'(X'Wz) + β'(X'WX)β` without ever re-touching the `n`-length
+    /// residual vector once `X'WX`/`X'Wz` are formed.
+    z_t_w_z: f64,
+    n_obs: usize,
+}
+
+impl WeightedNormalEquations {
+    pub(crate) fn new(x_matrix: &ModelMatrix, z: &Array1<f64>, w_diag: &Array1<f64>) -> Self {
+        let x = &x_matrix.0;
+        // Use sqrt-weighted approach to avoid creating n×n diagonal matrix.
+        // X'WX = (√W·X)'(√W·X) and X'Wz = (√W·X)'(√W·z)
+        // This reduces memory from O(n²) to O(n·p).
+        let sqrt_w = w_diag.mapv(f64::sqrt);
+        let x_weighted = x * &sqrt_w.view().insert_axis(Axis(1));
+        let z_weighted = z * &sqrt_w;
+
+        let x_t_w_x = x_weighted.t().dot(&x_weighted);
+        let x_t_w_z = x_weighted.t().dot(&z_weighted);
+        let z_t_w_z = z_weighted.dot(&z_weighted);
+
+        Self {
+            x_t_w_x,
+            x_t_w_z,
+            z_t_w_z,
+            n_obs: z.len(),
+        }
+    }
+}
+
+/// Coefficient-block grouping of the penalty matrices: which contiguous
+/// `[start, end]` range each penalty's non-zero entries occupy, with
+/// penalties sharing an exact range (e.g. the two marginal penalties of a
+/// tensor-product smooth) merged into one group.
+///
+/// Depends only on `penalty_matrices` (not λ), so — like
+/// [`WeightedNormalEquations`] — it is computed once per smoothing-parameter
+/// search and reused across every [`penalty_eigen`] call that search makes,
+/// instead of re-scanning every penalty's non-zero block on each one.
+pub(crate) struct PenaltyGroups(Vec<(usize, usize, Vec<usize>)>);
+
+pub(crate) fn group_penalties(penalty_matrices: &[PenaltyMatrix]) -> PenaltyGroups {
+    let ranges: Vec<(usize, usize)> = penalty_matrices
+        .iter()
+        .map(|s_j| penalty_nonzero_block_range(&s_j.0))
+        .collect();
+
+    let mut processed = vec![false; penalty_matrices.len()];
+    let mut groups = Vec::new();
+    for first in 0..penalty_matrices.len() {
+        if processed[first] {
+            continue;
+        }
+        let (start, end) = ranges[first];
+        let members: Vec<usize> = (first..penalty_matrices.len())
+            .filter(|&k| ranges[k] == (start, end))
+            .collect();
+        for &k in &members {
+            processed[k] = true;
+        }
+        groups.push((start, end, members));
+    }
+    PenaltyGroups(groups)
+}
+
 /// Result from PWLS fitting that includes gradient computation info.
 struct PwlsGradientInfo {
     beta: Coefficients,
@@ -67,15 +145,16 @@ struct PwlsGradientInfo {
     /// Per-coefficient EDF contributions: `diag(V·X'WX)`. Summing a contiguous
     /// block attributes effective degrees of freedom to an individual term.
     edf_per_coeff: Array1<f64>,
-    x_t_w_x: Array2<f64>,
+    /// `S_λ = Σ_j λ_j·S_j`, already formed while assembling `lhs`; kept so
+    /// callers needing it too (the REML objective's `β'S_λβ` term) don't
+    /// rebuild it.
+    s_lambda: Array2<f64>,
     x_t_w_r: Array1<f64>,
     rss: f64,
 }
 
 pub(crate) struct GamlssCost<'a> {
-    pub(crate) x_matrix: &'a ModelMatrix,
-    pub(crate) z: &'a Array1<f64>,
-    pub(crate) w: &'a Array1<f64>,
+    pub(crate) nfo: &'a WeightedNormalEquations,
     pub(crate) penalty_matrices: &'a [PenaltyMatrix],
 }
 
@@ -94,27 +173,17 @@ impl<'a> CostFunction for GamlssCost<'a> {
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         let lambdas = param.mapv(f64::exp);
 
-        let (beta, _, edf, _) = fit_pwls(
-            self.x_matrix,
-            self.z,
-            self.w,
-            self.penalty_matrices,
-            &lambdas,
-        )
-        .map_err(Error::new)?;
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
+            .map_err(Error::new)?;
 
-        let n = self.z.len() as f64;
-
-        let fitted_z = self.x_matrix.0.dot(&beta.0);
-        let residuals_z = self.z - &fitted_z;
-        let rss = (&residuals_z * &residuals_z * self.w).sum();
+        let n = self.nfo.n_obs as f64;
 
         // Guard against division by zero when EDF approaches n (overfit)
-        let denominator = (n - edf).powi(2);
+        let denominator = (n - info.edf).powi(2);
         if denominator.abs() < MIN_DENOMINATOR {
             return Ok(f64::MAX);
         }
-        let gcv_score = (n * rss) / denominator;
+        let gcv_score = (n * info.rss) / denominator;
 
         Ok(gcv_score)
     }
@@ -136,16 +205,10 @@ impl<'a> Gradient for GamlssCost<'a> {
             return Ok(LogLambdas(Array1::zeros(0)));
         }
 
-        let info = fit_pwls_with_grad_info(
-            self.x_matrix,
-            self.z,
-            self.w,
-            self.penalty_matrices,
-            &lambdas,
-        )
-        .map_err(Error::new)?;
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
+            .map_err(Error::new)?;
 
-        let n = self.z.len() as f64;
+        let n = self.nfo.n_obs as f64;
         let denom = n - info.edf;
 
         if denom.abs() < MIN_DENOMINATOR {
@@ -162,9 +225,14 @@ impl<'a> Gradient for GamlssCost<'a> {
             let d_rss = 2.0 * info.x_t_w_r.dot(&v_sj_beta);
 
             // dEDF/dlambda_j = -tr(V * Sj * V * X'WX)
+            //
+            // V·Sj·V is symmetric (V and Sj both are), and so is X'WX, so
+            // its trace against X'WX reduces to a Hadamard-product row sum
+            // instead of a third O(p³) matrix product just to read off a
+            // diagonal that is immediately summed away.
             let v_sj = info.v_matrix.dot(s_j);
             let v_sj_v = v_sj.dot(&info.v_matrix);
-            let d_edf = -v_sj_v.dot(&info.x_t_w_x).diag().sum();
+            let d_edf = -(&v_sj_v * &self.nfo.x_t_w_x).sum();
 
             // Quotient rule: dGCV/dlambda_j = n * [dRSS*(n-EDF) + 2*RSS*dEDF] / (n-EDF)^3
             let d_gcv = n * (d_rss * denom + 2.0 * info.rss * d_edf) / denom.powi(3);
@@ -187,10 +255,9 @@ impl<'a> Gradient for GamlssCost<'a> {
 /// with H = X'WX, ℓ = −½·RSS (the Gaussian working log-likelihood; constants
 /// in z, w independent of λ drop out of the optimization).
 pub(crate) struct RemlCost<'a> {
-    pub(crate) x_matrix: &'a ModelMatrix,
-    pub(crate) z: &'a Array1<f64>,
-    pub(crate) w: &'a Array1<f64>,
+    pub(crate) nfo: &'a WeightedNormalEquations,
     pub(crate) penalty_matrices: &'a [PenaltyMatrix],
+    pub(crate) groups: &'a PenaltyGroups,
 }
 
 impl<'a> CostFunction for RemlCost<'a> {
@@ -200,23 +267,21 @@ impl<'a> CostFunction for RemlCost<'a> {
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         let lambdas = param.mapv(f64::exp);
 
-        let info = fit_pwls_with_grad_info(
-            self.x_matrix,
-            self.z,
-            self.w,
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
+            .map_err(Error::new)?;
+
+        let eig = penalty_eigen(
             self.penalty_matrices,
             &lambdas,
+            REML_RANK_TOL_EPS,
+            self.groups,
         )
         .map_err(Error::new)?;
 
-        let s_lambda = weighted_penalty_sum(&lambdas, self.penalty_matrices);
-        let eig = penalty_eigen(self.penalty_matrices, &lambdas, REML_RANK_TOL_EPS)
-            .map_err(Error::new)?;
-
-        let lhs = &info.x_t_w_x + &s_lambda;
+        let lhs = &self.nfo.x_t_w_x + &info.s_lambda;
         let log_det_lhs = linalg::log_det_robust(&lhs).map_err(Error::new)?;
 
-        let beta_s_beta = info.beta.0.dot(&s_lambda.dot(&info.beta.0));
+        let beta_s_beta = info.beta.0.dot(&info.s_lambda.dot(&info.beta.0));
         let m_p = eig.null_dim as f64;
 
         // V_r = ℓ − ½·βᵀS_λβ + ½·log|S_λ|_+ − ½·log|H+S_λ| + (M_p/2)·log(2π)
@@ -244,17 +309,16 @@ impl<'a> Gradient for RemlCost<'a> {
             return Ok(LogLambdas(Array1::zeros(0)));
         }
 
-        let info = fit_pwls_with_grad_info(
-            self.x_matrix,
-            self.z,
-            self.w,
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
+            .map_err(Error::new)?;
+
+        let eig = penalty_eigen(
             self.penalty_matrices,
             &lambdas,
+            REML_RANK_TOL_EPS,
+            self.groups,
         )
         .map_err(Error::new)?;
-
-        let eig = penalty_eigen(self.penalty_matrices, &lambdas, REML_RANK_TOL_EPS)
-            .map_err(Error::new)?;
 
         let mut grad = Array1::<f64>::zeros(n_penalties);
         for j in 0..n_penalties {
@@ -276,9 +340,7 @@ impl<'a> Gradient for RemlCost<'a> {
 /// Uses warm-starting from previous lambdas when available for faster convergence.
 /// Skips optimization entirely when there are no penalty matrices.
 pub(crate) fn run_optimization(
-    x_model: &ModelMatrix,
-    z: &Array1<f64>,
-    w: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
     initial_lambdas: Option<&Array1<f64>>,
 ) -> Result<Array1<f64>, GamlssError> {
@@ -290,9 +352,7 @@ pub(crate) fn run_optimization(
     }
 
     let cost_function = GamlssCost {
-        x_matrix: x_model,
-        z,
-        w,
+        nfo,
         penalty_matrices,
     };
 
@@ -334,12 +394,23 @@ pub(crate) fn run_optimization(
 /// - no `target_cost` early exit — `−V_r` is not bounded below by zero;
 /// - returned log λ is clamped to `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]` before
 ///   exponentiation, so a runaway L-BFGS step cannot produce non-finite λ.
+///
+/// `polish`: whether to follow the L-BFGS solve with the deterministic
+/// Fellner-Schall pass described below. The caller in `scoring::step` keeps
+/// this `true` on the per-cycle adopted-λ path (where it is the documented
+/// fix for L-BFGS stalls) and `false` for cheap comparison-only probes in the
+/// basin-restart search, where up to ~9 candidates are screened per cycle and
+/// the extra polish + 2 `lambda_cost` evaluations on every one of them would
+/// multiply the cost of the most expensive step in the fitting loop; the
+/// eventual winner is re-polished on the very next RS cycle regardless.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_optimization_reml(
     x_model: &ModelMatrix,
-    z: &Array1<f64>,
-    w: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
+    groups: &PenaltyGroups,
     initial_lambdas: Option<&Array1<f64>>,
+    polish: bool,
 ) -> Result<Array1<f64>, GamlssError> {
     let n_penalties = penalty_matrices.len();
     if n_penalties == 0 {
@@ -347,10 +418,9 @@ pub(crate) fn run_optimization_reml(
     }
 
     let cost_function = RemlCost {
-        x_matrix: x_model,
-        z,
-        w,
+        nfo,
         penalty_matrices,
+        groups,
     };
 
     let initial_log_lambdas = match initial_lambdas {
@@ -373,7 +443,51 @@ pub(crate) fn run_optimization_reml(
         GamlssError::Optimization("REML optimizer failed to find best parameters".to_string())
     })?;
     let clamped = best_log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP));
-    Ok(clamped.mapv(f64::exp))
+    let lbfgs_lambdas = clamped.mapv(f64::exp);
+
+    if !polish {
+        return Ok(lbfgs_lambdas);
+    }
+
+    // Deterministic Fellner-Schall polish. L-BFGS + MoreThuente can stall at a
+    // warm-start-dependent, non-stationary point when the LAML surface has flat
+    // ridges (e.g. several smooths collapsing to their null space with λ at the
+    // clamp ceiling); the resulting per-cycle λ jitter keeps the outer RS loop
+    // from ever seeing a stationary η. F-S iterates the same LAML target
+    // monotonically and lands on the same fixed point from either side of a
+    // ridge, making the per-cycle λ map deterministic. Keep whichever λ scores
+    // better so the polish can never make the fit worse.
+    // Best-effort: a linear-algebra failure inside the polish (e.g. an
+    // eigensolver hiccup at a degenerate λ) falls back to the L-BFGS result
+    // rather than failing the whole fit.
+    let polished = match run_optimization_fellner_schall(
+        x_model,
+        nfo,
+        penalty_matrices,
+        groups,
+        Some(&lbfgs_lambdas),
+    ) {
+        Ok(p) => p,
+        Err(_) => return Ok(lbfgs_lambdas),
+    };
+    let lbfgs_cost = lambda_cost(
+        SmoothingCriterion::Reml,
+        nfo,
+        penalty_matrices,
+        groups,
+        &lbfgs_lambdas,
+    );
+    let polished_cost = lambda_cost(
+        SmoothingCriterion::Reml,
+        nfo,
+        penalty_matrices,
+        groups,
+        &polished,
+    );
+    match (lbfgs_cost, polished_cost) {
+        (Ok(lc), Ok(pc)) if pc <= lc => Ok(polished),
+        _ => Ok(lbfgs_lambdas),
+    }
 }
 
 /// Fellner-Schall (Wood & Fasiolo 2017) multiplicative fixed-point optimizer
@@ -396,12 +510,12 @@ pub(crate) fn run_optimization_reml(
 /// - first-order convergence (slower asymptotically) but no Hessian / no
 ///   step-size tuning;
 /// - shares every helper with the REML path (`fit_pwls_with_grad_info`,
-///   `weighted_penalty_sum`, `penalty_eigen`).
+///   `penalty_eigen`).
 pub(crate) fn run_optimization_fellner_schall(
     x_model: &ModelMatrix,
-    z: &Array1<f64>,
-    w: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
+    groups: &PenaltyGroups,
     initial_lambdas: Option<&Array1<f64>>,
 ) -> Result<Array1<f64>, GamlssError> {
     let n_penalties = penalty_matrices.len();
@@ -418,11 +532,13 @@ pub(crate) fn run_optimization_fellner_schall(
     let lambda_ceiling = LOG_LAMBDA_CLAMP.exp();
 
     for _iter in 0..FS_MAX_ITERS {
-        let info = fit_pwls_with_grad_info(x_model, z, w, penalty_matrices, &lambdas)?;
-        let eig = penalty_eigen(penalty_matrices, &lambdas, REML_RANK_TOL_EPS)?;
+        let info = fit_pwls_with_grad_info(nfo, penalty_matrices, &lambdas)?;
+        let eig = penalty_eigen(penalty_matrices, &lambdas, REML_RANK_TOL_EPS, groups)?;
 
+        // Every coordinate's update reads only `info` / `eig` (computed above at the
+        // *pre-loop* λ) and its own `lambdas[j]`, so updating in place is equivalent
+        // to the clone-and-swap and matches the simultaneous Fellner-Schall update.
         let mut max_log_change: f64 = 0.0;
-        let mut new_lambdas = lambdas.clone();
 
         for j in 0..n_penalties {
             let s_j = &penalty_matrices[j].0;
@@ -440,10 +556,9 @@ pub(crate) fn run_optimization_fellner_schall(
             if log_change > max_log_change {
                 max_log_change = log_change;
             }
-            new_lambdas[j] = lambda_new;
+            lambdas[j] = lambda_new;
         }
 
-        lambdas = new_lambdas;
         if max_log_change < FS_TOL {
             break;
         }
@@ -461,13 +576,11 @@ pub(crate) fn run_optimization_fellner_schall(
 /// Returns coefficients beta, covariance matrix V = (X'WX + sum lambda*S)^-1, and
 /// effective degrees of freedom EDF = tr(V * X'WX).
 pub(crate) fn fit_pwls(
-    x_matrix: &ModelMatrix,
-    z: &Array1<f64>,
-    w_diag: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>,
 ) -> Result<(Coefficients, CovarianceMatrix, f64, Array1<f64>), GamlssError> {
-    let info = fit_pwls_with_grad_info(x_matrix, z, w_diag, penalty_matrices, lambdas)?;
+    let info = fit_pwls_with_grad_info(nfo, penalty_matrices, lambdas)?;
     Ok((
         info.beta,
         CovarianceMatrix(info.v_matrix),
@@ -477,37 +590,14 @@ pub(crate) fn fit_pwls(
 }
 
 fn fit_pwls_with_grad_info(
-    x_matrix: &ModelMatrix,
-    z: &Array1<f64>,
-    w_diag: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>,
 ) -> Result<PwlsGradientInfo, GamlssError> {
-    let x = &x_matrix.0;
+    let s_lambda = weighted_penalty_sum(nfo.x_t_w_x.nrows(), lambdas, penalty_matrices);
+    let lhs = &nfo.x_t_w_x + &s_lambda;
 
-    let (_n_obs, n_coeffs) = x.dim();
-
-    let mut s_lambda = Array2::<f64>::zeros((n_coeffs, n_coeffs));
-    for (i, s_j) in penalty_matrices.iter().enumerate() {
-        s_lambda.scaled_add(lambdas[i], &s_j.0);
-    }
-
-    // Use sqrt-weighted approach to avoid creating n×n diagonal matrix.
-    // X'WX = (√W·X)'(√W·X) and X'Wz = (√W·X)'(√W·z)
-    // This reduces memory from O(n²) to O(n·p).
-    let sqrt_w = w_diag.mapv(f64::sqrt);
-
-    // Scale each row i of X by sqrt_w[i]
-    let x_weighted = x * &sqrt_w.view().insert_axis(Axis(1));
-    let z_weighted = z * &sqrt_w;
-
-    // X'WX and X'Wz without the n×n matrix
-    let x_t_w_x = x_weighted.t().dot(&x_weighted);
-    let x_t_w_z = x_weighted.t().dot(&z_weighted);
-
-    let lhs = &x_t_w_x + &s_lambda;
-
-    let beta_arr = linalg::solve(&lhs, &x_t_w_z)?;
+    let beta_arr = linalg::solve(&lhs, &nfo.x_t_w_z)?;
     let beta = Coefficients(beta_arr);
 
     let v = linalg::inv(&lhs)?;
@@ -516,32 +606,44 @@ fn fit_pwls_with_grad_info(
     // EDF = tr(H) where H = X(X'WX + sum lambda*S)^-1 X'W is the hat matrix.
     // Equivalently, EDF = tr(V * X'WX). Ranges from 0 (lambda->inf) to p (lambda->0).
     // Keep the per-coefficient diagonal so callers can attribute EDF per term.
-    let edf_per_coeff = v.dot(&x_t_w_x).diag().to_owned();
+    //
+    // Only the diagonal is needed, and X'WX is a Gram matrix (symmetric), so
+    // diag(V·X'WX)_i = Σ_k V[i,k]·X'WX[i,k] — an elementwise product with a row
+    // sum, O(p²), instead of the full O(p³) matrix product.
+    let edf_per_coeff = (&v * &nfo.x_t_w_x).sum_axis(Axis(1));
     let edf = edf_per_coeff.sum();
 
-    let fitted = x.dot(&beta.0);
-    let residuals = z - &fitted;
-    let rss = (&residuals * &residuals * w_diag).sum();
-
-    // X'Wr = (√W·X)' * (√W·r) - needed for gradient computation
-    let x_t_w_r = x_weighted.t().dot(&(&residuals * &sqrt_w));
+    // RSS and X'Wr from the precomputed normal equations rather than a fresh
+    // n-length residual pass: r = z − Xβ, so
+    //   RSS  = r'Wr = z'Wz − 2β'(X'Wz) + β'(X'WX)β
+    //   X'Wr = X'Wz − (X'WX)β
+    // Floating-point round-off can push the algebraic RSS very slightly
+    // negative when λ drives β close to the unpenalized LS fit; clamp at 0.
+    let xtwx_beta = nfo.x_t_w_x.dot(&beta.0);
+    let rss = (nfo.z_t_w_z - 2.0 * beta.0.dot(&nfo.x_t_w_z) + beta.0.dot(&xtwx_beta)).max(0.0);
+    let x_t_w_r = &nfo.x_t_w_z - &xtwx_beta;
 
     Ok(PwlsGradientInfo {
         beta,
         v_matrix: v,
         edf,
         edf_per_coeff,
-        x_t_w_x,
+        s_lambda,
         x_t_w_r,
         rss,
     })
 }
 
-/// Forms `S_λ = Σ_j λ_j · S_j`.
-fn weighted_penalty_sum(lambdas: &Array1<f64>, penalty_matrices: &[PenaltyMatrix]) -> Array2<f64> {
-    debug_assert!(!penalty_matrices.is_empty());
-    let p = penalty_matrices[0].0.nrows();
-    let mut s = Array2::<f64>::zeros((p, p));
+/// Forms `S_λ = Σ_j λ_j · S_j` as an `n_coeffs × n_coeffs` matrix (zero when
+/// `penalty_matrices` is empty, i.e. a purely parametric term with no
+/// smoothing parameters). `n_coeffs` is taken from the caller rather than
+/// `penalty_matrices[0]` so this works for that empty case too.
+fn weighted_penalty_sum(
+    n_coeffs: usize,
+    lambdas: &Array1<f64>,
+    penalty_matrices: &[PenaltyMatrix],
+) -> Array2<f64> {
+    let mut s = Array2::<f64>::zeros((n_coeffs, n_coeffs));
     for (i, s_j) in penalty_matrices.iter().enumerate() {
         s.scaled_add(lambdas[i], &s_j.0);
     }
@@ -565,7 +667,8 @@ struct PenaltyEigen {
 /// dominated by the large-λ term and misclassifies the non-null directions of small-λ
 /// penalties as null space — producing the wrong REML gradient sign.
 ///
-/// Fix: group penalty matrices by their non-zero block range and eigendecompose each
+/// Fix: group penalty matrices by their non-zero block range (via [`group_penalties`],
+/// computed once per λ search and passed in as `groups`) and eigendecompose each
 /// group independently.  Within a group the combined scaled block is formed first,
 /// then eigendecomposed.  This gives two correctness guarantees simultaneously:
 ///
@@ -588,6 +691,7 @@ fn penalty_eigen(
     penalty_matrices: &[PenaltyMatrix],
     lambdas: &Array1<f64>,
     eps: f64,
+    groups: &PenaltyGroups,
 ) -> Result<PenaltyEigen, GamlssError> {
     debug_assert!(!penalty_matrices.is_empty());
     let p = penalty_matrices[0].0.nrows();
@@ -596,36 +700,16 @@ fn penalty_eigen(
     let mut null_dim = 0_usize;
     let mut pinv = Array2::<f64>::zeros((p, p));
 
-    // Find the non-zero block range for each penalty.
-    let ranges: Vec<(usize, usize)> = penalty_matrices
-        .iter()
-        .map(|s_j| penalty_nonzero_block_range(&s_j.0))
-        .collect();
-
-    // Process each unique block range exactly once, combining all penalties in that block.
-    let mut processed = vec![false; penalty_matrices.len()];
-
-    for first in 0..penalty_matrices.len() {
-        if processed[first] {
-            continue;
-        }
-        let (start, end) = ranges[first];
+    for (start, end, members) in &groups.0 {
+        let (start, end) = (*start, *end);
         let block_size = end - start + 1;
-
-        // Collect indices of all penalties sharing this exact block range.
-        let group: Vec<usize> = (first..penalty_matrices.len())
-            .filter(|&k| ranges[k] == (start, end))
-            .collect();
-        for &k in &group {
-            processed[k] = true;
-        }
 
         // Build the combined scaled block: Σ_{j ∈ group} λ_j · S_j_block.
         // For a single-penalty group this is just λ_j · S_j_block; for a tensor-product
         // group this is the anisotropic penalty λ₁(S_x₁⊗I) + λ₂(I⊗S_x₂) restricted to
         // the shared k₁k₂ coefficient block.
         let mut combined = Array2::<f64>::zeros((block_size, block_size));
-        for &k in &group {
+        for &k in members {
             let slice = penalty_matrices[k].0.slice(s![start..=end, start..=end]);
             combined.scaled_add(lambdas[k], &slice);
         }
@@ -691,8 +775,15 @@ pub(super) fn initial_log_lambda(
     x_matrix: &ModelMatrix,
     penalty_matrices: &[PenaltyMatrix],
 ) -> Array1<f64> {
-    let x_t_x = x_matrix.0.t().dot(&x_matrix.0);
-    let tr_xtx = x_t_x.diag().sum().max(MIN_LAMBDA);
+    // tr(X'X) = sum_ij X[i,j]^2: the diagonal entry (X'X)_jj is sum_i X[i,j]^2,
+    // so summing the diagonal is just summing every squared entry of X. Avoids
+    // materializing the full p×p X'X (O(n·p) instead of O(n·p²)).
+    let tr_xtx = x_matrix
+        .0
+        .iter()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .max(MIN_LAMBDA);
     Array1::from_iter(penalty_matrices.iter().map(|s_j| {
         let tr_sj = s_j.0.diag().sum().max(MIN_LAMBDA);
         (tr_xtx / tr_sj)
@@ -703,15 +794,13 @@ pub(super) fn initial_log_lambda(
 
 /// Low-λ seed for the collapse-guarded restart (see [`RESTART_LOG_OFFSET`]).
 ///
-/// Derived from the scale-aware cold-start heuristic so it adapts to the basis /
+/// Derived from the scale-aware cold-start heuristic (an already-computed
+/// [`initial_log_lambda`], so a caller needing both the raw heuristic and the
+/// restart seed pays for one call, not two) so it adapts to the basis /
 /// response scale, then shifted several decades down to sit below the high-λ
 /// collapse shelf.
-pub(super) fn restart_seed(
-    x_matrix: &ModelMatrix,
-    penalty_matrices: &[PenaltyMatrix],
-) -> Array1<f64> {
-    initial_log_lambda(x_matrix, penalty_matrices)
-        .mapv(|log_lambda| (log_lambda - RESTART_LOG_OFFSET).exp().max(MIN_LAMBDA))
+pub(super) fn restart_seed_from_heuristic(heur: &Array1<f64>) -> Array1<f64> {
+    heur.mapv(|log_lambda| (log_lambda - RESTART_LOG_OFFSET).exp().max(MIN_LAMBDA))
 }
 
 /// Value of the objective the given criterion minimizes, evaluated at a fixed λ.
@@ -723,29 +812,25 @@ pub(super) fn restart_seed(
 /// because that fit has the better marginal likelihood.
 pub(super) fn lambda_cost(
     criterion: SmoothingCriterion,
-    x_matrix: &ModelMatrix,
-    z: &Array1<f64>,
-    w: &Array1<f64>,
+    nfo: &WeightedNormalEquations,
     penalty_matrices: &[PenaltyMatrix],
+    groups: &PenaltyGroups,
     lambdas: &Array1<f64>,
 ) -> Result<f64, GamlssError> {
     let log_lambdas = LogLambdas(lambdas.mapv(|l| l.max(MIN_LAMBDA).ln()));
     let map_err = |e: Error| GamlssError::Optimization(e.to_string());
     match criterion {
         SmoothingCriterion::Gcv => GamlssCost {
-            x_matrix,
-            z,
-            w,
+            nfo,
             penalty_matrices,
         }
         .cost(&log_lambdas)
         .map_err(map_err),
         // REML and Fellner-Schall minimize the same LAML target (−V_r).
         SmoothingCriterion::Reml | SmoothingCriterion::FellnerSchall => RemlCost {
-            x_matrix,
-            z,
-            w,
+            nfo,
             penalty_matrices,
+            groups,
         }
         .cost(&log_lambdas)
         .map_err(map_err),
@@ -764,7 +849,14 @@ mod reml_tests {
         let p = create_penalty_matrix(10, 2);
         let pm = PenaltyMatrix(p.clone());
         let lambdas = arr1(&[1.0_f64]);
-        let eig = penalty_eigen(&[pm], &lambdas, REML_RANK_TOL_EPS).unwrap();
+        let groups = group_penalties(std::slice::from_ref(&pm));
+        let eig = penalty_eigen(
+            std::slice::from_ref(&pm),
+            &lambdas,
+            REML_RANK_TOL_EPS,
+            &groups,
+        )
+        .unwrap();
         assert_eq!(
             eig.null_dim, 2,
             "second-order P-spline penalty should have null dim 2"
@@ -804,7 +896,7 @@ mod reml_tests {
         let p1 = PenaltyMatrix(arr2(&[[1.0_f64, 0.0], [0.0, 1.0]]));
         let p2 = PenaltyMatrix(arr2(&[[2.0_f64, 1.0], [1.0, 2.0]]));
         let lambdas = arr1(&[0.5_f64, 3.0]);
-        let s = weighted_penalty_sum(&lambdas, &[p1, p2]);
+        let s = weighted_penalty_sum(2, &lambdas, &[p1, p2]);
         // 0.5·I + 3·[[2,1],[1,2]] = [[6.5, 3], [3, 6.5]]
         assert!((s[[0, 0]] - 6.5).abs() < 1e-12);
         assert!((s[[0, 1]] - 3.0).abs() < 1e-12);
@@ -854,11 +946,12 @@ mod reml_tests {
     #[test]
     fn reml_cost_finite_on_simple_problem() {
         let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let groups = group_penalties(&ps);
         let cost = RemlCost {
-            x_matrix: &x,
-            z: &z,
-            w: &w,
+            nfo: &nfo,
             penalty_matrices: &ps,
+            groups: &groups,
         };
         // Evaluate at several log-λ to catch obvious blow-ups.
         for log_lambda in [-5.0, -1.0, 0.0, 1.0, 5.0] {
@@ -880,11 +973,12 @@ mod reml_tests {
     #[test]
     fn fellner_schall_monotone_improves_laml() {
         let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let groups = group_penalties(&ps);
         let cost = RemlCost {
-            x_matrix: &x,
-            z: &z,
-            w: &w,
+            nfo: &nfo,
             penalty_matrices: &ps,
+            groups: &groups,
         };
 
         // Reproduce the F-S loop here so we can snapshot λ at each step
@@ -899,8 +993,8 @@ mod reml_tests {
             let score = cost.cost(&log_lambdas).unwrap();
             scores.push(score);
 
-            let info = fit_pwls_with_grad_info(&x, &z, &w, &ps, &lambdas).unwrap();
-            let eig = penalty_eigen(&ps, &lambdas, REML_RANK_TOL_EPS).unwrap();
+            let info = fit_pwls_with_grad_info(&nfo, &ps, &lambdas).unwrap();
+            let eig = penalty_eigen(&ps, &lambdas, REML_RANK_TOL_EPS, &groups).unwrap();
             let mut new_lambdas = lambdas.clone();
             for j in 0..n_penalties {
                 let s_j = &ps[j].0;
@@ -934,11 +1028,12 @@ mod reml_tests {
     fn reml_gradient_matches_finite_diff() {
         // Critical correctness gate: analytic ∂(−V_r)/∂ρ_j must match central diff.
         let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let groups = group_penalties(&ps);
         let cost = RemlCost {
-            x_matrix: &x,
-            z: &z,
-            w: &w,
+            nfo: &nfo,
             penalty_matrices: &ps,
+            groups: &groups,
         };
 
         let h = 1e-5;
@@ -971,10 +1066,9 @@ mod reml_tests {
         // Mirrors `reml_gradient_matches_finite_diff` for the GCV path — the GCV
         // gradient (quotient-rule + dEDF/dλ) was previously untested.
         let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
         let cost = GamlssCost {
-            x_matrix: &x,
-            z: &z,
-            w: &w,
+            nfo: &nfo,
             penalty_matrices: &ps,
         };
 
@@ -1046,6 +1140,7 @@ mod reml_tests {
                     n_splines: 15,
                     degree: 3,
                     penalty_order: 2,
+                    range: None,
                 }),
             ],
             &data,
@@ -1069,11 +1164,12 @@ mod reml_tests {
         );
         eprintln!("{:>10}  {:>10}  {:>16}", "log λ", "edf", "-V_r (LAML)");
 
+        let nfo = WeightedNormalEquations::new(&x_model, &z, &w);
+        let groups = group_penalties(&penalties);
         let cost = RemlCost {
-            x_matrix: &x_model,
-            z: &z,
-            w: &w,
+            nfo: &nfo,
             penalty_matrices: &penalties,
+            groups: &groups,
         };
 
         let mut best = (f64::INFINITY, 0.0_f64, 0.0_f64); // (-V_r, log λ, edf)
@@ -1081,7 +1177,7 @@ mod reml_tests {
         let mut log_lambda = -6.0_f64;
         while log_lambda <= 34.0 + 1e-9 {
             let lambdas = arr1(&[log_lambda.exp()]);
-            let (_b, _v, edf, _e) = fit_pwls(&x_model, &z, &w, &penalties, &lambdas).unwrap();
+            let (_b, _v, edf, _e) = fit_pwls(&nfo, &penalties, &lambdas).unwrap();
             let neg_vr = cost.cost(&LogLambdas(arr1(&[log_lambda]))).unwrap();
             eprintln!("{log_lambda:>10.3}  {edf:>10.3}  {neg_vr:>16.4}");
             rows.push((log_lambda, edf, neg_vr));

@@ -784,7 +784,8 @@ GAMLSS fitting uses a penalized quasi-likelihood approach (Rigby-Stasinopoulos a
 2. **Outer loop**: Cycle through distribution parameters
 3. **Inner loop**: For each parameter, compute working response and weights from derivatives, then fit a penalized weighted least squares model
 4. **Smoothing selection**: Optimize smoothing parameters via REML (default), GCV, or Fellner-Schall — selectable through `FitConfig::criterion`
-5. **Convergence**: Check if coefficient changes are below tolerance
+5. **Step control**: Backtrack each block update on the penalized deviance (monotone descent)
+6. **Convergence**: Both the per-parameter linear-predictor change and the absolute global-deviance change (gamlss `c.crit` convention) must fall below tolerance
 
 ## Performance
 
