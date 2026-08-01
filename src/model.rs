@@ -22,6 +22,14 @@ pub struct GamlssModel {
     pub models: IndexMap<String, fitting::FittedParameter>,
     /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
+    /// The family this model was fit (or deserialized) against, captured via
+    /// `family.descriptor()`. Used by [`check_family_identity`] to reject a
+    /// `family` argument at predict time that doesn't match — `None` for
+    /// models fit/deserialized before this field existed, in which case the
+    /// check is skipped (matches the [`FittedParameter::link`] backward-compat
+    /// precedent).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub family: Option<distributions::FamilyDescriptor>,
 }
 
 /// Borrow an owned parameter map (as returned by [`GamlssModel::predict`]) into
@@ -63,6 +71,27 @@ fn check_design_width(param: &str, n_cols: usize, n_coefs: usize) -> Result<(), 
              older glissando version whose basis construction differed (te() tensors and \
              pc-constrained CR splines changed dimension); refit the model to migrate it."
         )));
+    }
+    Ok(())
+}
+
+/// Guard: `family` must be the same family this model was fit (or
+/// deserialized) against — see [`GamlssError::FamilyMismatch`]. A no-op when
+/// `model_family` is `None` (models fit/deserialized before this field existed
+/// carry no descriptor to check against).
+fn check_family_identity<D: Distribution + ?Sized>(
+    model_family: &Option<distributions::FamilyDescriptor>,
+    family: &D,
+) -> Result<(), GamlssError> {
+    let Some(expected) = model_family else {
+        return Ok(());
+    };
+    let actual = family.descriptor();
+    if *expected != actual {
+        return Err(GamlssError::FamilyMismatch {
+            expected: format!("{expected:?}"),
+            actual: format!("{actual:?}"),
+        });
     }
     Ok(())
 }
@@ -186,6 +215,7 @@ impl GamlssModel {
         Ok(Self {
             models: fitted_models,
             diagnostics,
+            family: Some(family.descriptor()),
         })
     }
 
@@ -283,7 +313,9 @@ impl GamlssModel {
     pub fn from_json(json: &str) -> Result<(Self, distributions::FamilyDescriptor), GamlssError> {
         let wrapper: OwnedSerializedModel =
             serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
-        Ok((wrapper.model, wrapper.distribution))
+        let mut model = wrapper.model;
+        model.family = Some(wrapper.distribution.clone());
+        Ok((model, wrapper.distribution))
     }
 
     /// Predict fitted values for new data.
@@ -327,6 +359,7 @@ impl GamlssModel {
         new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
+        check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
@@ -364,6 +397,7 @@ impl GamlssModel {
         new_data: &DataSet,
         family: &D,
     ) -> Result<HashMap<String, PredictionResult>, GamlssError> {
+        check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
@@ -621,6 +655,7 @@ impl GamlssModel {
         n_samples: usize,
         seed: Option<u64>,
     ) -> Result<HashMap<String, Vec<Array1<f64>>>, GamlssError> {
+        check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
