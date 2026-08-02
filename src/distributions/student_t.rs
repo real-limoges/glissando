@@ -52,6 +52,18 @@ impl Distribution for StudentT {
         }
     }
 
+    /// `nu` refuses a link override; `mu` and `sigma` accept one.
+    ///
+    /// ν keeps a hand-written `eta_derivatives` branch because its floor is
+    /// enforced by a KKT-style aggregate projection that only makes sense
+    /// against [`FlooredLogLink`], whose `mu_eta` is a hard zero below the
+    /// floor. Under any other link the projection's freeze branch would fire on
+    /// the wrong condition, which is exactly the lift-off case it exists to
+    /// handle. μ and σ go through `chain_to_eta` like any other family.
+    fn allows_link_override(&self, param: &str) -> bool {
+        param != "nu"
+    }
+
     /// Robust IRLS seeds for heavy-tailed data. The trait default (sample mean,
     /// sample SD) is non-robust: under heavy tails the mean is pulled by outliers and
     /// the SD overestimates the scale `σ`. Instead:
@@ -90,7 +102,8 @@ impl Distribution for StudentT {
     /// floor, so the generic rule would force the freeze branch unconditionally,
     /// which is wrong in exactly the lift-off case the projection exists to handle.
     ///
-    /// See `docs/planning/ALTITUDE-1-phases.md` for the full argument.
+    /// Consequently `allows_link_override("nu")` is false; see the
+    /// `[CHAIN-GENERIC]` section of `docs/math/mathematics.md`.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,

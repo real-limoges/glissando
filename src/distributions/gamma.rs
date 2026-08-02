@@ -194,7 +194,7 @@ impl Distribution for Gamma {
             // anything clamped here, and `MIN_POSITIVE = 1e-10` sits *above* the
             // log link's own floor (`exp(MIN_ETA) ≈ 9.4e-14`), so a clamp that
             // binds would break the telescoping. Each power is guarded where it is
-            // used — `μ²` can underflow to zero for a μ that `μ` alone survives.
+            // used: `μ²` can underflow to zero for a μ that `μ` alone survives.
             let denom1 = mu[i].max(DENOM_FLOOR);
             let denom2 = (mu[i] * mu[i]).max(DENOM_FLOOR);
             d1[i] = -mass / denom1;

@@ -357,8 +357,8 @@ fn golden_censored_all_statuses() {
     //
     // This table was regenerated once, deliberately, in Altitude #1 Phase 3, and
     // it is the only one of the 36 that moved across Phases 1-3. Two `sigma`
-    // weights read `1.0000000000e-6` — `MIN_WEIGHT` exactly, because `censored.rs`
-    // pre-floored them — and now read the unfloored observed information the
+    // weights read `1.0000000000e-6`, `MIN_WEIGHT` exactly, because `censored.rs`
+    // pre-floored them; they now read the unfloored observed information the
     // wrapper actually computes: `-1.1406392216e-1` on the right-censored row
     // (observed information is not a variance and is legitimately negative) and
     // `0.0000000000e0` on the left-censored row, where z = 0 makes both `d1` and
@@ -391,7 +391,7 @@ fn golden_truncated() {
 #[test]
 fn golden_truncated_over_gamma() {
     // Pins the NUMERIC CDF fallback on the truncation normalizer. Gamma supplies
-    // an analytic `cdf_eta_derivatives` for μ only (`gamma.rs`), so σ falls
+    // an analytic `cdf_theta_derivatives` for μ only (`gamma.rs`), so σ falls
     // through to `structural.rs::numeric_cdf_grad`, which central-differences on
     // the η scale with a *relative* step for a log link (`σ·e^{±FD_EPS}`).
     // Truncated-over-Gaussian exercises only the analytic path, so without this

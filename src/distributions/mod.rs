@@ -43,7 +43,7 @@ pub(crate) const DENOM_FLOOR: f64 = 1e-300;
 /// before a logarithm or division, so a saturated tail can't produce `−inf` / NaN.
 /// Used by the structural wrappers ([`Censored`]/[`Truncated`]/[`Hurdle`]) and by
 /// quantile functions that invert a `[0, 1]` probability. [`Ocat`]'s `MIN_PROB` is
-/// a distinct, larger floor kept local to that file — see its doc comment.
+/// a distinct, larger floor kept local to that file; see its doc comment.
 pub(crate) const PROB_EPS: f64 = 1e-12;
 
 /// Clamp a probability into `[PROB_EPS, 1 − PROB_EPS]` so its logarithm or
@@ -59,7 +59,7 @@ pub(crate) fn clamp_prob(p: f64) -> f64 {
 /// Score / Fisher-information pairs keyed by distribution-parameter name.
 pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
 
-/// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name — the same
+/// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name: the same
 /// shape as a derivatives map, used by the structural wrappers (SER-1 / STRUCT).
 ///
 /// This is the *chained* map, produced by `structural::cdf_eta_grads`. A family's
@@ -69,7 +69,7 @@ pub type CdfEtaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
 /// Result wrapper around [`CdfEtaMap`].
 pub type CdfEtaResult = Result<CdfEtaMap, GamlssError>;
 
-/// Per-parameter `(∂F/∂θ, ∂²F/∂θ²)` pairs — the *natural-scale* counterpart of
+/// Per-parameter `(∂F/∂θ, ∂²F/∂θ²)` pairs: the *natural-scale* counterpart of
 /// [`CdfEtaMap`], returned by [`Distribution::cdf_theta_derivatives`].
 ///
 /// Structurally identical to [`CdfEtaMap`]; the two are distinct names so a
@@ -205,6 +205,29 @@ pub trait Distribution: Debug + Send + Sync {
     /// Returns `GamlssError::UnknownParameter` if the name is not one of [`Self::parameters`].
     fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError>;
 
+    /// Whether this parameter accepts a link override from
+    /// [`FitConfig::links`](crate::FitConfig::links). Default: `true`.
+    ///
+    /// A family returns `false` for a parameter whose [`Self::eta_derivatives`]
+    /// is written against one specific link and cannot be expressed through the
+    /// generic chain rule. Honoring an override there would silently compute the
+    /// score and weight for a different link than the one the fit uses for
+    /// `η → μ`, so `fit_gamlss` rejects the override instead of accepting it and
+    /// producing wrong estimates.
+    ///
+    /// Only two built-ins refuse: every [`Ocat`] parameter (its `params["mu"]`
+    /// holds η rather than μ, and its threshold Jacobian is `exp(η_k)` only
+    /// under the log link) and [`StudentT`]'s `nu` (its ν-floor KKT projection
+    /// is written against [`FlooredLogLink`](links::FlooredLogLink), whose
+    /// `mu_eta` is a hard zero below the floor).
+    ///
+    /// A `param` outside [`Self::parameters`] is not this method's problem;
+    /// `fit_gamlss` checks membership first, so implementors may answer
+    /// arbitrarily for an unknown name.
+    fn allows_link_override(&self, _param: &str) -> bool {
+        true
+    }
+
     /// Score `∂l/∂θ` and expected information `i_θ` on the **natural parameter
     /// scale**, for each parameter, evaluated against the current `params` snapshot.
     ///
@@ -325,7 +348,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// rather than silently ignored (Altitude #1). Baking a default-link chain
     /// rule in here is exactly the bug this contract replaced.
     ///
-    /// Only parameters with a closed form are included — the default returns an
+    /// Only parameters with a closed form are included; the default returns an
     /// empty map. The structural wrappers ([`Censored`] / [`Truncated`] /
     /// [`Hurdle`]) build the censoring / truncation score and
     /// observed-information weight from these, and fall back to a central
@@ -357,7 +380,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// A serializable description of this family, sufficient to rebuild it via
     /// [`FamilyDescriptor::build`] (SER-1).
     ///
-    /// The default — `FamilyDescriptor::Named(self.name())` — round-trips every
+    /// The default, `FamilyDescriptor::Named(self.name())`, round-trips every
     /// stateless family through [`from_name`]. Stateful families ([`Binomial`],
     /// [`Ocat`]) and the structural wrappers ([`Censored`] / [`Truncated`] /
     /// [`Hurdle`]), which a bare name cannot reconstruct, override it to carry
@@ -727,7 +750,7 @@ pub(crate) mod test_helpers {
     /// default-link-only version cannot:
     ///
     /// 1. It gives the seven identity-link parameters (Gaussian μ, StudentT μ,
-    ///    BCCG/BCT/BCPE ν, Ocat μ and `delta_1`) a non-trivial check at all —
+    ///    BCCG/BCT/BCPE ν, Ocat μ and `delta_1`) a non-trivial check at all:
     ///    under the identity link `∂l/∂η ≡ ∂l/∂θ`, so the default-link check is
     ///    vacuously satisfied by any correct natural-scale score.
     /// 2. It is the post-refactor contract for the generic chain rule
@@ -735,8 +758,8 @@ pub(crate) mod test_helpers {
     ///    change.
     ///
     /// Note this asserts on the *score* only. The Fisher weight has no generic
-    /// finite-difference oracle — several families deliberately return expected
-    /// information or a squared-score surrogate rather than `−∂²l/∂η²` — and is
+    /// finite-difference oracle (several families deliberately return expected
+    /// information or a squared-score surrogate rather than `−∂²l/∂η²`), and is
     /// covered by the golden characterization tables in
     /// `tests/derivative_golden.rs` instead.
     pub fn check_eta_score_via_finite_diff<D: Distribution + ?Sized>(
@@ -793,7 +816,7 @@ pub(crate) mod test_helpers {
     /// differences of [`Distribution::cdf`] on the parameter's **own natural
     /// scale**.
     ///
-    /// The step is *relative* — `h = eps·max(|θ|, 1)`. For a positive parameter
+    /// The step is *relative*: `h = eps·max(|θ|, 1)`. For a positive parameter
     /// that is numerically the same perturbation the previous η-scale version took
     /// through a log link (`σ·e^{±eps} ≈ σ(1 ± eps)`), so the callers' tolerances
     /// carry over; for an identity-linked parameter it is unchanged. An *absolute*
@@ -816,7 +839,7 @@ pub(crate) mod test_helpers {
             panic!(
                 "{}::{} supplies no analytic cdf_theta_derivatives entry, so this \
                  check would be vacuous. The structural wrappers fall back to a \
-                 central difference for such parameters — cover it there, or \
+                 central difference for such parameters; cover it there, or \
                  stop asserting on it here.",
                 family.name(),
                 target
@@ -1139,6 +1162,6 @@ mod tests {
     // Each is written as an assertion that the analytic score DISAGREES with a
     // finite difference on the overridden link's η. When the generic chain rule
     // lands, these must be inverted into
-    // `check_eta_score_via_finite_diff(...)` calls that assert agreement — the
+    // `check_eta_score_via_finite_diff(...)` calls that assert agreement; the
     // failure of these tests is the signal the refactor worked.
 }

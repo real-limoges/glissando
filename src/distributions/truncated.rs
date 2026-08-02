@@ -1,7 +1,7 @@
 //! Truncated responses (STRUCT-2): a wrapper distribution observed only within
 //! per-observation bounds `(lo, hi)`.
 //!
-//! Unlike censoring, out-of-range values are *absent*, not recorded — so the
+//! Unlike censoring, out-of-range values are *absent*, not recorded, so the
 //! density renormalizes by the in-support mass:
 //!
 //! ```text
@@ -12,7 +12,7 @@
 //! Bounds may be `±∞` (an open side reduces that term to `0` or `1`). With
 //! `(−∞, ∞)` the wrapper reduces exactly to the base family. `cdf` / `quantile`
 //! are renormalized onto the truncated support; `variance` / `expected_value`
-//! delegate to the base family (they report the *untruncated* parameter moments —
+//! delegate to the base family (they report the *untruncated* parameter moments;
 //! truncated moments would need numerical integration and are out of scope).
 //!
 //! Like the other structural wrappers it carries per-row state and is excluded
@@ -64,7 +64,7 @@ impl Truncated {
     }
 
     /// `F` at a bound array that may contain `±∞`, without the per-parameter
-    /// gradients `cdf_and_grads_at` also computes — cheaper, for the call sites
+    /// gradients `cdf_and_grads_at` also computes; cheaper, for the call sites
     /// that only need `F` (`loglik_pointwise`, `cdf`, `quantile`; only
     /// `derivatives` needs the gradients). Infinite rows saturate to the limit
     /// (`+∞ → F=1`, `−∞ → F=0`) without ever passing `±∞` into the base family.
@@ -117,6 +117,7 @@ impl Distribution for Truncated {
     delegate_to_base!(
         parameters,
         default_link,
+        allows_link_override,
         initial_value,
         is_discrete,
         variance,

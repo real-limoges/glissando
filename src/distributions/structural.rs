@@ -54,6 +54,11 @@ macro_rules! delegate_to_base {
             self.base.default_link(param)
         }
     };
+    (@method allows_link_override) => {
+        fn allows_link_override(&self, param: &str) -> bool {
+            self.base.allows_link_override(param)
+        }
+    };
     (@method initial_value) => {
         fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
             self.base.initial_value(param, y)
@@ -108,14 +113,14 @@ pub(crate) use delegate_to_base;
 /// `(∂F/∂η, ∂²F/∂η²)` at the points `at`, for every parameter of `base`.
 ///
 /// Two paths, both landing on the η scale of the link the *fit* resolved, which
-/// `ctx` carries — not the family's default link (Altitude #1):
+/// `ctx` carries, not the family's default link (Altitude #1):
 ///
 /// - Analytic, for the parameters [`Distribution::cdf_theta_derivatives`]
 ///   supplies. Those come back on the natural scale θ and are chained here by
 ///   [`chain_cdf_to_eta`], which is the second-order rule
 ///   `∂²F/∂η² = mu_eta²·∂²F/∂θ² + mu_eta2·∂F/∂θ`.
 /// - A central difference of `base.cdf`, perturbing the parameter's live η
-///   directly, for the rest. Perturbing η rather than θ is deliberate — see
+///   directly, for the rest. Perturbing η rather than θ is deliberate; see
 ///   [`numeric_cdf_grad`].
 pub(crate) fn cdf_eta_grads(
     base: &dyn Distribution,
@@ -141,7 +146,7 @@ pub(crate) fn cdf_eta_grads(
 
 /// Central-difference `(∂F/∂η, ∂²F/∂η²)` for a single parameter, perturbing the
 /// live linear predictor `ctx` holds for it and re-evaluating `base.cdf` at `at`.
-/// `f0` is `base.cdf(at, params)` — every caller already has it, so it's passed in
+/// `f0` is `base.cdf(at, params)`; every caller already has it, so it's passed in
 /// rather than recomputed here.
 ///
 /// **Both the link and η come from `ctx`, and the perturbation stays on η.**
@@ -211,7 +216,7 @@ fn numeric_cdf_grad(
 /// family's own `(u, w)` per parameter) and a per-row rule for overwriting some
 /// or all of it; this factors out only the "loop over `base.parameters()`, take
 /// that parameter's `(u, w)` out of `base_derivs`, hand it to the caller, put the
-/// result back into a fresh map" bookkeeping — not the per-row logic itself.
+/// result back into a fresh map" bookkeeping, not the per-row logic itself.
 ///
 /// `rewrite(param, u, w)` is called once per parameter in `base.parameters()`
 /// order with `u`/`w` (the base family's score/weight for that parameter, moved
@@ -222,7 +227,7 @@ fn numeric_cdf_grad(
 /// than an indirect call per row.
 ///
 /// Returns `Err` (via `base.unknown_param`) if `base_derivs` is missing an entry
-/// for one of `base.parameters()` — mirrors each wrapper's previous inline check.
+/// for one of `base.parameters()`; mirrors each wrapper's previous inline check.
 pub(crate) fn rewrite_base_derivatives(
     base: &dyn Distribution,
     mut base_derivs: HashMap<String, (Array1<f64>, Array1<f64>)>,

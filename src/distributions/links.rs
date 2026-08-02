@@ -28,7 +28,7 @@ pub trait Link: Debug + Send + Sync {
     /// The Fisher-scoring inner loop works on the η-scale, where the generic IRLS
     /// weight is `mu_eta(η)² · i_θ` (with `i_θ` the Fisher information on the
     /// natural scale). Supplying this analytically lets the scoring step build
-    /// η-scale weights for *any* link — the prerequisite for the link expansion
+    /// η-scale weights for *any* link: the prerequisite for the link expansion
     /// (probit, cloglog, …).
     ///
     /// The default is a symmetric finite difference so external `Link` impls keep
@@ -453,7 +453,7 @@ impl<'a> LinkContext<'a> {
     /// Crate-internal on purpose: the only legitimate consumer is the structural
     /// wrappers' numeric CDF fallback (`structural::numeric_cdf_grad`), which
     /// finite-differences `base.cdf` on η itself rather than on θ, and so needs the
-    /// actual linear predictor instead of `link.link(θ)` — a round trip that is not
+    /// actual linear predictor instead of `link.link(θ)`, a round trip that is not
     /// the identity under `sqrt` for η < 0, or `inverse_square` at all.
     pub(crate) fn link_and_eta(&self, param: &str) -> Option<(&dyn Link, &Array1<f64>)> {
         self.entries.get(param).map(|e| (e.link, e.eta))
@@ -484,7 +484,7 @@ fn signed_floor(x: f64) -> f64 {
 ///
 /// This is the string→`Link` registry that backs per-parameter link selection in
 /// [`FitConfig`](crate::FitConfig) and the JSON/WASM/Python surfaces. The internal
-/// `floored_log` link is intentionally excluded — it is never user-selectable.
+/// `floored_log` link is intentionally excluded; it is never user-selectable.
 ///
 /// # Errors
 ///
@@ -545,14 +545,14 @@ mod tests {
         (a - b).abs() <= eps * (1.0 + a.abs().max(b.abs()))
     }
 
-    /// Symmetric finite-difference of the inverse link — the trait's default impl,
+    /// Symmetric finite-difference of the inverse link: the trait's default impl,
     /// recomputed here as an independent oracle for the analytic overrides.
     fn fd_mu_eta(link: &dyn Link, eta: f64) -> f64 {
         let h = 1e-6;
         (link.inv_link(eta + h) - link.inv_link(eta - h)) / (2.0 * h)
     }
 
-    /// Symmetric finite-difference of `mu_eta` — the oracle for the `mu_eta2`
+    /// Symmetric finite-difference of `mu_eta`: the oracle for the `mu_eta2`
     /// overrides. A larger step than `fd_mu_eta` uses: the analytic `mu_eta` this
     /// differences is exact, so `h` trades only truncation against cancellation and
     /// `1e-4` sits near the optimum for a first difference of a smooth function.
