@@ -55,7 +55,7 @@ impl Distribution for Beta {
         // multiplies by a `mu_eta` computed from η independently of anything clamped
         // here, so a clamp that binds breaks the telescoping. μ is now allowed
         // probit/cloglog/cauchit, and under a probit at η = −10 the true
-        // μ = Φ(−10) ≈ 7.6e-24 — fourteen orders of magnitude below the old clamp,
+        // μ = Φ(−10) ≈ 7.6e-24, fourteen orders of magnitude below the old clamp,
         // which would have evaluated ψ and ψ' at the wrong α entirely. See the same
         // argument spelled out at length in `binomial.rs`.
         //

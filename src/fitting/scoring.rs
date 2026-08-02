@@ -236,7 +236,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     //    resolved link and live η, so a family with a separable natural scale can
     //    apply the chain rule generically instead of hardcoding its default link
     //    (Altitude #1). Each pass costs O(n) per parameter, so only the structural
-    //    wrappers — the sole readers of `mu_eta2` — pay for the second one.
+    //    wrappers (the sole readers of `mu_eta2`) pay for the second one.
     let entries = family.parameters().iter().map(|name| {
         let param = &models[*name];
         (*name, param.link.as_ref(), &param.eta)

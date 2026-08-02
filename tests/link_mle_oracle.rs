@@ -18,14 +18,19 @@
 // fixture; a live optimizer is reproducible, extends to any family/link pair,
 // and runs in CI.
 //
-// CURRENT STATUS (Altitude #1). The non-default-link cases below are expected
-// to FAIL against the current tree. Every family hardcodes the chain rule for
-// its own default link (`src/distributions/mod.rs:65-71` vs. the resolved link
-// at `src/fitting/mod.rs:394-400`), so an overridden link gives IRLS the wrong
-// `dμ/dη` and it converges to the wrong root. The default-link cases in
-// `default_link_fits_reach_the_mle` pass and confirm the oracle itself is
-// sound. These tests are the acceptance gate for the generic-chain-rule
-// refactor.
+// CURRENT STATUS (Altitude #1). Every case below, default link and overridden
+// alike, is expected to PASS. These four were the acceptance gate for the
+// generic-chain-rule refactor and ran `#[ignore]`d while it was outstanding;
+// that refactor has landed, so they are unignored and gate CI like any other
+// test. A family now returns its score on the natural parameter scale from
+// `Distribution::theta_derivatives` and `distributions::chain_to_eta` applies
+// whichever link `fitting::validate_link_overrides` resolved, so an override
+// gives IRLS the right `dμ/dη`.
+//
+// A failure here is a real regression in the IRLS machinery, not an expected
+// one. `default_link_fits_reach_the_mle` is the control: if *it* fails, suspect
+// the oracle before the fitter. Do not repair a failure by loosening a
+// tolerance.
 #![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 

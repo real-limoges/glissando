@@ -75,7 +75,7 @@ impl Distribution for Gamma {
         // which the folded η-scale form could afford and the un-folded one cannot:
         // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
         // anything clamped here, so a clamp that binds breaks the telescoping. It
-        // binds at reachable parameters — `exp(MIN_ETA) ≈ 9.4e-14` is already below
+        // binds at reachable parameters: `exp(MIN_ETA) ≈ 9.4e-14` is already below
         // `MIN_POSITIVE`, and the newly-gated `inverse`/`sqrt` links on μ reach
         // further still. See the same argument spelled out at length in `binomial.rs`.
         let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));

@@ -76,7 +76,7 @@ impl Distribution for Weibull {
         // 290 orders of magnitude apart, and the mismatch was not a rounding
         // difference: at μ = 0 with σ = 5 the numerator stayed a finite ~1e50 while
         // `1/μ` reached 1e300, so their product overflowed to +∞ where the honest
-        // value is ~1e350 — beyond f64 either way, but `chain_to_eta` then met that
+        // value is ~1e350 (beyond f64 either way), but `chain_to_eta` then met that
         // ∞ with a `mu_eta` of exactly 0 (`sqrt` at η = 0, `log` at η ≤ −745) and
         // produced NaN. Sharing one guard leaves the overflow to `chain_to_eta`,
         // which annihilates it against a zero `mu_eta` and saturates it otherwise.
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn chained_derivatives_survive_a_zero_mu_eta() {
         // At η = 0 the sqrt link gives μ = 0 *and* `mu_eta` = 0, and σ = 5 is enough
-        // for `z = (y/μ)^σ` to overflow rather than merely grow — so the natural-scale
+        // for `z = (y/μ)^σ` to overflow rather than merely grow, so the natural-scale
         // score is +∞ and the product is `∞ · 0`. Nothing downstream would catch the
         // resulting NaN: `scoring::step`'s `w < MIN_WEIGHT` and `step > MAX_STEP`
         // tests are both false for NaN, so it reaches the PWLS solve and poisons it.

@@ -113,7 +113,7 @@ impl Distribution for StudentT {
         // Build the standardized-residual block once and hand it to both halves.
         // `theta_derivatives` and the ν block each need `(z², w_robust)`, and recomputing
         // it in the second cost two extra O(n) passes plus n divisions on every
-        // Fisher-scoring step — and, worse, disagreed with the first: the ν block
+        // Fisher-scoring step. Worse, it disagreed with the first: the ν block
         // divided by a raw σ where this body uses the `DENOM_FLOOR`-guarded
         // reciprocal, so at σ = 0 the μ/σ pairs stayed finite while the ν score alone
         // came out NaN (`z² = ∞` → `w_robust = 0` → `(0·∞ − 1)/ν`).
