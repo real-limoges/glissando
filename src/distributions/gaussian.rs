@@ -108,15 +108,20 @@ impl Distribution for Gaussian {
         }))
     }
 
-    fn cdf_eta_derivatives(
+    fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfEtaResult {
-        // Location-scale derivatives of F = Φ(z), z = (y−μ)/σ, std-normal pdf φ,
-        // φ'(z) = −z·φ(z). Both parameters are closed form:
-        //   μ (identity):  ∂F/∂η = −φ/σ,        ∂²F/∂η² = φ'/σ² = −zφ/σ².
-        //   σ (log):       ∂F/∂η = −zφ,         ∂²F/∂η² = zφ + z²φ' = zφ(1 − z²).
+    ) -> super::CdfThetaResult {
+        // Natural-scale (Altitude #1) location-scale derivatives of F = Φ(z),
+        // z = (y−μ)/σ, std-normal pdf φ, φ'(z) = −z·φ(z). ∂z/∂μ = −1/σ and
+        // ∂z/∂σ = −z/σ, so:
+        //   μ:  ∂F/∂μ = −φ/σ,    ∂²F/∂μ² = φ'/σ² = −zφ/σ².
+        //   σ:  ∂F/∂σ = −zφ/σ,   ∂²F/∂σ² = zφ(2 − z²)/σ².
+        // The caller chains to η. Under the default links (identity, log) that
+        // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
+        // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
+        // σ·(−zφ/σ) = −zφ and σ²·zφ(2−z²)/σ² + σ·(−zφ/σ) = zφ(1 − z²).
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
@@ -131,10 +136,21 @@ impl Distribution for Gaussian {
             let s = sigma[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
             let phi = std_normal_pdf(z);
+            let z_sq = z * z;
             d1_mu[i] = -phi / s;
             d2_mu[i] = -z * phi / (s * s);
-            d1_sigma[i] = -z * phi;
-            d2_sigma[i] = z * phi * (1.0 - z * z);
+            d1_sigma[i] = -z * phi / s;
+            // φ decays like e^{−z²/2}, so φ·z^k → 0 for every k and the limit here is
+            // 0. Take it explicitly: z² overflows to infinity around |z| ≈ 1e154,
+            // long after φ has underflowed to exactly 0, and `0 · ∞` is NaN. The
+            // guard fires only where the unguarded expression is NaN, so every
+            // in-range value is bit-identical. Reachable from a wrapper evaluating
+            // `F` at a far-out censoring or truncation bound.
+            d2_sigma[i] = if z_sq.is_finite() {
+                z * phi * (2.0 - z_sq) / (s * s)
+            } else {
+                0.0
+            };
         }
         Ok(HashMap::from([
             ("mu".to_string(), (d1_mu, d2_mu)),
@@ -164,8 +180,8 @@ impl Distribution for Gaussian {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
         finite_array, params_view,
     };
@@ -294,14 +310,36 @@ mod tests {
     }
 
     #[test]
-    fn cdf_eta_derivatives_match_finite_diff_gaussian() {
+    fn cdf_theta_derivatives_match_finite_diff_gaussian() {
         let y = array![-1.5, 0.0, 0.7, 2.3];
         let owned = [
             ("mu", array![-0.5, 0.2, 1.0, 1.5]),
             ("sigma", array![1.0, 1.3, 0.8, 1.1]),
         ];
-        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
-        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
+        // Un-folding σ put a `1/σ` in `∂F/∂σ` and a `1/σ²` in `∂²F/∂σ²` where the
+        // η-scale forms had none, so the saturated tail became reachable
+        // arithmetic. Span both ends of what the log link can produce inside its
+        // own η clamp, plus σ underflowed to exactly zero.
+        let y = array![0.0, 1.0, 2.0, -1.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0, 0.0]),
+            ("sigma", array![0.0, 1e-320, 1e-8, 1e13]),
+        ];
+        let p = params_view(&owned);
+        let d = Gaussian.cdf_theta_derivatives(&y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+        }
     }
 
     #[test]

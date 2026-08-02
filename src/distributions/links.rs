@@ -389,7 +389,7 @@ impl Link for CauchitLink {
 /// Raw `η` is deliberately absent from the public surface.
 /// [`Ocat`](crate::distributions::Ocat) already carries η in its `params["mu"]`
 /// slot and that pattern should not spread;
-/// the crate-internal [`LinkContext::link_and_eta`] exists only for the structural
+/// the crate-internal `LinkContext::link_and_eta` exists only for the structural
 /// wrappers' numeric CDF fallback, which must perturb the actual linear predictor.
 #[derive(Debug)]
 pub struct LinkContext<'a> {
@@ -398,12 +398,9 @@ pub struct LinkContext<'a> {
 
 #[derive(Debug)]
 struct LinkEntry<'a> {
-    // Read only through `link_and_eta`, which has no production caller until the
-    // structural wrappers' numeric CDF fallback switches over (Altitude #1,
-    // Phase 3). Kept here so the context's shape is settled in one commit.
-    #[allow(dead_code)]
+    // Read only through `link_and_eta`, whose one production caller is the
+    // structural wrappers' numeric CDF fallback (`structural::numeric_cdf_grad`).
     link: &'a dyn Link,
-    #[allow(dead_code)]
     eta: &'a Array1<f64>,
     mu_eta: Array1<f64>,
     mu_eta2: Array1<f64>,
@@ -454,9 +451,10 @@ impl<'a> LinkContext<'a> {
     /// The link and linear predictor backing `param`.
     ///
     /// Crate-internal on purpose: the only legitimate consumer is the structural
-    /// wrappers' numeric CDF fallback, which finite-differences on η itself. That
-    /// call site arrives in Altitude #1, Phase 3; until then only tests exercise it.
-    #[allow(dead_code)]
+    /// wrappers' numeric CDF fallback (`structural::numeric_cdf_grad`), which
+    /// finite-differences `base.cdf` on η itself rather than on θ, and so needs the
+    /// actual linear predictor instead of `link.link(θ)` — a round trip that is not
+    /// the identity under `sqrt` for η < 0, or `inverse_square` at all.
     pub(crate) fn link_and_eta(&self, param: &str) -> Option<(&dyn Link, &Array1<f64>)> {
         self.entries.get(param).map(|e| (e.link, e.eta))
     }

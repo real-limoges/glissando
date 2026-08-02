@@ -159,16 +159,20 @@ impl Distribution for Gamma {
         }))
     }
 
-    fn cdf_eta_derivatives(
+    fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfEtaResult {
-        // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ². With η = log μ
-        // (dμ/dη = μ) and dx/dη = −x, the shape α is held fixed, so the
-        // shape-derivative that blocks σ never appears:
-        //   ∂F/∂η_μ  = −xᵅ·e⁻ˣ / Γ(α)
-        //   ∂²F/∂η_μ² = (x − α)·∂F/∂η_μ
+    ) -> super::CdfThetaResult {
+        // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ², so ∂x/∂μ = −x/μ
+        // holds the shape α fixed and the shape-derivative that blocks σ never
+        // appears. Writing `mass` for the γ-density factor xᵅ·e⁻ˣ/Γ(α), the
+        // natural-scale derivatives (Altitude #1) are:
+        //   ∂F/∂μ  = −mass/μ
+        //   ∂²F/∂μ² = mass·(1 + α − x)/μ²
+        // The caller chains to η. Under the default log link mu_eta = mu_eta2 = μ,
+        // which recovers the previous η-scale pair exactly:
+        // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
         // σ enters both α and x; its CDF derivative needs ∂P/∂α (non-elementary)
         // and is left to the wrapper's numeric fallback.
         let mu = require(self, params, "mu")?;
@@ -184,8 +188,17 @@ impl Distribution for Gamma {
             let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
             // γ-density mass at x: xᵅ·e⁻ˣ / Γ(α) = exp(α·ln x − x − lnΓ(α)).
             let mass = (alpha * x.ln() - x - ln_gamma(alpha)).exp();
-            d1[i] = -mass;
-            d2[i] = (x - alpha) * d1[i];
+            // Un-folding puts μ in a denominator for the first time, so it gets a
+            // `DENOM_FLOOR` guard rather than the `MIN_POSITIVE` clamp `x` uses:
+            // the caller multiplies by a `mu_eta` computed from η independently of
+            // anything clamped here, and `MIN_POSITIVE = 1e-10` sits *above* the
+            // log link's own floor (`exp(MIN_ETA) ≈ 9.4e-14`), so a clamp that
+            // binds would break the telescoping. Each power is guarded where it is
+            // used — `μ²` can underflow to zero for a μ that `μ` alone survives.
+            let denom1 = mu[i].max(DENOM_FLOOR);
+            let denom2 = (mu[i] * mu[i]).max(DENOM_FLOOR);
+            d1[i] = -mass / denom1;
+            d2[i] = mass * (1.0 + alpha - x) / denom2;
         }
         Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
     }
@@ -217,8 +230,8 @@ impl Distribution for Gamma {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
         finite_array, params_view,
     };
@@ -306,17 +319,34 @@ mod tests {
     }
 
     #[test]
-    fn cdf_eta_derivatives_match_finite_diff_gamma() {
+    fn cdf_theta_derivatives_match_finite_diff_gamma() {
         // Only μ is analytic; σ is intentionally left to the numeric fallback.
         let y = array![0.5, 1.5, 3.0, 7.0];
         let owned = [
             ("mu", array![1.0, 2.0, 4.0, 6.0]),
             ("sigma", array![0.5, 0.4, 0.3, 0.6]),
         ];
-        check_cdf_eta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
         let p = params_view(&owned);
-        let derivs = Gamma.cdf_eta_derivatives(&y, &p).unwrap();
+        let derivs = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
         assert!(!derivs.contains_key("sigma"));
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_a_saturated_mu() {
+        // Un-folding put μ and μ² in denominators that the η-scale form (`−mass`,
+        // `(x−α)·−mass`) had cancelled away entirely, which is why each power gets
+        // its own `DENOM_FLOOR`: μ² underflows to exactly zero for a μ that μ alone
+        // survives, and `inf · 0` is NaN.
+        let y = array![1.0, 2.0, 0.5, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8, 1e13]),
+            ("sigma", array![0.5, 0.5, 1e-8, 1e13]),
+        ];
+        let p = params_view(&owned);
+        let d = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
+        let (d1, d2) = &d["mu"];
+        assert!(finite_array(d1) && finite_array(d2), "{d1:?} {d2:?}");
     }
 
     #[test]
