@@ -2,7 +2,7 @@
 
 use super::{
     discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    MIN_POSITIVE,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::par_zip_map;
 use ndarray::Array1;
@@ -33,7 +33,7 @@ impl Distribution for Poisson {
         }
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
@@ -41,11 +41,17 @@ impl Distribution for Poisson {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Log-likelihood: l = y·log(μ) − μ.
-        // Score on η = log(μ): u = y − μ.   Fisher info: w = μ.
+        // Natural scale:  ∂l/∂μ = (y−μ)/μ,   i_μ = 1/μ.
+        //
+        // Under the default log link `mu_eta = μ`, so `chain_to_eta` recovers the
+        // classic `u_η = y − μ`, `w_η = μ` exactly. The weight is returned
+        // unfloored: `MIN_WEIGHT` is applied once, in `scoring::step`, after the
+        // chain rule.
         let mu = require(self, params, "mu")?;
-        let u = y - mu;
-        let w = mu.to_owned();
-        Ok(HashMap::from([("mu".to_string(), (u, w))]))
+        // `1/μ` is both the reciprocal in the score and the information itself.
+        let i_mu = mu.mapv(|m| 1.0 / m.max(DENOM_FLOOR));
+        let u_mu = (y - mu) * &i_mu;
+        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
     }
 
     fn loglik_pointwise(
@@ -104,9 +110,11 @@ impl Distribution for Poisson {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
-        default_link_derivatives, derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -159,6 +167,40 @@ mod tests {
         let y = array![0.0, 3.0, 7.0, 12.0];
         let owned = [("mu", array![1.0, 3.5, 6.0, 10.0])];
         check_score_via_finite_diff(&Poisson, &y, &owned, "mu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_a_sqrt_link() {
+        // The Altitude #1 gate. Under the default log link `∂l/∂η` and the folded
+        // `y − μ` agree by construction, so the default-link check above cannot
+        // tell a natural-scale score from an η-scale one. `sqrt` can: it wants
+        // `dμ/dη = 2√μ`, which this family no longer hardcodes.
+        //
+        // This replaces `poisson_score_is_wrong_under_a_sqrt_link_today`, the
+        // Phase 0 characterization test that asserted the opposite.
+        let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
+        let owned = [("mu", array![0.5, 1.5, 3.0, 8.0, 5.0])];
+        check_eta_score_via_finite_diff(&Poisson, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Poisson, &y, &owned, "mu", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_mu() {
+        // Un-folding introduces a `1/μ` the old `u = y − μ` cancelled, so the
+        // saturated tail is newly reachable arithmetic. `DENOM_FLOOR` has to keep
+        // both the natural score and the chained η-score finite there, including
+        // where μ has underflowed to exactly zero.
+        let y = array![0.0, 3.0, 10.0];
+        let owned = [("mu", array![0.0, 1e-320, 1e-8])];
+        let p = params_view(&owned);
+        let natural = Poisson.derivatives(&y, &p).unwrap();
+        let (u_nat, i_nat) = &natural["mu"];
+        assert!(finite_array(u_nat) && finite_array(i_nat));
+
+        let chained = default_link_derivatives(&Poisson, &y, &p).unwrap();
+        let (u, w) = &chained["mu"];
+        assert!(finite_array(u) && finite_array(w), "u={u:?} w={w:?}");
+        assert!(w.iter().all(|&v| v >= 0.0));
     }
 
     #[test]

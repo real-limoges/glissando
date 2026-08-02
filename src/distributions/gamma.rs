@@ -1,8 +1,8 @@
 //! Gamma distribution for positive continuous data.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE,
-    MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
+    MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -52,7 +52,7 @@ impl Distribution for Gamma {
         }
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
@@ -61,8 +61,12 @@ impl Distribution for Gamma {
     ) -> DerivativesResult {
         // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
         // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
-        // μ (log link, η = log μ):  u = (y−μ)/(μσ²),  w = 1/σ².
-        // σ (log link, η = log σ):  u = (2/σ²)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1].
+        // Natural scale (Altitude #1):
+        //   μ: ∂l/∂μ = (y−μ)/(μ²σ²),   i_μ = 1/(μ²σ²).
+        //   σ: ∂l/∂σ = (2/σ³)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1],
+        //      i_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴.
+        // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
+        // the previous η-scale pairs exactly. Weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
@@ -71,33 +75,44 @@ impl Distribution for Gamma {
         let sigma_sq = sigma_safe.mapv(|s| s * s);
         let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
 
+        // Guard each reciprocal at the power it is used at, rather than clamping μ
+        // or σ any further: raising an already-guarded reciprocal to a power would
+        // overflow to infinity for a parameter the log link can still underflow to,
+        // and `inf · 0` is NaN. σ⁶ is why this matters more here than elsewhere; it
+        // underflows around σ ≈ 1e-52, where the old σ⁴ form reached to σ ≈ 1e-77.
+        let inv_mu_sq_sigma_sq = par_zip_map(&mu_safe, &sigma_sq, |m, s2| {
+            1.0 / (m * m * s2).max(DENOM_FLOOR)
+        });
+        let inv_sigma_cubed = sigma_safe.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
+        let inv_sigma_4 = sigma_sq.mapv(|s2| 1.0 / (s2 * s2).max(DENOM_FLOOR));
+        let inv_sigma_6 = sigma_sq.mapv(|s2| 1.0 / (s2 * s2 * s2).max(DENOM_FLOOR));
+
         // Clamp y to the support, mirroring loglik_pointwise: a zero/negative row
         // would otherwise send ln(y/μ) to −∞/NaN and poison the whole PWLS solve.
         let y_safe = y.mapv(|yi| yi.max(MIN_POSITIVE));
 
-        let u_mu = (&y_safe - &mu_safe) / (&mu_safe * &sigma_sq);
-        let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
+        let u_mu = (&y_safe - &mu_safe) * &inv_mu_sq_sigma_sq;
+        let i_mu = inv_mu_sq_sigma_sq;
 
         let psi_alpha = digamma_batch(&alpha);
         let log_sigma = sigma_safe.mapv(|s| s.ln());
         let y_over_mu = &y_safe / &mu_safe;
         let log_y_over_mu = y_over_mu.mapv(|v| v.ln());
-        let u_sigma =
-            (2.0 / &sigma_sq) * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
+        let u_sigma = 2.0
+            * &inv_sigma_cubed
+            * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
 
-        // Fisher info for σ on the log-link scale: w = σ²·I_σ with
-        // I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴, so w = (4/σ⁴)·ψ'(α) − 4/σ².
-        // Matches gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) (η-scale via ×σ²)
-        // and the Monte-Carlo check E[u_η²]. Since ψ'(1/σ²) > σ² for all σ > 0 the
-        // expression is strictly positive; the MIN_WEIGHT floor guards round-off only.
+        // Fisher info for σ on its own scale: I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴. Matches
+        // gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) and the Monte-Carlo check
+        // E[u_η²] once chained. Since ψ'(1/σ²) > σ² for all σ > 0 the expression is
+        // strictly positive; the surviving MIN_WEIGHT floor in `scoring::step`
+        // guards round-off only.
         let psi_prime_alpha = trigamma_batch(&alpha);
-        let sigma_sq_sq = sigma_sq.mapv(|s2| s2 * s2);
-        let w_sigma =
-            ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 4.0 / &sigma_sq).mapv(|v| v.max(MIN_WEIGHT));
+        let i_sigma = 4.0 * &inv_sigma_6 * &psi_prime_alpha - 4.0 * &inv_sigma_4;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -203,9 +218,11 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -249,6 +266,43 @@ mod tests {
         ];
         check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. `inverse` on μ is the link behind the largest of the
+        // four `link_mle_oracle` shortfalls (45.5 in fitted log-likelihood), so it is
+        // the one this family most needs covered.
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/(μ²σ²)`, `1/σ³`, `1/σ⁴` and `1/σ⁶`, all of which
+        // the previous η-scale forms cancelled down to at most `1/σ⁴`. σ⁶ is the
+        // first to underflow, so this fixture is the one that pins the guard.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-60, 0.0, 1e-320]),
+        ];
+        let p = params_view(&owned);
+        let natural = Gamma.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Gamma, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+        }
     }
 
     #[test]

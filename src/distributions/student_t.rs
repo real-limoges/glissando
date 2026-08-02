@@ -1,8 +1,8 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink, GamlssError,
-    IdentityLink, Link, LogLink, MIN_POSITIVE, MIN_WEIGHT,
+    chain_to_eta, clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink,
+    GamlssError, IdentityLink, Link, LinkContext, LogLink, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{
     digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
@@ -81,8 +81,32 @@ impl Distribution for StudentT {
         }
     }
 
-    eta_derivatives_passthrough!();
+    /// Hybrid: μ and σ go through the generic chain rule, ν does not.
+    ///
+    /// ν keeps a hand-written η-scale entry permanently, for two reasons that no
+    /// natural-scale form can express. Its KKT boundary projection is a *cross-row
+    /// aggregate* (`u_ν[i]` depends on a sum of scores over every pinned row), so it
+    /// is not element-wise, and [`FlooredLogLink::mu_eta`] returns 0 below the
+    /// floor, so the generic rule would force the freeze branch unconditionally,
+    /// which is wrong in exactly the lift-off case the projection exists to handle.
+    ///
+    /// See `docs/planning/ALTITUDE-1-phases.md` for the full argument.
+    fn eta_derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
+    ) -> DerivativesResult {
+        let mut out = chain_to_eta(self.derivatives(y, params)?, ctx)?;
+        out.insert("nu".to_string(), self.nu_eta_derivatives(y, params)?);
+        Ok(out)
+    }
 
+    /// Natural-scale score and expected information for **μ and σ only**.
+    ///
+    /// ν is deliberately absent: it has no separable natural scale (see
+    /// [`Self::eta_derivatives`]). Callers that need all three parameters must go
+    /// through `eta_derivatives`, which is what the scoring loop does.
     fn derivatives(
         &self,
         y: &Array1<f64>,
@@ -94,93 +118,42 @@ impl Distribution for StudentT {
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
 
-        let z = (y - mu) / sigma;
+        // Guard each reciprocal at the power it is used at, rather than clamping σ:
+        // raising an already-guarded reciprocal to a power would overflow to infinity
+        // for a σ the log link can still underflow to, and `inf · 0` is NaN. μ's
+        // score and weight divided by a raw σ before Phase 2b; guarding them here
+        // costs nothing and keeps the whole family finite at a saturated σ.
+        let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
+        let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
+
+        let z = (y - mu) * &inv_sigma;
         let z_sq = z.mapv(|v| v * v);
 
         // The "robustifying weight" w = (ν+1)/(ν+z²) downweights outliers (large |z|).
         // It → 1 as ν → ∞, recovering Gaussian behavior.
         let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
 
-        // μ derivatives (identity link). The score uses the robustifying weight
-        // (that IS dl/dμ); the working weight uses the *expected* information
-        // I_μ = (ν+1)/((ν+3)·σ²), the same convention as gamlss TF's d2ldm2,
-        // rather than the data-dependent w_robust/σ², so the PWLS subproblem
-        // (and hence λ selection, EDF, and SEs) matches the RS oracle.
-        let u_mu = (&w_robust * &z) / sigma;
-        let w_mu = par_zip_map(nu, sigma, |nu_i, s_i| {
-            (nu_i + 1.0) / ((nu_i + 3.0) * s_i * s_i)
+        // μ derivatives (identity link, so the chain rule leaves these untouched).
+        // The score uses the robustifying weight (that IS dl/dμ); the working weight
+        // uses the *expected* information I_μ = (ν+1)/((ν+3)·σ²), the same convention
+        // as gamlss TF's d2ldm2, rather than the data-dependent w_robust/σ², so the
+        // PWLS subproblem (and hence λ selection, EDF, and SEs) matches the RS oracle.
+        let u_mu = &w_robust * &z * &inv_sigma;
+        let i_mu = par_zip_map(nu, &inv_sigma_sq, |nu_i, iss| {
+            (nu_i + 1.0) / (nu_i + 3.0) * iss
         });
 
-        // σ derivatives (log link). Chain rule: dl/dη = σ · dl/dσ = w·z² − 1.
-        let u_sigma = &w_robust * &z_sq - 1.0;
-        let w_sigma: Array1<f64> = nu.mapv(|nu_i| (2.0 * nu_i) / (nu_i + 3.0));
-
-        // ν derivatives (log link). Score involves digamma differences.
-        let nu_plus_1_half = nu.mapv(|nu_i| (nu_i + 1.0) / 2.0);
-        let nu_half = nu.mapv(|nu_i| nu_i / 2.0);
-        let d1 = digamma_batch(&nu_plus_1_half);
-        let d2 = digamma_batch(&nu_half);
-
-        let term3 = par_zip_map(nu, &z_sq, |nu_i, z2_i| (1.0 + z2_i / nu_i).ln());
-        let term4 = par_zip3_map(nu, &w_robust, &z_sq, |nu_i, w_i, z2_i| {
-            (w_i * z2_i - 1.0) / nu_i
+        // σ derivatives, natural scale: ∂l/∂σ = (w·z² − 1)/σ, i_σ = [2ν/(ν+3)]/σ².
+        // Under the default log link `chain_to_eta` (mu_eta = σ) recovers the
+        // previous `u_η = w·z² − 1` and `w_η = 2ν/(ν+3)`. Returned unfloored.
+        let u_sigma = (&w_robust * &z_sq - 1.0) * &inv_sigma;
+        let i_sigma: Array1<f64> = par_zip_map(nu, &inv_sigma_sq, |nu_i, iss| {
+            (2.0 * nu_i) / (nu_i + 3.0) * iss
         });
-
-        let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
-        // Chain rule for log link: u_η = ν · dl/dν, with an *aggregate* boundary
-        // projection at the ν-floor. Where `FlooredLogLink` binds (ν pinned at
-        // NU_FLOOR), dν/dη is genuinely 0, so per-row scores must not be forwarded
-        // blindly: a negative aggregate walks η_ν downward forever (Δβ never
-        // converges), while a per-row one-sided projection biases the aggregate
-        // upward and produces a limit cycle of lift-off/fall-back at the boundary.
-        // The KKT-correct rule uses the *summed* score over the pinned rows: if it
-        // is ≤ 0 the constrained optimum is at the boundary: freeze those rows
-        // (u = 0) so the block reports a zero step and the loop converges; if it
-        // is > 0 the fit should re-enter the interior: forward the full chain
-        // rule so the aggregate pull is preserved.
-        //
-        // Scope: the single summed score is the exact KKT test only when η_ν is
-        // an intercept (the standard TF usage, and all this crate's ν formulas
-        // in practice). Under a covariate/smooth model on ν the pinned rows
-        // load on different coefficients and a per-coefficient projected
-        // gradient X'g⁺ would be needed; derivatives() has no design-matrix
-        // access, so that refinement belongs in the scoring layer if ν
-        // covariates become a supported pattern.
-        let pinned_tol = NU_FLOOR * (1.0 + 1e-9);
-        let pinned_score: f64 = nu
-            .iter()
-            .zip(dl_dnu.iter())
-            .filter(|(&nu_i, _)| nu_i <= pinned_tol)
-            .map(|(_, &g_i)| g_i)
-            .sum();
-        let boundary_frozen = pinned_score <= 0.0;
-        let u_nu = par_zip_map(nu, &dl_dnu, |nu_i, g_i| {
-            if boundary_frozen && nu_i <= pinned_tol {
-                0.0
-            } else {
-                nu_i * g_i
-            }
-        });
-
-        // Expected Fisher information for ν (Lange–Little–Taylor 1989; identical to
-        // gamlss TF's d2ldv2):
-        //   I_ν = ¼·[ψ'(ν/2) − ψ'((ν+1)/2) − 2(ν+5)/(ν(ν+1)(ν+3))].
-        // Verified against Monte-Carlo E[(ν·dl/dν)²]. The rational term is a small
-        // correction to a near-cancellation: I_ν decays like O(1/ν³), so a sign or
-        // degree error there inflates the weight by orders of magnitude and
-        // effectively freezes ν at its seed.
-        let t1 = trigamma_batch(&nu_half);
-        let t2 = trigamma_batch(&nu_plus_1_half);
-        let t3: Array1<f64> =
-            nu.mapv(|nu_i| (2.0 * (nu_i + 5.0)) / (nu_i * (nu_i + 1.0) * (nu_i + 3.0)));
-        let i_nu = 0.25 * (&t1 - &t2 - &t3);
-        // For log link `W_η = I_ν · ν²`, floored to keep the weight matrix positive definite.
-        let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| (i * nu_i * nu_i).max(MIN_WEIGHT));
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
-            ("nu".to_string(), (u_nu, w_nu)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -309,14 +282,103 @@ impl Distribution for StudentT {
     }
 }
 
+impl StudentT {
+    /// The η-scale `(u_ν, w_ν)` pair, deliberately outside the generic chain rule.
+    ///
+    /// See [`Distribution::eta_derivatives`] on this type for why ν has no
+    /// separable natural scale. Nothing here changed in Phase 2b beyond being
+    /// lifted out of `derivatives` and having its `MIN_WEIGHT` floor removed, so
+    /// that `scoring::step` stays the single place any weight is floored.
+    fn nu_eta_derivatives(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
+        let mu = require(self, params, "mu")?;
+        let sigma = require(self, params, "sigma")?;
+        let nu = require(self, params, "nu")?;
+
+        let z_sq = ((y - mu) / sigma).mapv(|v| v * v);
+        let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
+
+        // ν score involves digamma differences.
+        let nu_plus_1_half = nu.mapv(|nu_i| (nu_i + 1.0) / 2.0);
+        let nu_half = nu.mapv(|nu_i| nu_i / 2.0);
+        let d1 = digamma_batch(&nu_plus_1_half);
+        let d2 = digamma_batch(&nu_half);
+
+        let term3 = par_zip_map(nu, &z_sq, |nu_i, z2_i| (1.0 + z2_i / nu_i).ln());
+        let term4 = par_zip3_map(nu, &w_robust, &z_sq, |nu_i, w_i, z2_i| {
+            (w_i * z2_i - 1.0) / nu_i
+        });
+
+        let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
+        // Chain rule for log link: u_η = ν · dl/dν, with an *aggregate* boundary
+        // projection at the ν-floor. Where `FlooredLogLink` binds (ν pinned at
+        // NU_FLOOR), dν/dη is genuinely 0, so per-row scores must not be forwarded
+        // blindly: a negative aggregate walks η_ν downward forever (Δβ never
+        // converges), while a per-row one-sided projection biases the aggregate
+        // upward and produces a limit cycle of lift-off/fall-back at the boundary.
+        // The KKT-correct rule uses the *summed* score over the pinned rows: if it
+        // is ≤ 0 the constrained optimum is at the boundary: freeze those rows
+        // (u = 0) so the block reports a zero step and the loop converges; if it
+        // is > 0 the fit should re-enter the interior: forward the full chain
+        // rule so the aggregate pull is preserved.
+        //
+        // Scope: the single summed score is the exact KKT test only when η_ν is
+        // an intercept (the standard TF usage, and all this crate's ν formulas
+        // in practice). Under a covariate/smooth model on ν the pinned rows
+        // load on different coefficients and a per-coefficient projected
+        // gradient X'g⁺ would be needed; derivatives() has no design-matrix
+        // access, so that refinement belongs in the scoring layer if ν
+        // covariates become a supported pattern.
+        let pinned_tol = NU_FLOOR * (1.0 + 1e-9);
+        let pinned_score: f64 = nu
+            .iter()
+            .zip(dl_dnu.iter())
+            .filter(|(&nu_i, _)| nu_i <= pinned_tol)
+            .map(|(_, &g_i)| g_i)
+            .sum();
+        let boundary_frozen = pinned_score <= 0.0;
+        let u_nu = par_zip_map(nu, &dl_dnu, |nu_i, g_i| {
+            if boundary_frozen && nu_i <= pinned_tol {
+                0.0
+            } else {
+                nu_i * g_i
+            }
+        });
+
+        // Expected Fisher information for ν (Lange–Little–Taylor 1989; identical to
+        // gamlss TF's d2ldv2):
+        //   I_ν = ¼·[ψ'(ν/2) − ψ'((ν+1)/2) − 2(ν+5)/(ν(ν+1)(ν+3))].
+        // Verified against Monte-Carlo E[(ν·dl/dν)²]. The rational term is a small
+        // correction to a near-cancellation: I_ν decays like O(1/ν³), so a sign or
+        // degree error there inflates the weight by orders of magnitude and
+        // effectively freezes ν at its seed.
+        let t1 = trigamma_batch(&nu_half);
+        let t2 = trigamma_batch(&nu_plus_1_half);
+        let t3: Array1<f64> =
+            nu.mapv(|nu_i| (2.0 * (nu_i + 5.0)) / (nu_i * (nu_i + 1.0) * (nu_i + 3.0)));
+        let i_nu = 0.25 * (&t1 - &t2 - &t3);
+        // For the log link `w_η = I_ν · ν²`. Returned unfloored, like every other
+        // weight: `scoring::step` applies `MIN_WEIGHT` once, and its `<` test catches
+        // the negative values the trigamma near-cancellation can produce as well.
+        let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| i * nu_i * nu_i);
+
+        Ok((u_nu, w_nu))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -426,6 +488,79 @@ mod tests {
         check_score_via_finite_diff(&StudentT, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "sigma", 1e-5);
         check_score_via_finite_diff(&StudentT, &y, &owned, "nu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate, for the two parameters that went through the generic
+        // chain rule. μ is identity-linked, so the default-link check above is
+        // vacuous for it; a log link is what makes it bite (μ is positive here so
+        // the link is well defined).
+        //
+        // ν is deliberately absent: it keeps its hand-written η-scale entry against
+        // `FlooredLogLink`, and overriding its link is rejected as unsupported (see
+        // `Distribution::eta_derivatives` on this type).
+        let y = array![-1.0, 0.5, 2.0];
+        let owned = [
+            ("mu", array![0.5, 0.75, 1.0]),
+            ("sigma", array![1.0, 1.2, 0.8]),
+            ("nu", array![5.0, 8.0, 4.0]),
+        ];
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "mu", &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_sigma() {
+        // Un-folding introduces `1/σ` and `1/σ²` that the previous η-scale forms
+        // cancelled.
+        let y = array![-1.0, 0.5, 2.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, 1.0]),
+            // Spans well past `exp(MIN_ETA) ≈ 9.4e-14`, the smallest σ a log link
+            // reaches inside its own η clamp. σ = 0 exactly is excluded: there
+            // `z = (y−μ)/σ` overflows and `z²` becomes infinite, so `w_robust · z²`
+            // is `0 · ∞ = NaN`. That predates Altitude #1 (the old `z` overflowed
+            // identically) and is a separate fix.
+            ("sigma", array![1e-100, 1e-13, 1e-8]),
+            ("nu", array![5.0, 8.0, 4.0]),
+        ];
+        let p = params_view(&owned);
+        let natural = StudentT.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+        }
+        for name in ["mu", "sigma", "nu"] {
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+        }
+    }
+
+    #[test]
+    fn natural_derivatives_omit_nu_but_eta_derivatives_supply_it() {
+        // The hybrid contract: `derivatives` covers only the two separable
+        // parameters, and `eta_derivatives` fills ν back in. A family that silently
+        // dropped ν from the η-scale map would freeze the ν block with no error.
+        let y = array![-1.0, 0.5, 2.0];
+        let owned = [
+            ("mu", array![0.0, 0.5, 1.0]),
+            ("sigma", array![1.0, 1.2, 0.8]),
+            ("nu", array![5.0, 8.0, 4.0]),
+        ];
+        let p = params_view(&owned);
+        let natural = StudentT.derivatives(&y, &p).unwrap();
+        let mut keys: Vec<&str> = natural.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["mu", "sigma"]);
+
+        let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
+        let mut keys: Vec<&str> = chained.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["mu", "nu", "sigma"]);
     }
 
     #[test]

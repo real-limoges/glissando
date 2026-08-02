@@ -55,7 +55,7 @@ pub trait Link: Debug + Send + Sync {
     /// itself, which would be identically zero in a saturated region and would
     /// freeze a saturated row instead of letting it walk back out.
     /// [`FlooredLogLink`] is the one exception: its hard zero below the floor is a
-    /// modelling constraint that the Student-t ν-floor KKT projection depends on.
+    /// modeling constraint that the Student-t ν-floor KKT projection depends on.
     ///
     /// The default is a symmetric finite difference of `mu_eta` so external `Link`
     /// impls keep compiling. It differences `mu_eta` rather than `inv_link` twice:
@@ -640,7 +640,7 @@ mod tests {
         for link in links {
             // The FlooredLogLink kink sits at η = ln(2) ≈ 0.693; the grid straddles
             // it without landing on it, so every point has a one-sided-constant or
-            // fully-active neighbourhood wider than the difference step.
+            // fully-active neighborhood wider than the difference step.
             for &eta in &[-5.0, -2.0, -0.5, 0.0, 0.5, 2.0, 5.0] {
                 let analytic = link.mu_eta2(eta);
                 let numeric = fd_mu_eta2(link, eta);

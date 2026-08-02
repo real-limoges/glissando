@@ -23,6 +23,22 @@ pub(crate) use links::{MAX_ETA, MIN_ETA, MIN_POSITIVE};
 /// Lower bound on Fisher-information weights to keep `W` positive definite.
 pub(crate) const MIN_WEIGHT: f64 = 1e-6;
 
+/// Floor for a denominator that the η-scale chain rule multiplies straight back out.
+///
+/// Natural-scale [`Distribution::derivatives`] bodies divide by quantities the old
+/// folded η-scale forms cancelled algebraically (`1/μ`, `1/σ`, `1/(μ(1−μ))`). Those
+/// divisions have to stay finite, but the guard must never *bind* for any θ a link
+/// can actually produce: if it did, it would disagree with the `mu_eta` that
+/// [`chain_to_eta`] multiplies back in, and the product would no longer telescope.
+/// That is why this is a floor on the *denominator* and not a clamp on θ, and why
+/// it is so much smaller than [`MIN_POSITIVE`].
+///
+/// `1e-300` leaves both margins comfortable. It sits roughly 290 orders of
+/// magnitude below anything a built-in link yields inside its own η clamp
+/// (`exp(MIN_ETA) ≈ 9.4e-14`), and still leaves about seven decades of headroom
+/// before `numerator / DENOM_FLOOR` overflows for a numerator of realistic size.
+pub(crate) const DENOM_FLOOR: f64 = 1e-300;
+
 /// Shared probability/mass floor: values are clamped into `[PROB_EPS, 1 − PROB_EPS]`
 /// before a logarithm or division, so a saturated tail can't produce `−inf` / NaN.
 /// Used by the structural wrappers ([`Censored`]/[`Truncated`]/[`Hurdle`]) and by
@@ -98,22 +114,21 @@ pub fn chain_to_eta(
         .collect()
 }
 
-/// Implement [`Distribution::eta_derivatives`] as a pass-through to
-/// [`Distribution::derivatives`].
+/// Implement [`Distribution::eta_derivatives`] by chaining the family's
+/// natural-scale [`Distribution::derivatives`] through the generic rule.
 ///
-/// For a family that has not yet been converted to the natural-scale contract
-/// (Altitude #1, Phase 2b): its `derivatives` still folds in the chain rule for its
-/// own default link, so the η-scale adapter has nothing to do. Grepping for this
-/// macro lists exactly the families still on the old contract.
-macro_rules! eta_derivatives_passthrough {
+/// Every family with a separable natural scale uses this; it is the whole adapter.
+/// The three that do not ([`Ocat`], [`StudentT`] for its `ν`, and the structural
+/// wrappers) write `eta_derivatives` out by hand and document why.
+macro_rules! eta_derivatives_via_chain {
     () => {
         fn eta_derivatives(
             &self,
             y: &::ndarray::Array1<f64>,
             params: &::std::collections::HashMap<&str, &::ndarray::Array1<f64>>,
-            _ctx: &$crate::distributions::LinkContext,
+            ctx: &$crate::distributions::LinkContext,
         ) -> $crate::distributions::DerivativesResult {
-            self.derivatives(y, params)
+            $crate::distributions::chain_to_eta(self.derivatives(y, params)?, ctx)
         }
     };
 }
@@ -138,12 +153,9 @@ pub trait Distribution: Debug + Send + Sync {
     /// ([`Ocat`], [`StudentT`]'s `ν`, and the structural wrappers) do not have to
     /// invent one; they override [`Self::eta_derivatives`] directly instead.
     ///
-    /// **Transitional (Altitude #1, Phase 2a).** Families are converted from the
-    /// old η-scale contract to this one a commit at a time in Phase 2b. Until a
-    /// given family is converted, its `derivatives` still returns η-scale values
-    /// and its `eta_derivatives` passes them through unchanged, so nothing observes
-    /// the difference. Grep for `eta_derivatives_passthrough!` to see which
-    /// families are still on the old contract.
+    /// **The returned `i_θ` must be unfloored.** `MIN_WEIGHT` is applied exactly
+    /// once, downstream in `scoring::step`, after the chain rule; see
+    /// [`chain_to_eta`] for why flooring here instead is not a rounding difference.
     fn derivatives(
         &self,
         _y: &Array1<f64>,
@@ -1013,130 +1025,4 @@ mod tests {
     // lands, these must be inverted into
     // `check_eta_score_via_finite_diff(...)` calls that assert agreement — the
     // failure of these tests is the signal the refactor worked.
-
-    /// Central difference of `∂l/∂η` for `target` under an explicit `link`.
-    fn fd_eta_score<D: Distribution + ?Sized>(
-        family: &D,
-        y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
-        target: &str,
-        link: &dyn Link,
-    ) -> Array1<f64> {
-        let eps = 1e-6;
-        let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
-        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
-            owned.iter().map(|(k, v)| (*k, v.clone())).collect();
-        let mut out = Array1::zeros(y.len());
-        for i in 0..y.len() {
-            let orig = owned[idx].1[i];
-            let eta = link.link(orig);
-            perturbed[idx].1[i] = link.inv_link(eta + eps);
-            let pp: HashMap<&str, &Array1<f64>> = perturbed.iter().map(|(k, v)| (*k, v)).collect();
-            let l_plus = family.loglik_pointwise(y, &pp).unwrap()[i];
-            perturbed[idx].1[i] = link.inv_link(eta - eps);
-            let pm: HashMap<&str, &Array1<f64>> = perturbed.iter().map(|(k, v)| (*k, v)).collect();
-            let l_minus = family.loglik_pointwise(y, &pm).unwrap()[i];
-            perturbed[idx].1[i] = orig;
-            out[i] = (l_plus - l_minus) / (2.0 * eps);
-        }
-        out
-    }
-
-    /// The analytic η-scale score for `target` when `target` is fitted on `link`.
-    ///
-    /// Goes through `eta_derivatives` rather than `derivatives` so these tests
-    /// exercise the seam the fitting loop actually uses; the value they record is
-    /// therefore the one that changes when the family is converted.
-    fn eta_score<D: Distribution + ?Sized>(
-        family: &D,
-        y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
-        target: &str,
-        link: &dyn Link,
-    ) -> Array1<f64> {
-        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
-        let links = test_helpers::ParamLinks::overriding(family, &p, target, link);
-        family.eta_derivatives(y, &p, &links.context()).unwrap()[target]
-            .0
-            .clone()
-    }
-
-    #[test]
-    fn binomial_score_is_wrong_under_a_probit_link_today() {
-        // Binomial μ folds the *logit* chain rule into `u = y − n·μ`
-        // (`binomial.rs:64-70`). Under a probit link the correct score is
-        // `φ(η)·∂l/∂μ`, which differs by `φ(η)/(μ(1−μ))`.
-        let y = array![0.0, 3.0, 5.0, 8.0, 10.0];
-        let owned = [("mu", array![0.15, 0.35, 0.5, 0.8, 0.93])];
-        let analytic = eta_score(&Binomial::new(10), &y, &owned, "mu", &ProbitLink);
-        let numeric = fd_eta_score(&Binomial::new(10), &y, &owned, "mu", &ProbitLink);
-
-        // Sanity: the same family agrees with its own default link.
-        let analytic_logit = eta_score(&Binomial::new(10), &y, &owned, "mu", &LogitLink);
-        let logit_fd = fd_eta_score(&Binomial::new(10), &y, &owned, "mu", &LogitLink);
-        for i in 0..y.len() {
-            assert!(
-                (analytic_logit[i] - logit_fd[i]).abs() / analytic_logit[i].abs().max(1.0) < 1e-5,
-                "logit (default) must already agree at obs {i}"
-            );
-        }
-
-        // The bug: probit disagrees, and not marginally.
-        let max_rel: f64 = (0..y.len())
-            .map(|i| (analytic[i] - numeric[i]).abs() / numeric[i].abs().max(1.0))
-            .fold(0.0, f64::max);
-        assert!(
-            max_rel > 0.1,
-            "expected the probit score to be badly wrong today, max rel diff {max_rel:.3e}"
-        );
-    }
-
-    #[test]
-    fn poisson_score_is_wrong_under_a_sqrt_link_today() {
-        // Poisson μ folds the *log* chain rule into `u = y − μ`
-        // (`poisson.rs:41-44`). Under `sqrt`, `dμ/dη = 2η = 2√μ`.
-        let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
-        let owned = [("mu", array![0.5, 1.5, 3.0, 8.0, 5.0])];
-        let analytic = eta_score(&Poisson, &y, &owned, "mu", &SqrtLink);
-        let numeric = fd_eta_score(&Poisson, &y, &owned, "mu", &SqrtLink);
-
-        let max_rel: f64 = (0..y.len())
-            .map(|i| (analytic[i] - numeric[i]).abs() / numeric[i].abs().max(1.0))
-            .fold(0.0, f64::max);
-        assert!(
-            max_rel > 0.1,
-            "expected the sqrt score to be badly wrong today, max rel diff {max_rel:.3e}"
-        );
-    }
-
-    #[test]
-    fn identity_link_parameters_are_only_checked_vacuously_today() {
-        // Gaussian μ has an identity default link, so the default-link finite
-        // difference cannot distinguish a natural-scale score from an η-scale
-        // one. Passing a non-identity link is what makes the check bite — and
-        // today it fails, because `gaussian.rs:52` returns `(y−μ)/σ²` with no
-        // `dμ/dη` factor at all.
-        let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
-        let owned = [
-            ("mu", array![1.0, 1.5, 2.5, 3.0, 4.0]),
-            ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0]),
-        ];
-        // Identity: vacuously fine.
-        let analytic_id = eta_score(&Gaussian, &y, &owned, "mu", &IdentityLink);
-        let id_fd = fd_eta_score(&Gaussian, &y, &owned, "mu", &IdentityLink);
-        for i in 0..y.len() {
-            assert!((analytic_id[i] - id_fd[i]).abs() / analytic_id[i].abs().max(1.0) < 1e-5);
-        }
-
-        // Log link on μ: the score should gain a factor of μ, and does not.
-        let analytic = eta_score(&Gaussian, &y, &owned, "mu", &LogLink);
-        let log_fd = fd_eta_score(&Gaussian, &y, &owned, "mu", &LogLink);
-        let max_rel: f64 = (0..y.len())
-            .map(|i| (analytic[i] - log_fd[i]).abs() / log_fd[i].abs().max(1.0))
-            .fold(0.0, f64::max);
-        assert!(
-            max_rel > 0.1,
-            "expected the log-link μ score to be wrong today, max rel diff {max_rel:.3e}"
-        );
-    }
 }

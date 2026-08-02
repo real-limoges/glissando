@@ -2,7 +2,7 @@
 
 use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    MIN_POSITIVE,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, std_normal_cdf, std_normal_pdf, std_normal_quantile};
 use ndarray::Array1;
@@ -33,7 +33,7 @@ impl Distribution for Gaussian {
         }
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
@@ -41,25 +41,37 @@ impl Distribution for Gaussian {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
-        //   μ (identity link):  u = (y−μ)/σ²,                w = 1/σ².
-        //   σ (log link, η = log σ):  u = ((y−μ)² − σ²)/σ²,  w = 2.
+        // Natural scale (Altitude #1; no link folded in):
+        //   μ:  ∂l/∂μ = (y−μ)/σ²,               i_μ = 1/σ².
+        //   σ:  ∂l/∂σ = ((y−μ)² − σ²)/σ³,       i_σ = 2/σ².
         // Full derivation in docs/math/mathematics.md.
+        //
+        // `chain_to_eta` recovers the classic η-scale pairs under the default
+        // links: μ is identity (`mu_eta = 1`, so its entries pass through
+        // untouched), and σ is log (`mu_eta = σ`), giving `u_η = ((y−μ)²−σ²)/σ²`
+        // and `w_η = σ²·(2/σ²) = 2`. The weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
         let sigma_sq = sigma.mapv(|s| s * s);
+        // Guard each reciprocal at its own power of σ rather than clamping σ, so
+        // the value `chain_to_eta` multiplies back in stays exactly the caller's σ.
+        // Guarding σ instead and then cubing would overflow to infinity for a σ the
+        // log link can still underflow to, and `inf · 0` is NaN.
+        let inv_sigma_sq = sigma_sq.mapv(|s2| 1.0 / s2.max(DENOM_FLOOR));
+        let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
         let residual = y - mu;
         let residual_sq = residual.mapv(|r| r * r);
 
-        let u_mu = &residual / &sigma_sq;
-        let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
+        let u_mu = &residual * &inv_sigma_sq;
+        let i_mu = inv_sigma_sq.clone();
 
-        let u_sigma = (&residual_sq - &sigma_sq) / &sigma_sq;
-        let w_sigma = Array1::from_elem(y.len(), 2.0);
+        let u_sigma = (&residual_sq - &sigma_sq) * &inv_sigma_cubed;
+        let i_sigma = 2.0 * &inv_sigma_sq;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -153,9 +165,11 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        default_link_derivatives, derivative_keys_match_parameters, params_view,
+        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
     #[cfg(not(target_arch = "wasm32"))]
     use proptest::prelude::*;
@@ -184,6 +198,49 @@ mod tests {
         assert!(u_mu.iter().all(|&v| v.abs() < 1e-12));
         // w_mu = 1/sigma^2 = 1.0
         assert!(w_mu.iter().all(|&v| (v - 1.0).abs() < 1e-12));
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. Gaussian μ is identity-linked, so a default-link
+        // finite difference cannot distinguish `∂l/∂μ` from `∂l/∂η` at all; a log
+        // link on μ is what makes the check bite. This replaces
+        // `identity_link_parameters_are_only_checked_vacuously_today`, the Phase 0
+        // characterization test that asserted the opposite.
+        //
+        // μ is positive throughout the fixture so the log and sqrt links are
+        // well defined on it.
+        let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
+        let owned = [
+            ("mu", array![1.0, 1.5, 2.5, 3.0, 4.0]),
+            ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0]),
+        ];
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_sigma() {
+        // Un-folding introduces `1/σ²` and `1/σ³` that the old `w_σ = 2` cancelled.
+        // Both have to stay finite where the log link can still land, including
+        // where σ has underflowed to exactly zero.
+        let y = array![0.0, 1.0, 2.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0]),
+            ("sigma", array![0.0, 1e-320, 1e-8]),
+        ];
+        let p = params_view(&owned);
+        let natural = Gaussian.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Gaussian, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+            assert!(w.iter().all(|&v| v >= 0.0));
+        }
     }
 
     #[test]

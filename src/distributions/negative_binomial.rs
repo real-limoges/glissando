@@ -2,7 +2,7 @@
 
 use super::{
     discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -59,7 +59,7 @@ impl Distribution for NegativeBinomial {
         }
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
@@ -69,7 +69,11 @@ impl Distribution for NegativeBinomial {
         // NB2 log-likelihood:
         //   l = log Γ(y + 1/σ) − log Γ(1/σ) − log y!
         //       + (1/σ)·log(1/(1+σμ)) + y·log(σμ/(1+σμ)).
-        // μ (log link):  u = (y−μ)/(1+σμ),  w = μ/(1+σμ).
+        // Natural scale (Altitude #1):
+        //   μ: ∂l/∂μ = (y−μ)/(μ(1+σμ)),   i_μ = 1/(μ(1+σμ)).
+        // Under the default log link `mu_eta = μ`, so `chain_to_eta` recovers the
+        // previous `u_μ = (y−μ)/(1+σμ)` and `w_μ = μ/(1+σμ)`. Weights are returned
+        // unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
@@ -77,12 +81,16 @@ impl Distribution for NegativeBinomial {
         let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
         let one_plus_sigma_mu = par_zip_map(&sigma_safe, &mu_safe, |s, m| 1.0 + s * m);
 
-        let u_mu = (y - &mu_safe) / &one_plus_sigma_mu;
-        let w_mu = &mu_safe / &one_plus_sigma_mu;
+        // Guard the reciprocal rather than clamping μ further, so the value the
+        // chain rule multiplies back in stays exactly the caller's μ.
+        let i_mu = par_zip_map(&mu_safe, &one_plus_sigma_mu, |m, d| {
+            1.0 / (m * d).max(DENOM_FLOOR)
+        });
+        let u_mu = (y - &mu_safe) * &i_mu;
 
-        // σ (log link, r = 1/σ):
+        // σ (r = 1/σ):
         //   dl/dr = ψ(y+r) − ψ(r) − log(1+σμ) + (μ−y)/(r+μ)
-        //   dl/dσ = −(1/σ²)·dl/dr,   dl/dη = σ·dl/dσ = −(1/σ)·dl/dr.
+        //   dl/dσ = −(1/σ²)·dl/dr.
         let r = sigma_safe.mapv(|s| 1.0 / s);
         let y_plus_r = y + &r;
         let psi_y_r = digamma_batch(&y_plus_r);
@@ -91,19 +99,25 @@ impl Distribution for NegativeBinomial {
         let r_plus_mu = &r + &mu_safe;
         let ratio_term = (&mu_safe - y) / &r_plus_mu;
 
-        let u_sigma = (-1.0 / &sigma_safe) * (&psi_y_r - &psi_r - &log_term + &ratio_term);
+        let inv_sigma_sq = sigma_safe.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
+        let u_sigma = -(&inv_sigma_sq) * (&psi_y_r - &psi_r - &log_term + &ratio_term);
 
-        // Working weight for σ: gamlss NBI's squared-score convention
-        // (d2ldd2 = −dldd², i.e. w_η = u_η²), floored at MIN_WEIGHT. The exact
-        // expected information has no closed form (it involves E[ψ'(y+r)]); the
-        // previous ψ'(r)/σ² approximation dropped same-order terms and behaved
-        // like 1/σ near the Poisson boundary, over-damping σ updates and pushing
-        // λ/EDF for σ smooths away from the gamlss oracle.
-        let w_sigma = u_sigma.mapv(|u| (u * u).max(MIN_WEIGHT));
+        // Working "information" for σ: gamlss NBI's squared-score convention
+        // (d2ldd2 = −dldd², i.e. the weight is the squared score). The exact
+        // expected information has no closed form (it involves E[ψ'(y+r)]); an
+        // earlier ψ'(r)/σ² approximation dropped same-order terms and behaved like
+        // 1/σ near the Poisson boundary, over-damping σ updates and pushing λ/EDF
+        // for σ smooths away from the gamlss oracle.
+        //
+        // The convention is chain-rule covariant, so it needs no special handling
+        // here: taking `i_σ := (∂l/∂σ)²` gives `mu_eta²·i_σ = (mu_eta·∂l/∂σ)² =
+        // u_η²`, which is the previous η-scale weight *for any link*, not just the
+        // default log one. Returned unfloored, like every other weight.
+        let i_sigma = u_sigma.mapv(|u| u * u);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -176,9 +190,11 @@ impl Distribution for NegativeBinomial {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -223,6 +239,41 @@ mod tests {
         ];
         check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. Both parameters default to log, so a non-log link
+        // is the only thing that can tell a natural-scale score from an η-scale one.
+        let y = array![0.0, 4.0, 10.0];
+        let owned = [
+            ("mu", array![1.0, 4.0, 8.0]),
+            ("sigma", array![0.5, 0.3, 0.4]),
+        ];
+        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", &SqrtLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/(μ(1+σμ))` and `1/σ²` that the previous η-scale
+        // forms cancelled.
+        let y = array![0.0, 3.0, 7.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-8, 0.0, 1e-320]),
+        ];
+        let p = params_view(&owned);
+        let natural = NegativeBinomial.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&NegativeBinomial, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+            assert!(w.iter().all(|&v| v >= 0.0));
+        }
     }
 
     #[test]

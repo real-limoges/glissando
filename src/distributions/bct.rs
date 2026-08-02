@@ -14,7 +14,7 @@ use super::boxcox::{
 };
 use super::{
     clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma, trigamma};
 use ndarray::Array1;
@@ -67,7 +67,7 @@ impl Distribution for BCT {
         })
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
@@ -76,11 +76,13 @@ impl Distribution for BCT {
     ) -> DerivativesResult {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG; the `t` robustifying weight
         // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG). Full
-        // derivation in docs/math/mathematics.md [BCCG]. η-scale scores:
-        //   u_μ = w_t·z·T/σ − ν   (T = (y/μ)^ν = 1+νσz)
-        //   u_σ = w_t·z² − 1
-        //   u_ν = −w_t·z·∂z/∂ν + log(y/μ)
-        //   u_τ = τ·½[ψ((τ+1)/2) − ψ(τ/2) − ln(1+z²/τ) + (w_t·z²−1)/τ]
+        // derivation in docs/math/mathematics.md [BCCG]. Natural-scale scores
+        // (Altitude #1); `chain_to_eta` reapplies the default links (log, log,
+        // identity, log) to recover the previous η-scale values exactly:
+        //   dl/dμ = [w_t·z·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
+        //   dl/dσ = [w_t·z² − 1] / σ
+        //   dl/dν = −w_t·z·∂z/∂ν + log(y/μ)
+        //   dl/dτ = ½[ψ((τ+1)/2) − ψ(τ/2) − ln(1+z²/τ) + (w_t·z²−1)/τ]
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
@@ -88,13 +90,13 @@ impl Distribution for BCT {
         let n = y.len();
 
         let mut u_mu = Array1::<f64>::zeros(n);
-        let mut w_mu = Array1::<f64>::zeros(n);
+        let mut i_mu = Array1::<f64>::zeros(n);
         let mut u_sigma = Array1::<f64>::zeros(n);
-        let mut w_sigma = Array1::<f64>::zeros(n);
+        let mut i_sigma = Array1::<f64>::zeros(n);
         let mut u_nu = Array1::<f64>::zeros(n);
-        let mut w_nu = Array1::<f64>::zeros(n);
+        let mut i_nu = Array1::<f64>::zeros(n);
         let mut u_tau = Array1::<f64>::zeros(n);
-        let mut w_tau = Array1::<f64>::zeros(n);
+        let mut i_tau_out = Array1::<f64>::zeros(n);
 
         for i in 0..n {
             let m = mu[i].max(MIN_POSITIVE);
@@ -108,35 +110,45 @@ impl Distribution for BCT {
             let w_t = (t + 1.0) / (t + z2); // t robustifying weight
             let big_t = 1.0 + nu_i * s * z; // T = (y/μ)^ν
 
-            u_mu[i] = w_t * z * big_t / s - nu_i;
-            u_sigma[i] = w_t * z2 - 1.0;
+            // Guard each reciprocal at the power it is used at: raising an
+            // already-guarded reciprocal to a power would overflow to infinity for a
+            // parameter the log link can still underflow to, and `inf · 0` is NaN.
+            let inv_m = 1.0 / m.max(DENOM_FLOOR);
+            let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
+            let inv_s = 1.0 / s.max(DENOM_FLOOR);
+            let inv_s_sq = 1.0 / (s * s).max(DENOM_FLOOR);
+
+            u_mu[i] = (w_t * z * big_t / s - nu_i) * inv_m;
+            u_sigma[i] = (w_t * z2 - 1.0) * inv_s;
             u_nu[i] = -w_t * z * dz_dnu + l;
 
-            // τ score (log link): the same digamma form as StudentT's df parameter.
-            let dl_dtau = 0.5
+            // τ score: the same digamma form as StudentT's df parameter. This was
+            // already separable; the conversion is the deletion of the trailing `t *`.
+            u_tau[i] = 0.5
                 * (digamma((t + 1.0) / 2.0) - digamma(t / 2.0) - (1.0 + z2 / t).ln()
                     + (w_t * z2 - 1.0) / t);
-            u_tau[i] = t * dl_dtau;
 
-            // Expected Fisher information (η-scale), each reducing to BCCG at τ → ∞:
-            //   w_μ = (τ+1)/((τ+3)σ²) + 2ν²,  w_σ = 2τ/(τ+3),  w_ν = (7σ²/4)(τ+1)/(τ+3).
+            // Expected Fisher information, each reducing to BCCG at τ → ∞:
+            //   I_μμ = [(τ+1)/((τ+3)σ²) + 2ν²]/μ²,  I_σσ = [2τ/(τ+3)]/σ²,
+            //   I_νν = (7σ²/4)(τ+1)/(τ+3).
             let shrink = (t + 1.0) / (t + 3.0);
-            w_mu[i] = shrink / (s * s) + 2.0 * nu_i * nu_i;
-            w_sigma[i] = 2.0 * t / (t + 3.0);
-            w_nu[i] = (7.0 * s * s / 4.0) * shrink;
-            // τ information mirrors StudentT: i_τ·τ², → 0 as τ → ∞ (df unidentifiable
-            // for a normal), floored to keep W positive definite.
-            let i_tau = 0.25
+            i_mu[i] = (shrink * inv_s_sq + 2.0 * nu_i * nu_i) * inv_m_sq;
+            i_sigma[i] = (2.0 * t / (t + 3.0)) * inv_s_sq;
+            i_nu[i] = (7.0 * s * s / 4.0) * shrink;
+            // τ information mirrors StudentT and → 0 as τ → ∞ (df is unidentifiable
+            // for a normal). `.abs()` survives the un-fold because it previously
+            // wrapped `i_τ·τ²` and τ² > 0, so `|i_τ·τ²| = |i_τ|·τ²`.
+            i_tau_out[i] = (0.25
                 * (trigamma(t / 2.0) - trigamma((t + 1.0) / 2.0)
-                    + 2.0 * (t + 3.0) / (t * (t + 1.0)));
-            w_tau[i] = (i_tau * t * t).abs().max(MIN_WEIGHT);
+                    + 2.0 * (t + 3.0) / (t * (t + 1.0))))
+                .abs();
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
-            ("nu".to_string(), (u_nu, w_nu)),
-            ("tau".to_string(), (u_tau, w_tau)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("nu".to_string(), (u_nu, i_nu)),
+            ("tau".to_string(), (u_tau, i_tau_out)),
         ]))
     }
 
@@ -257,8 +269,10 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, params_view,
     };
+    use crate::distributions::{LogLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -289,6 +303,47 @@ mod tests {
         check_score_via_finite_diff(&BCT, &y, &owned, "sigma", 1e-5);
         check_score_via_finite_diff(&BCT, &y, &owned, "nu", 1e-5);
         check_score_via_finite_diff(&BCT, &y, &owned, "tau", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. μ, σ (and τ) default to log, ν to identity, so
+        // only a non-default link can tell a natural-scale score from an η-scale
+        // one. ν is held positive here so a log link is well defined on it; the
+        // default-link test above covers the negative and near-zero branches.
+        let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            ("nu", array![1.0, 0.5, 1.5, 0.75, 2.0]),
+            ("tau", array![6.0, 8.0, 5.0, 12.0, 10.0]),
+        ];
+        check_eta_score_via_finite_diff(&BCT, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCT, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCT, &y, &owned, "nu", &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCT, &y, &owned, "tau", &SqrtLink, 1e-4);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
+        // η-scale forms cancelled.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-8, 0.0, 1e-320]),
+            ("nu", array![1.0, 0.5, -0.5]),
+            ("tau", array![1e-320, 2.0, 3.0]),
+        ];
+        let p = params_view(&owned);
+        let natural = BCT.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&BCT, &y, &p).unwrap();
+        for name in ["mu", "sigma", "nu", "tau"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+        }
     }
 
     #[test]
