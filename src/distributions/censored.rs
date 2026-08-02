@@ -22,7 +22,7 @@
 use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
-use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
+use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -47,7 +47,7 @@ pub enum CensorStatus {
 /// The response `y` passed to fit / predict carries the observed time (or, for
 /// interval rows, the interval's lower bound); `upper` carries the interval upper
 /// bound for [`CensorStatus::Interval`] rows and is ignored for the rest. The
-/// wrapper fits the base family's parameters — censoring only reshapes the
+/// wrapper fits the base family's parameters; censoring only reshapes the
 /// likelihood, so `cdf` / `quantile` / `variance` / `expected_value` delegate to
 /// the base.
 #[derive(Debug)]
@@ -59,7 +59,7 @@ pub struct Censored {
     upper: Array1<f64>,
     /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
     /// immutable after construction, so this is computed once here instead of
-    /// rescanned on every `loglik_pointwise` / `derivatives` call (i.e. every
+    /// rescanned on every `loglik_pointwise` / `theta_derivatives` call (i.e. every
     /// IRLS iteration).
     has_interval: bool,
 }
@@ -119,6 +119,7 @@ impl Distribution for Censored {
     delegate_to_base!(
         parameters,
         default_link,
+        allows_link_override,
         initial_value,
         is_discrete,
         variance,
@@ -156,22 +157,33 @@ impl Distribution for Censored {
         Ok(out)
     }
 
-    fn derivatives(
+    /// The CDF chain rule below reads `mu_eta2`, so the scoring loop must build a
+    /// full second-order [`LinkContext`] rather than a first-order one.
+    fn needs_second_order_links(&self) -> bool {
+        true
+    }
+
+    /// Overrides the η-scale adapter directly: the censored rows carry *observed*
+    /// information, which is not link-invariant, so there is no natural-scale
+    /// `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// [`Link::mu_eta2`].
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> DerivativesResult {
         self.check_len(y.len())?;
         // Event rows keep the base score / Fisher weight; censored rows are
         // overwritten with the survival / interval score and observed-information
         // weight built from F, F', F''.
-        let base_derivs = self.base.derivatives(y, params)?;
+        let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let f_y = self.base.cdf(y, params)?;
-        let grad_y = cdf_eta_grads(self.base.as_ref(), y, &f_y, params)?;
+        let grad_y = cdf_eta_grads(self.base.as_ref(), y, &f_y, params, ctx)?;
 
         let (f_up, grad_up) = if self.has_interval {
             let f_up = self.base.cdf(&self.upper, params)?;
-            let grad_up = cdf_eta_grads(self.base.as_ref(), &self.upper, &f_up, params)?;
+            let grad_up = cdf_eta_grads(self.base.as_ref(), &self.upper, &f_up, params, ctx)?;
             (Some(f_up), Some(grad_up))
         } else {
             (None, None)
@@ -185,12 +197,12 @@ impl Distribution for Censored {
                     CensorStatus::Right => {
                         let s = clamp_prob(1.0 - f_y[i]);
                         u[i] = -d1y[i] / s;
-                        w[i] = (d2y[i] / s + (d1y[i] / s).powi(2)).max(MIN_WEIGHT);
+                        w[i] = d2y[i] / s + (d1y[i] / s).powi(2);
                     }
                     CensorStatus::Left => {
                         let fv = clamp_prob(f_y[i]);
                         u[i] = d1y[i] / fv;
-                        w[i] = (-d2y[i] / fv + (d1y[i] / fv).powi(2)).max(MIN_WEIGHT);
+                        w[i] = -d2y[i] / fv + (d1y[i] / fv).powi(2);
                     }
                     CensorStatus::Interval => {
                         let (d1u, d2u) = &grad_up.as_ref().expect("interval grads")[param];
@@ -199,7 +211,7 @@ impl Distribution for Censored {
                         let d1 = d1u[i] - d1y[i];
                         let d2 = d2u[i] - d2y[i];
                         u[i] = d1 / dd;
-                        w[i] = (-d2 / dd + (d1 / dd).powi(2)).max(MIN_WEIGHT);
+                        w[i] = -d2 / dd + (d1 / dd).powi(2);
                     }
                 }
             }
@@ -222,8 +234,11 @@ impl Distribution for Censored {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::test_helpers::{check_score_via_finite_diff, params_view};
-    use crate::distributions::Gaussian;
+    use crate::distributions::test_helpers::{
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters_observed_info, finite_array, params_view,
+    };
+    use crate::distributions::{Gaussian, SqrtLink};
     use ndarray::array;
 
     fn gaussian_owned() -> Vec<(&'static str, Array1<f64>)> {
@@ -289,8 +304,8 @@ mod tests {
         let status = Array1::from_elem(4, CensorStatus::Event);
         let cens = Censored::new(Box::new(Gaussian::new()), status);
 
-        let base = Gaussian.derivatives(&y, &p).unwrap();
-        let got = cens.derivatives(&y, &p).unwrap();
+        let base = default_link_derivatives(&Gaussian, &y, &p).unwrap();
+        let got = default_link_derivatives(&cens, &y, &p).unwrap();
         for param in ["mu", "sigma"] {
             let (ub, _) = &base[param];
             let (ug, _) = &got[param];
@@ -317,6 +332,25 @@ mod tests {
     }
 
     #[test]
+    fn derivative_keys_and_weights_are_well_formed() {
+        // The structural wrappers had no `derivative_keys_match_parameters_observed_info`
+        // coverage, so nothing checked that they emit an entry per parameter
+        // with finite, non-negative weights. All four status arms are present so
+        // each overwrite branch is exercised.
+        let y = array![0.3, 0.7, 1.1, -0.2];
+        let owned = gaussian_owned();
+        let upper = array![1.0, 1.5, 2.0, 0.5];
+        let status = array![
+            CensorStatus::Event,
+            CensorStatus::Right,
+            CensorStatus::Left,
+            CensorStatus::Interval,
+        ];
+        let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
+        derivative_keys_match_parameters_observed_info(&cens, params_view(&owned), &y);
+    }
+
+    #[test]
     fn interval_score_matches_finite_diff() {
         // Interval censoring is the one branch `censored_score_matches_finite_diff`
         // doesn't exercise; check it in isolation (mixed with Event/Right so the
@@ -333,6 +367,62 @@ mod tests {
         let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
         check_score_via_finite_diff(&cens, &y, &owned, "mu", 1e-4);
         check_score_via_finite_diff(&cens, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_a_non_default_link() {
+        // Altitude #1 Phase 3 acceptance gate. Before the CDF derivatives moved to
+        // the natural scale, `cdf_eta_grads` chained through Gaussian's *default*
+        // links no matter what the fit resolved, so this score was wrong by a
+        // factor of `mu_eta_default / mu_eta_actual` on every censored row.
+        //
+        // σ goes on `sqrt` rather than the usual suspects because η = √σ keeps the
+        // fixture's positive σ in the link's domain. μ deliberately stays on
+        // identity: this fixture has μ < 0, which `sqrt` and `inverse_square`
+        // cannot represent.
+        let y = array![0.0, -0.5, 0.3, 1.0];
+        let upper = array![1.0, 0.5, 1.2, 2.0];
+        let owned = gaussian_owned();
+        let status = array![
+            CensorStatus::Interval,
+            CensorStatus::Left,
+            CensorStatus::Event,
+            CensorStatus::Right,
+        ];
+        let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
+        check_eta_score_via_finite_diff(&cens, &y, &owned, "sigma", &SqrtLink, 1e-4);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_fixture() {
+        // Altitude #1 Phase 3, gate (d). Two things changed under this test: the
+        // base's CDF derivatives are now un-folded (new divisions by σ and σ²), and
+        // the family-level `.max(MIN_WEIGHT)` that used to launder every censored
+        // row's weight is gone. A saturating F drives `clamp_prob` to both of its
+        // rails, so `d1/F` and `d2/F` are evaluated at `PROB_EPS`.
+        //
+        // Weights are checked for finiteness only, not for sign: these rows carry
+        // observed information, which is legitimately negative in places (see
+        // `derivative_keys_match_parameters_observed_info`).
+        let y = array![-40.0, 40.0, 0.0, 0.0];
+        let upper = array![0.0, 0.0, 0.0, 1e300];
+        let owned = vec![
+            ("mu", array![0.0, 0.0, 0.0, 0.0]),
+            ("sigma", array![1e-320, 1e13, 1e-8, 1.0]),
+        ];
+        let status = array![
+            CensorStatus::Right,
+            CensorStatus::Left,
+            CensorStatus::Event,
+            CensorStatus::Interval,
+        ];
+        let cens = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
+        let p = params_view(&owned);
+        let d = default_link_derivatives(&cens, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u, w) = &d[name];
+            assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
+        }
     }
 
     #[test]

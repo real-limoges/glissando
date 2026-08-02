@@ -1,8 +1,8 @@
 //! Gamma distribution for positive continuous data.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE,
-    MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
+    MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -52,50 +52,76 @@ impl Distribution for Gamma {
         }
     }
 
-    fn derivatives(
+    eta_derivatives_via_chain!();
+
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
         // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
-        // μ (log link, η = log μ):  u = (y−μ)/(μσ²),  w = 1/σ².
-        // σ (log link, η = log σ):  u = (2/σ²)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1].
+        // Natural scale (Altitude #1):
+        //   μ: ∂l/∂μ = (y−μ)/(μ²σ²),   i_μ = 1/(μ²σ²).
+        //   σ: ∂l/∂σ = (2/σ³)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1],
+        //      i_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴.
+        // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
+        // the previous η-scale pairs exactly. Weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
-        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
-        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
-        let sigma_sq = sigma_safe.mapv(|s| s * s);
-        let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
+        // **Every guard here is on a denominator or a Gamma-function argument, never
+        // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`,
+        // which the folded η-scale form could afford and the un-folded one cannot:
+        // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
+        // anything clamped here, so a clamp that binds breaks the telescoping. It
+        // binds at reachable parameters: `exp(MIN_ETA) ≈ 9.4e-14` is already below
+        // `MIN_POSITIVE`, and the newly-gated `inverse`/`sqrt` links on μ reach
+        // further still. See the same argument spelled out at length in `binomial.rs`.
+        let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));
+        let sigma_guarded = sigma.mapv(|s| s.max(DENOM_FLOOR));
+        // α = 1/σ² is a Gamma-function argument rather than a factor of the answer,
+        // so guarding σ² keeps ψ(α)/ψ'(α) evaluable (α = 1e300 gives ψ ≈ 690 and
+        // ψ' ≈ 1e-300) where a raw 1/0 would hand them +∞.
+        let alpha = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
+
+        // Guard each reciprocal at the power it is used at: raising an
+        // already-guarded reciprocal to a power would overflow to infinity for a
+        // parameter the log link can still underflow to, and `inf · 0` is NaN. σ⁶ is
+        // why this matters more here than elsewhere; it underflows around σ ≈ 1e-50,
+        // where the σ⁴ form reaches to σ ≈ 1e-75.
+        let inv_mu_sq_sigma_sq =
+            par_zip_map(mu, sigma, |m, s| 1.0 / (m * m * s * s).max(DENOM_FLOOR));
+        let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
+        let inv_sigma_4 = sigma.mapv(|s| 1.0 / (s * s * s * s).max(DENOM_FLOOR));
+        let inv_sigma_6 = sigma.mapv(|s| 1.0 / (s * s * s * s * s * s).max(DENOM_FLOOR));
 
         // Clamp y to the support, mirroring loglik_pointwise: a zero/negative row
         // would otherwise send ln(y/μ) to −∞/NaN and poison the whole PWLS solve.
         let y_safe = y.mapv(|yi| yi.max(MIN_POSITIVE));
 
-        let u_mu = (&y_safe - &mu_safe) / (&mu_safe * &sigma_sq);
-        let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
+        let u_mu = (&y_safe - mu) * &inv_mu_sq_sigma_sq;
+        let i_mu = inv_mu_sq_sigma_sq;
 
         let psi_alpha = digamma_batch(&alpha);
-        let log_sigma = sigma_safe.mapv(|s| s.ln());
-        let y_over_mu = &y_safe / &mu_safe;
+        let log_sigma = sigma_guarded.mapv(|s| s.ln());
+        let y_over_mu = &y_safe / &mu_guarded;
         let log_y_over_mu = y_over_mu.mapv(|v| v.ln());
-        let u_sigma =
-            (2.0 / &sigma_sq) * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
+        let u_sigma = 2.0
+            * &inv_sigma_cubed
+            * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
 
-        // Fisher info for σ on the log-link scale: w = σ²·I_σ with
-        // I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴, so w = (4/σ⁴)·ψ'(α) − 4/σ².
-        // Matches gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) (η-scale via ×σ²)
-        // and the Monte-Carlo check E[u_η²]. Since ψ'(1/σ²) > σ² for all σ > 0 the
-        // expression is strictly positive; the MIN_WEIGHT floor guards round-off only.
+        // Fisher info for σ on its own scale: I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴. Matches
+        // gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) and the Monte-Carlo check
+        // E[u_η²] once chained. Since ψ'(1/σ²) > σ² for all σ > 0 the expression is
+        // strictly positive; the surviving MIN_WEIGHT floor in `scoring::step`
+        // guards round-off only.
         let psi_prime_alpha = trigamma_batch(&alpha);
-        let sigma_sq_sq = sigma_sq.mapv(|s2| s2 * s2);
-        let w_sigma =
-            ((4.0 / &sigma_sq_sq) * &psi_prime_alpha - 4.0 / &sigma_sq).mapv(|v| v.max(MIN_WEIGHT));
+        let i_sigma = 4.0 * &inv_sigma_6 * &psi_prime_alpha - 4.0 * &inv_sigma_4;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -142,16 +168,20 @@ impl Distribution for Gamma {
         }))
     }
 
-    fn cdf_eta_derivatives(
+    fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfEtaResult {
-        // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ². With η = log μ
-        // (dμ/dη = μ) and dx/dη = −x, the shape α is held fixed, so the
-        // shape-derivative that blocks σ never appears:
-        //   ∂F/∂η_μ  = −xᵅ·e⁻ˣ / Γ(α)
-        //   ∂²F/∂η_μ² = (x − α)·∂F/∂η_μ
+    ) -> super::CdfThetaResult {
+        // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ², so ∂x/∂μ = −x/μ
+        // holds the shape α fixed and the shape-derivative that blocks σ never
+        // appears. Writing `mass` for the γ-density factor xᵅ·e⁻ˣ/Γ(α), the
+        // natural-scale derivatives (Altitude #1) are:
+        //   ∂F/∂μ  = −mass/μ
+        //   ∂²F/∂μ² = mass·(1 + α − x)/μ²
+        // The caller chains to η. Under the default log link mu_eta = mu_eta2 = μ,
+        // which recovers the previous η-scale pair exactly:
+        // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
         // σ enters both α and x; its CDF derivative needs ∂P/∂α (non-elementary)
         // and is left to the wrapper's numeric fallback.
         let mu = require(self, params, "mu")?;
@@ -167,8 +197,17 @@ impl Distribution for Gamma {
             let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
             // γ-density mass at x: xᵅ·e⁻ˣ / Γ(α) = exp(α·ln x − x − lnΓ(α)).
             let mass = (alpha * x.ln() - x - ln_gamma(alpha)).exp();
-            d1[i] = -mass;
-            d2[i] = (x - alpha) * d1[i];
+            // Un-folding puts μ in a denominator for the first time, so it gets a
+            // `DENOM_FLOOR` guard rather than the `MIN_POSITIVE` clamp `x` uses:
+            // the caller multiplies by a `mu_eta` computed from η independently of
+            // anything clamped here, and `MIN_POSITIVE = 1e-10` sits *above* the
+            // log link's own floor (`exp(MIN_ETA) ≈ 9.4e-14`), so a clamp that
+            // binds would break the telescoping. Each power is guarded where it is
+            // used: `μ²` can underflow to zero for a μ that `μ` alone survives.
+            let denom1 = mu[i].max(DENOM_FLOOR);
+            let denom2 = (mu[i] * mu[i]).max(DENOM_FLOOR);
+            d1[i] = -mass / denom1;
+            d2[i] = mass * (1.0 + alpha - x) / denom2;
         }
         Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
     }
@@ -200,10 +239,12 @@ impl Distribution for Gamma {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, no_nan_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -250,17 +291,71 @@ mod tests {
     }
 
     #[test]
-    fn cdf_eta_derivatives_match_finite_diff_gamma() {
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. `inverse` on μ is the link behind the largest of the
+        // four `link_mle_oracle` shortfalls (45.5 in fitted log-likelihood), so it is
+        // the one this family most needs covered.
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.5, 0.4, 0.3]),
+        ];
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/(μ²σ²)`, `1/σ³`, `1/σ⁴` and `1/σ⁶`, all of which
+        // the previous η-scale forms cancelled down to at most `1/σ⁴`. σ⁶ is the
+        // first to underflow, so this fixture is the one that pins the guard.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-60, 0.0, 1e-320]),
+        ];
+        let p = params_view(&owned);
+        let natural = Gamma.theta_derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Gamma, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+        }
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_match_finite_diff_gamma() {
         // Only μ is analytic; σ is intentionally left to the numeric fallback.
         let y = array![0.5, 1.5, 3.0, 7.0];
         let owned = [
             ("mu", array![1.0, 2.0, 4.0, 6.0]),
             ("sigma", array![0.5, 0.4, 0.3, 0.6]),
         ];
-        check_cdf_eta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
         let p = params_view(&owned);
-        let derivs = Gamma.cdf_eta_derivatives(&y, &p).unwrap();
+        let derivs = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
         assert!(!derivs.contains_key("sigma"));
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_a_saturated_mu() {
+        // Un-folding put μ and μ² in denominators that the η-scale form (`−mass`,
+        // `(x−α)·−mass`) had cancelled away entirely, which is why each power gets
+        // its own `DENOM_FLOOR`: μ² underflows to exactly zero for a μ that μ alone
+        // survives, and `inf · 0` is NaN.
+        let y = array![1.0, 2.0, 0.5, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8, 1e13]),
+            ("sigma", array![0.5, 0.5, 1e-8, 1e13]),
+        ];
+        let p = params_view(&owned);
+        let d = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
+        let (d1, d2) = &d["mu"];
+        assert!(finite_array(d1) && finite_array(d2), "{d1:?} {d2:?}");
     }
 
     #[test]

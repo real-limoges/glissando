@@ -2,7 +2,7 @@
 
 use super::{
     discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogitLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -55,24 +55,40 @@ impl Distribution for Binomial {
         }
     }
 
-    fn derivatives(
+    eta_derivatives_via_chain!();
+
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Binomial log-likelihood: l = y·log(μ) + (n−y)·log(1−μ) + log C(n, y).
-        // With logit link η = logit(μ) and dμ/dη = μ(1−μ):
-        //   u_η = y − n·μ,    w_η = n·μ·(1−μ)  (floored at MIN_WEIGHT).
+        // Natural scale (Altitude #1):
+        //   ∂l/∂μ = (y − n·μ) / (μ(1−μ)),   i_μ = n / (μ(1−μ)).
+        // Under the default logit link `mu_eta = μ(1−μ)`, so `chain_to_eta` recovers
+        // the classic `u_η = y − n·μ` and `w_η = n·μ(1−μ)`. Returned unfloored.
+        //
+        // **The guard is on the denominator, not on μ.** This family used to clamp
+        // `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]` with `MIN_POSITIVE = 1e-10`, which the
+        // folded form could afford because the division cancelled. It cannot survive
+        // the un-fold: `chain_to_eta` multiplies by a `mu_eta` computed from η
+        // independently of anything clamped here, so a clamp that binds breaks the
+        // telescoping. Under a probit link at η = −30 (the link's own clamp)
+        // μ = Φ(η) ≈ 5e-198, and clamping the denominator up to 1e-10 would collapse
+        // the score by ~190 orders of magnitude, which is exactly the regime the
+        // probit and cloglog acceptance gates exercise. `DENOM_FLOOR` sits far below
+        // anything any link produces, so it only prevents a division by exactly zero.
+        //
+        // Note also that `1.0 - MIN_POSITIVE` was never the upper clamp its name
+        // suggests once μ approached 1.
         let mu = require(self, params, "mu")?;
         let n = self.trials(y.len());
 
-        let mu_safe = mu.mapv(|m| m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
-        let u_mu = y - &(n.as_ref() * &mu_safe);
+        let var_unit = mu.mapv(|m| (m * (1.0 - m)).max(DENOM_FLOOR));
+        let u_mu = par_zip3_map(y, n.as_ref(), mu, |yi, ni, mi| yi - ni * mi) / &var_unit;
+        let i_mu = n.as_ref() / &var_unit;
 
-        let mu_1_minus_mu = &mu_safe * &mu_safe.mapv(|m| 1.0 - m);
-        let w_mu = (n.as_ref() * &mu_1_minus_mu).mapv(|v| v.max(MIN_WEIGHT));
-
-        Ok(HashMap::from([("mu".to_string(), (u_mu, w_mu))]))
+        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
     }
 
     fn loglik_pointwise(
@@ -189,9 +205,11 @@ impl Distribution for Binomial {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_discrete_cdf_matches_pmf, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, params_view, ParamLinks,
     };
+    use crate::distributions::{CauchitLink, CloglogLink, ProbitLink};
     use approx::assert_relative_eq;
     use ndarray::array;
 
@@ -213,7 +231,7 @@ mod tests {
         let mu = array![0.3, 0.5, 0.4];
         let mut p = HashMap::new();
         p.insert("mu", &mu);
-        let derivs = bin.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
         let (u_mu, _) = &derivs["mu"];
         assert_relative_eq!(u_mu[0], 3.0 - 10.0 * 0.3, epsilon = 1e-12);
         assert_relative_eq!(u_mu[1], 10.0 - 20.0 * 0.5, epsilon = 1e-12);
@@ -226,7 +244,7 @@ mod tests {
         let mu = array![0.3, 0.5, 0.7];
         let mut p = HashMap::new();
         p.insert("mu", &mu);
-        let derivs = bin.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
         let (u, _) = &derivs["mu"];
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }
@@ -281,6 +299,87 @@ mod tests {
         let y = array![3.0, 5.0, 8.0];
         let owned = [("mu", array![0.3, 0.5, 0.7])];
         check_score_via_finite_diff(&bin, &y, &owned, "mu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. μ folded the *logit* chain rule into `u = y − n·μ`,
+        // so under probit the score was wrong by a factor of `φ(η)/(μ(1−μ))`. These
+        // are the links behind two of the four `link_mle_oracle` shortfalls.
+        //
+        // This replaces `binomial_score_is_wrong_under_a_probit_link_today`, the
+        // Phase 0 characterization test that asserted the opposite.
+        let bin = Binomial::new(10);
+        let y = array![0.0, 3.0, 5.0, 8.0, 10.0];
+        let owned = [("mu", array![0.15, 0.35, 0.5, 0.8, 0.93])];
+        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &ProbitLink, 1e-5);
+        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &CloglogLink, 1e-5);
+        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &CauchitLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_mu() {
+        // Un-folding introduces the `1/(μ(1−μ))` that `u = y − n·μ` cancelled. The
+        // fixture spans both boundaries, including μ exactly 0 and exactly 1, which
+        // the old `MIN_POSITIVE` clamp used to mask.
+        let bin = Binomial::new(10);
+        let y = array![0.0, 10.0, 5.0, 3.0];
+        let owned = [("mu", array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
+        let p = params_view(&owned);
+        let natural = bin.theta_derivatives(&y, &p).unwrap();
+        let (u_n, i_n) = &natural["mu"];
+        assert!(finite_array(u_n) && finite_array(i_n), "natural: {u_n:?}");
+
+        let chained = default_link_derivatives(&bin, &y, &p).unwrap();
+        let (u, w) = &chained["mu"];
+        assert!(finite_array(u) && finite_array(w), "chained: {u:?}");
+        assert!(w.iter().all(|&v| v >= 0.0));
+    }
+
+    #[test]
+    fn probit_score_telescopes_in_the_tail() {
+        // The reason the guard is on the denominator rather than on μ. Deep in the
+        // probit tail the natural score `(y − nμ)/(μ(1−μ))` is enormous and
+        // `mu_eta = φ(η)` is minuscule; the product has to telescope back to
+        // `y·φ(η)/Φ(η)`, the inverse Mills ratio times y. The old `MIN_POSITIVE`
+        // clamp on μ would floor the denominator at 1e-10 and collapse the result by
+        // orders of magnitude, which is what kept the probit acceptance gate red.
+        //
+        // η stops at −6 because of the *test helper*, not the fitter:
+        // `ParamLinks` reconstructs η as `link(μ)`, and `ProbitLink::link` clamps μ
+        // at `MIN_POSITIVE = 1e-10` (so η saturates around −6.36). In production η is
+        // the primary quantity and μ is `inv_link(η)`, so no such round trip happens
+        // and the tail extends to `MIN_ETA`. Φ(−6) ≈ 9.9e-10 is just clear of the
+        // clamp, which is far enough to make the point: the folded value would be ≈ 4
+        // and the correct one is ≈ 24.
+        let bin = Binomial::new(10);
+        let y = array![4.0];
+        for &eta in &[-4.0_f64, -6.0] {
+            let mu = ProbitLink.inv_link(eta);
+            let owned = [("mu", array![mu])];
+            let p = params_view(&owned);
+            let links = ParamLinks::overriding(&bin, &p, "mu", &ProbitLink);
+            let u = bin.eta_derivatives(&y, &p, &links.context()).unwrap()["mu"]
+                .0
+                .clone();
+
+            let n_mu = 10.0 * mu;
+            let expected = crate::math::std_normal_pdf(eta) * (4.0 - n_mu) / (mu * (1.0 - mu));
+            assert!(u[0].is_finite(), "η={eta}: u is not finite");
+            assert!(
+                (u[0] - expected).abs() / expected < 1e-9,
+                "η={eta}: u={:.6e} expected={:.6e}",
+                u[0],
+                expected
+            );
+            // The folded (buggy) value was `y − n·μ ≈ 4`. The correct one is the
+            // inverse Mills ratio times y, which grows without bound down the tail.
+            assert!(
+                u[0] > 4.0 * 1.5,
+                "η={eta}: score {} is suspiciously close to the folded `y − nμ`",
+                u[0]
+            );
+        }
     }
 
     #[test]

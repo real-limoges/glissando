@@ -49,7 +49,7 @@ const EDF_COLLAPSE_SLACK: f64 = 0.5;
 /// (Wood 2011) via L-BFGS, applied per distributional parameter to its converged
 /// PWLS subproblem. `Gcv` uses Generalized Cross-Validation (Craven & Wahba 1979).
 /// `FellnerSchall` optimizes the same target as `Reml` via the multiplicative
-/// fixed-point update of Wood & Fasiolo (2017) — deterministic, no line search.
+/// fixed-point update of Wood & Fasiolo (2017): deterministic, no line search.
 /// REML tends to be less prone to local minima and undersmoothing than GCV at
 /// moderate sample sizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,7 +90,7 @@ impl SmoothingCriterion {
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum NaAction {
     /// Drop any row with a missing value in `y` or a referenced column before
-    /// fitting — R's `na.omit`, and the default. Weights and every model column
+    /// fitting (R's `na.omit`), and the default. Weights and every model column
     /// are masked together so the design, working response, and weights stay
     /// aligned.
     #[default]
@@ -128,10 +128,24 @@ pub struct FitConfig {
     pub gd_tolerance: f64,
     /// Per-parameter link overrides, keyed by distribution-parameter name
     /// (e.g. `"mu" → "probit"`). Empty (the default) uses each family's
-    /// [`default_link`](crate::distributions::Distribution::default_link). Names are
-    /// validated against [`link_from_name`](crate::distributions::link_from_name) at
-    /// fit time, so an unknown link yields [`GamlssError::Input`]. Build ergonomically
-    /// with [`with_link`](FitConfig::with_link) / [`with_links`](FitConfig::with_links).
+    /// [`default_link`](crate::distributions::Distribution::default_link). Build
+    /// ergonomically with [`with_link`](FitConfig::with_link) /
+    /// [`with_links`](FitConfig::with_links).
+    ///
+    /// Three things are checked at fit time, each yielding [`GamlssError::Input`]:
+    /// the key must name one of the family's
+    /// [`parameters`](crate::distributions::Distribution::parameters), the family
+    /// must accept an override there (see
+    /// [`allows_link_override`](crate::distributions::Distribution::allows_link_override)),
+    /// and the value must be a link
+    /// [`link_from_name`](crate::distributions::link_from_name) recognizes.
+    ///
+    /// **No domain checking is done.** A link whose range does not contain the
+    /// parameter's support is accepted and produces nonsense rather than an
+    /// error: a logit link on a Poisson μ confines the mean to `(0, 1)`, and a
+    /// `sqrt` or `inverse_square` link on a Gaussian μ cannot represent a
+    /// negative mean at all. Choosing a link that suits the parameter is the
+    /// caller's job.
     #[cfg_attr(feature = "serde", serde(default))]
     pub links: IndexMap<String, String>,
     /// How to treat rows with a missing (non-finite) value in `y` or a referenced
@@ -267,7 +281,7 @@ pub struct FittedParameter {
     pub edf: f64,
     /// Per-term EDF aligned with `terms`, summing to `edf`. An entry at the
     /// term's penalty null-space dimension means the smooth collapsed to its
-    /// unpenalized polynomial remainder — see `FitDiagnostics::warnings`.
+    /// unpenalized polynomial remainder; see `FitDiagnostics::warnings`.
     pub term_edf: Vec<f64>,
     /// `(term_name, first_col, last_col_exclusive)` per term, aligned with
     /// `terms`. Column order matches `coefficients` and the design matrix.
@@ -324,7 +338,7 @@ pub(super) fn global_deviance<D: Distribution + ?Sized>(
 }
 
 /// Same as [`global_deviance`], but evaluating one parameter block at a *proposed*
-/// `mu_override` not yet committed to `models` — used by step-halving to score a
+/// `mu_override` not yet committed to `models`; used by step-halving to score a
 /// trial move before accepting it.
 pub(super) fn global_deviance_with<D: Distribution + ?Sized>(
     family: &D,
@@ -370,6 +384,43 @@ fn deviance<'a, D: Distribution + ?Sized>(
     Ok(-2.0 * ll)
 }
 
+/// Check every `config.links` key against the family before any fitting starts.
+///
+/// Both failures used to be silent. An unknown key simply never matched inside
+/// the per-parameter loop below, so `with_link("sigma", "log")` on `Beta` (whose
+/// second parameter is `phi`) did nothing at all. And a parameter whose family
+/// hardcodes its own link in `eta_derivatives` accepted the override for
+/// `η → μ` while computing the score and weight for the original link, which is
+/// the bug class the generic-chain-rule work exists to remove.
+///
+/// Runs before `assemble_model_matrices`, so a typo costs nothing.
+fn validate_link_overrides<D: Distribution + ?Sized>(
+    family: &D,
+    config: &FitConfig,
+) -> Result<(), GamlssError> {
+    for key in config.links.keys() {
+        // Membership first: on a family that refuses every parameter, a
+        // misspelled key should report the misspelling, not the refusal.
+        if !family.parameters().contains(&key.as_str()) {
+            return Err(GamlssError::Input(format!(
+                "link override for unknown parameter '{key}': {} has parameters [{}]",
+                family.name(),
+                family.parameters().join(", "),
+            )));
+        }
+        if !family.allows_link_override(key) {
+            return Err(GamlssError::Input(format!(
+                "{} does not support a link override for '{key}': its score and \
+                 weight are derived against that parameter's default link and \
+                 cannot be re-chained generically. Remove the override, or model \
+                 the parameter with a family that supports one.",
+                family.name(),
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
@@ -378,6 +429,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     family: &D,
     config: &FitConfig,
 ) -> Result<(IndexMap<String, FittedParameter>, FitDiagnostics), GamlssError> {
+    validate_link_overrides(family, config)?;
+
     let n_obs = y.len();
     // `IndexMap` keeps insertion order = `family.parameters()` order so the
     // resulting `GamlssModel.models` iterates deterministically downstream.
@@ -580,7 +633,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             let model = &mut models[*param_name];
             // β/η/μ come from the accepted (possibly damped) step; covariance /
             // EDF / λ keep the values `scoring::step` computed at the full step.
-            // Near convergence α → 1 so those are evaluated at the right point —
+            // Near convergence α → 1 so those are evaluated at the right point,
             // matching how gamlss reports them at the converged step.
             //
             // When the whole block update was REJECTED (uphill at every α), the

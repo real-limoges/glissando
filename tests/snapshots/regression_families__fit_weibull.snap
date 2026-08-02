@@ -1,0 +1,16 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&Weibull::new(), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "1.3544e-1"
+    - "8.7577e-1"
+  sigma:
+    - "2.3562e0"
+edf:
+  mu: "2.0000e0"
+  sigma: "1.0000e0"
+log_likelihood: "1.8504e1"
+aic: "-3.1008e1"
