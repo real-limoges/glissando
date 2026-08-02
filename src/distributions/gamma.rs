@@ -54,7 +54,7 @@ impl Distribution for Gamma {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -70,33 +70,42 @@ impl Distribution for Gamma {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
-        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
-        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
-        let sigma_sq = sigma_safe.mapv(|s| s * s);
-        let alpha = sigma_sq.mapv(|s2| 1.0 / s2);
+        // **Every guard here is on a denominator or a Gamma-function argument, never
+        // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`,
+        // which the folded η-scale form could afford and the un-folded one cannot:
+        // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
+        // anything clamped here, so a clamp that binds breaks the telescoping. It
+        // binds at reachable parameters — `exp(MIN_ETA) ≈ 9.4e-14` is already below
+        // `MIN_POSITIVE`, and the newly-gated `inverse`/`sqrt` links on μ reach
+        // further still. See the same argument spelled out at length in `binomial.rs`.
+        let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));
+        let sigma_guarded = sigma.mapv(|s| s.max(DENOM_FLOOR));
+        // α = 1/σ² is a Gamma-function argument rather than a factor of the answer,
+        // so guarding σ² keeps ψ(α)/ψ'(α) evaluable (α = 1e300 gives ψ ≈ 690 and
+        // ψ' ≈ 1e-300) where a raw 1/0 would hand them +∞.
+        let alpha = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
-        // Guard each reciprocal at the power it is used at, rather than clamping μ
-        // or σ any further: raising an already-guarded reciprocal to a power would
-        // overflow to infinity for a parameter the log link can still underflow to,
-        // and `inf · 0` is NaN. σ⁶ is why this matters more here than elsewhere; it
-        // underflows around σ ≈ 1e-52, where the old σ⁴ form reached to σ ≈ 1e-77.
-        let inv_mu_sq_sigma_sq = par_zip_map(&mu_safe, &sigma_sq, |m, s2| {
-            1.0 / (m * m * s2).max(DENOM_FLOOR)
-        });
-        let inv_sigma_cubed = sigma_safe.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
-        let inv_sigma_4 = sigma_sq.mapv(|s2| 1.0 / (s2 * s2).max(DENOM_FLOOR));
-        let inv_sigma_6 = sigma_sq.mapv(|s2| 1.0 / (s2 * s2 * s2).max(DENOM_FLOOR));
+        // Guard each reciprocal at the power it is used at: raising an
+        // already-guarded reciprocal to a power would overflow to infinity for a
+        // parameter the log link can still underflow to, and `inf · 0` is NaN. σ⁶ is
+        // why this matters more here than elsewhere; it underflows around σ ≈ 1e-50,
+        // where the σ⁴ form reaches to σ ≈ 1e-75.
+        let inv_mu_sq_sigma_sq =
+            par_zip_map(mu, sigma, |m, s| 1.0 / (m * m * s * s).max(DENOM_FLOOR));
+        let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
+        let inv_sigma_4 = sigma.mapv(|s| 1.0 / (s * s * s * s).max(DENOM_FLOOR));
+        let inv_sigma_6 = sigma.mapv(|s| 1.0 / (s * s * s * s * s * s).max(DENOM_FLOOR));
 
         // Clamp y to the support, mirroring loglik_pointwise: a zero/negative row
         // would otherwise send ln(y/μ) to −∞/NaN and poison the whole PWLS solve.
         let y_safe = y.mapv(|yi| yi.max(MIN_POSITIVE));
 
-        let u_mu = (&y_safe - &mu_safe) * &inv_mu_sq_sigma_sq;
+        let u_mu = (&y_safe - mu) * &inv_mu_sq_sigma_sq;
         let i_mu = inv_mu_sq_sigma_sq;
 
         let psi_alpha = digamma_batch(&alpha);
-        let log_sigma = sigma_safe.mapv(|s| s.ln());
-        let y_over_mu = &y_safe / &mu_safe;
+        let log_sigma = sigma_guarded.mapv(|s| s.ln());
+        let y_over_mu = &y_safe / &mu_guarded;
         let log_y_over_mu = y_over_mu.mapv(|v| v.ln());
         let u_sigma = 2.0
             * &inv_sigma_cubed
@@ -233,7 +242,7 @@ mod tests {
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
-        finite_array, params_view,
+        finite_array, no_nan_array, params_view,
     };
     use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
@@ -308,11 +317,11 @@ mod tests {
             ("sigma", array![1e-60, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
-        let natural = Gamma.derivatives(&y, &p).unwrap();
+        let natural = Gamma.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gamma, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
             let (u, w) = &chained[name];
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }

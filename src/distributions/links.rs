@@ -380,11 +380,19 @@ impl Link for CauchitLink {
 /// so a family can map its natural-scale score and information onto the η scale:
 /// `u_η = mu_eta · ∂l/∂θ`, `w_η = mu_eta² · i_θ`.
 ///
-/// Both derivative arrays are materialized eagerly, for every parameter, at
-/// construction. Laziness would need interior mutability, which makes the type
-/// `!Sync` and therefore unusable inside the families' rayon closures under the
-/// `parallel` feature. The cost is two `O(n)` passes per parameter against an
-/// `O(np²)` solve.
+/// Whichever derivative arrays the context carries are materialized eagerly, for
+/// every parameter, at construction. Laziness would need interior mutability, which
+/// makes the type `!Sync` and therefore unusable inside the families' rayon closures
+/// under the `parallel` feature.
+///
+/// Eager does not have to mean unconditional, though, and `d²μ/dη²` is only ever read
+/// by the structural wrappers' second-order CDF chain rule. [`Self::first_order`]
+/// therefore skips it, and is what the scoring loop uses for every other family; the
+/// saving is real because [`Link::mu_eta2`]'s default body finite-differences
+/// [`Link::mu_eta`], which may itself finite-difference [`Link::inv_link`], so a
+/// discarded element can cost up to four `inv_link` calls. Which constructor to use
+/// is decided by
+/// [`Distribution::needs_second_order_links`](crate::distributions::Distribution::needs_second_order_links).
 ///
 /// Raw `η` is deliberately absent from the public surface.
 /// [`Ocat`](crate::distributions::Ocat) already carries η in its `params["mu"]`
@@ -403,15 +411,35 @@ struct LinkEntry<'a> {
     link: &'a dyn Link,
     eta: &'a Array1<f64>,
     mu_eta: Array1<f64>,
-    mu_eta2: Array1<f64>,
+    /// `None` in a [`LinkContext::first_order`] context; see that constructor.
+    mu_eta2: Option<Array1<f64>>,
 }
 
 impl<'a> LinkContext<'a> {
-    /// Build a context from `(parameter name, link, η)` triples.
+    /// Build a context carrying both `dμ/dη` and `d²μ/dη²`.
     ///
     /// Takes an iterator rather than the fitting layer's parameter map so that this
     /// module stays below `fitting/` in the dependency order.
     pub fn new<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
+    {
+        Self::build(entries, true)
+    }
+
+    /// Build a context carrying `dμ/dη` only.
+    ///
+    /// [`Self::mu_eta2`] then returns an error, so this is for a family that never
+    /// asks for it — which is every family except the structural wrappers. See the
+    /// type-level docs for why skipping it is worth a second constructor.
+    pub fn first_order<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
+    {
+        Self::build(entries, false)
+    }
+
+    fn build<I>(entries: I, second_order: bool) -> Self
     where
         I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
     {
@@ -422,7 +450,7 @@ impl<'a> LinkContext<'a> {
                     link,
                     eta,
                     mu_eta: eta.mapv(|e| link.mu_eta(e)),
-                    mu_eta2: eta.mapv(|e| link.mu_eta2(e)),
+                    mu_eta2: second_order.then(|| eta.mapv(|e| link.mu_eta2(e))),
                 };
                 (name, entry)
             })
@@ -443,9 +471,17 @@ impl<'a> LinkContext<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`GamlssError::Internal`] if the context holds no entry for `param`.
+    /// Returns [`GamlssError::Internal`] if the context holds no entry for `param`,
+    /// or if it was built by [`Self::first_order`] and so never computed the second
+    /// derivative.
     pub fn mu_eta2(&self, param: &str) -> Result<&Array1<f64>, GamlssError> {
-        Ok(&self.entry(param)?.mu_eta2)
+        self.entry(param)?.mu_eta2.as_ref().ok_or_else(|| {
+            GamlssError::Internal(format!(
+                "LinkContext for '{}' is first-order only; a family that reads mu_eta2 \
+                 must return true from Distribution::needs_second_order_links",
+                param
+            ))
+        })
     }
 
     /// The link and linear predictor backing `param`.

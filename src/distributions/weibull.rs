@@ -47,7 +47,7 @@ impl Distribution for Weibull {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -69,20 +69,31 @@ impl Distribution for Weibull {
         // denominator *at the power it is used at*: squaring an already-guarded
         // reciprocal would overflow to infinity for a parameter the log link can
         // still underflow to, and `inf · 0` is NaN.
-        let inv_mu = mu.mapv(|m| 1.0 / m.max(DENOM_FLOOR));
+        //
+        // `z = (y/μ)^σ` must be built from the **same** guarded μ as the reciprocal
+        // it multiplies. Evaluating the numerator at a μ clamped up to
+        // `MIN_POSITIVE` while dividing by a μ floored at `DENOM_FLOOR` left the two
+        // 290 orders of magnitude apart, and the mismatch was not a rounding
+        // difference: at μ = 0 with σ = 5 the numerator stayed a finite ~1e50 while
+        // `1/μ` reached 1e300, so their product overflowed to +∞ where the honest
+        // value is ~1e350 — beyond f64 either way, but `chain_to_eta` then met that
+        // ∞ with a `mu_eta` of exactly 0 (`sqrt` at η = 0, `log` at η ≤ −745) and
+        // produced NaN. Sharing one guard leaves the overflow to `chain_to_eta`,
+        // which annihilates it against a zero `mu_eta` and saturates it otherwise.
+        let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));
+        let sigma_guarded = sigma.mapv(|s| s.max(DENOM_FLOOR));
+        let inv_mu = mu_guarded.mapv(|m| 1.0 / m);
         let inv_mu_sq = mu.mapv(|m| 1.0 / (m * m).max(DENOM_FLOOR));
-        let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
+        let inv_sigma = sigma_guarded.mapv(|s| 1.0 / s);
         let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
-        let u_mu = par_zip3_map(y, mu, sigma, |yi, mui, si| {
-            let m = mui.max(MIN_POSITIVE);
+        let u_mu = par_zip3_map(y, &mu_guarded, sigma, |yi, m, si| {
             let z = (yi.max(MIN_POSITIVE) / m).powf(si);
             si * (z - 1.0)
         }) * &inv_mu;
         let i_mu = par_zip_map(sigma, &inv_mu_sq, |s, ims| (s * s) * ims);
 
-        let u_sigma = par_zip3_map(y, mu, sigma, |yi, mui, si| {
-            let m = mui.max(MIN_POSITIVE);
+        let u_sigma = par_zip3_map(y, &mu_guarded, sigma, |yi, m, si| {
             let r = yi.max(MIN_POSITIVE) / m;
             let z = r.powf(si);
             1.0 + si * r.ln() * (1.0 - z)
@@ -176,10 +187,36 @@ mod tests {
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
-        derivative_keys_match_parameters, finite_array, params_view,
+        derivative_keys_match_parameters, finite_array, no_nan_array, params_view, ParamLinks,
     };
     use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
+
+    #[test]
+    fn chained_derivatives_survive_a_zero_mu_eta() {
+        // At η = 0 the sqrt link gives μ = 0 *and* `mu_eta` = 0, and σ = 5 is enough
+        // for `z = (y/μ)^σ` to overflow rather than merely grow — so the natural-scale
+        // score is +∞ and the product is `∞ · 0`. Nothing downstream would catch the
+        // resulting NaN: `scoring::step`'s `w < MIN_WEIGHT` and `step > MAX_STEP`
+        // tests are both false for NaN, so it reaches the PWLS solve and poisons it.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 1.0]),
+            ("sigma", array![5.0, 5.0, 5.0]),
+        ];
+        let p = params_view(&owned);
+        let links = ParamLinks::overriding(&Weibull, &p, "mu", &SqrtLink);
+        let d = Weibull.eta_derivatives(&y, &p, &links.context()).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u, w) = &d[name];
+            assert!(
+                finite_array(u) && finite_array(w),
+                "{name}: u={u:?} w={w:?}"
+            );
+        }
+        // A frozen row contributes nothing, not a saturated something.
+        assert_eq!((d["mu"].0[0], d["mu"].1[0]), (0.0, 0.0));
+    }
 
     #[test]
     fn weibull_derivatives() {
@@ -250,11 +287,11 @@ mod tests {
             ("sigma", array![1e-8, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
-        let natural = Weibull.derivatives(&y, &p).unwrap();
+        let natural = Weibull.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Weibull, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
             let (u, w) = &chained[name];
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));

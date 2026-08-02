@@ -238,7 +238,10 @@ fn ocat_rejects_every_link_override() {
             &Ocat::new(3),
             FitConfig::default().with_link(param, "probit"),
         )
-        .expect_err("Ocat must reject a link override on {param}");
+        .err()
+        // Not `expect_err`: it takes a plain `&str` and would print the brace
+        // literally, hiding which of the three parameters regressed.
+        .unwrap_or_else(|| panic!("Ocat must reject a link override on {param}"));
         assert!(
             err.to_string().contains("Ocat") && err.to_string().contains(param),
             "the error should name the family and the parameter, got: {err}"

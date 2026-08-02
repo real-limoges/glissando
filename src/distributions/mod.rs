@@ -25,7 +25,7 @@ pub(crate) const MIN_WEIGHT: f64 = 1e-6;
 
 /// Floor for a denominator that the η-scale chain rule multiplies straight back out.
 ///
-/// Natural-scale [`Distribution::derivatives`] bodies divide by quantities the old
+/// Natural-scale [`Distribution::theta_derivatives`] bodies divide by quantities the old
 /// folded η-scale forms cancelled algebraically (`1/μ`, `1/σ`, `1/(μ(1−μ))`). Those
 /// divisions have to stay finite, but the guard must never *bind* for any θ a link
 /// can actually produce: if it did, it would disagree with the `mu_eta` that
@@ -50,6 +50,36 @@ pub(crate) const PROB_EPS: f64 = 1e-12;
 /// reciprocal stays finite.
 pub(crate) fn clamp_prob(p: f64) -> f64 {
     p.clamp(PROB_EPS, 1.0 - PROB_EPS)
+}
+
+/// Floor for a Gamma-function argument whose *trigamma* is taken.
+///
+/// `ψ'(x) ~ 1/x²`, so it overflows to infinity below `x ≈ 1e-154` even though
+/// `ψ(x) ~ −1/x` is still finite there. Families whose natural scale feeds a
+/// shape parameter into `trigamma_batch` ([`Beta`]'s `α = μφ` and `β = (1−μ)φ`)
+/// floor the *argument* here rather than clamping μ, for the same reason
+/// [`DENOM_FLOOR`] is a floor on a denominator: at `1e-150` it sits ~140 orders
+/// of magnitude below anything a link produces inside its own η clamp, so it
+/// cannot bind where the chain rule still has to telescope.
+pub(crate) const TRIGAMMA_FLOOR: f64 = 1e-150;
+
+/// Replace an overflowed `±∞` with the largest finite `f64` of the same sign.
+///
+/// A natural-scale derivative can genuinely diverge at a saturated θ (Weibull's
+/// `σ(z−1)/μ` as `μ → 0`), and there is no representable value to return. A large
+/// finite magnitude drives the step in the right direction and lets step-halving
+/// in `scoring::step` pull the iterate back; an infinity instead reaches the PWLS
+/// solve as `inf/inf` and produces NaN.
+///
+/// NaN is deliberately passed through. [`chain_to_eta`] removes the one way a
+/// well-formed family body produces one (`inf · 0`, below), so a NaN arriving here
+/// is a bug in that body and should surface rather than be papered over.
+fn saturate(v: f64) -> f64 {
+    if v.is_infinite() {
+        f64::MAX.copysign(v)
+    } else {
+        v
+    }
 }
 
 // ============================================================================
@@ -120,8 +150,24 @@ pub fn chain_to_eta(
                 .and(&mut i)
                 .and(mu_eta)
                 .for_each(|u_out, i_out, &me| {
-                    *u_out *= me;
-                    *i_out *= me * me;
+                    if me == 0.0 {
+                        // `dμ/dη = 0` freezes the observation: no move in η changes
+                        // its μ, so its score and information are exactly zero
+                        // however large the natural-scale pair is. Taking the
+                        // product literally would be `inf · 0` = NaN for a family
+                        // whose natural-scale derivative diverges at a saturated θ,
+                        // and one NaN row poisons the entire PWLS solve —
+                        // `scoring::step`'s `w < MIN_WEIGHT` and `step > MAX_STEP`
+                        // tests are both false for NaN, so nothing downstream
+                        // catches it. A hard zero is reachable, not hypothetical:
+                        // `SqrtLink::mu_eta(0.0)` and `LogLink::mu_eta(η ≤ −745)`
+                        // are both exactly 0.
+                        *u_out = 0.0;
+                        *i_out = 0.0;
+                    } else {
+                        *u_out = saturate(*u_out * me);
+                        *i_out = saturate(*i_out * me * me);
+                    }
                 });
             Ok((name, (u, i)))
         })
@@ -167,14 +213,18 @@ fn chain_cdf_to_eta(
         .and(mu_eta)
         .and(mu_eta2)
         .for_each(|d1_out, d2_out, &me, &me2| {
-            *d2_out = me * me * *d2_out + me2 * *d1_out;
-            *d1_out *= me;
+            // No `me == 0` shortcut here, unlike `chain_to_eta`: the `mu_eta2 · ∂F/∂θ`
+            // term survives a zero `mu_eta` and dropping it would be wrong. Both
+            // outputs are saturated instead, which is enough because a family's
+            // `cdf_theta_derivatives` is required to return finite values.
+            *d2_out = saturate(me * me * *d2_out + me2 * *d1_out);
+            *d1_out = saturate(*d1_out * me);
         });
     Ok(())
 }
 
 /// Implement [`Distribution::eta_derivatives`] by chaining the family's
-/// natural-scale [`Distribution::derivatives`] through the generic rule.
+/// natural-scale [`Distribution::theta_derivatives`] through the generic rule.
 ///
 /// Every family with a separable natural scale uses this; it is the whole adapter.
 /// The three that do not ([`Ocat`], [`StudentT`] for its `ν`, and the structural
@@ -187,7 +237,7 @@ macro_rules! eta_derivatives_via_chain {
             params: &::std::collections::HashMap<&str, &::ndarray::Array1<f64>>,
             ctx: &$crate::distributions::LinkContext,
         ) -> $crate::distributions::DerivativesResult {
-            $crate::distributions::chain_to_eta(self.derivatives(y, params)?, ctx)
+            $crate::distributions::chain_to_eta(self.theta_derivatives(y, params)?, ctx)
         }
     };
 }
@@ -229,16 +279,27 @@ pub trait Distribution: Debug + Send + Sync {
     }
 
     /// Score `∂l/∂θ` and expected information `i_θ` on the **natural parameter
-    /// scale**, for each parameter, evaluated against the current `params` snapshot.
+    /// scale**, evaluated against the current `params` snapshot.
     ///
-    /// Defaults to an error, so that families with no separable natural scale
-    /// ([`Ocat`], [`StudentT`]'s `ν`, and the structural wrappers) do not have to
-    /// invent one; they override [`Self::eta_derivatives`] directly instead.
+    /// **This is not the whole model's derivative map, and it is not every family's.**
+    /// The returned map covers only the parameters with a separable natural scale, so
+    /// it may be partial ([`StudentT`] returns μ and σ but not ν) or absent entirely
+    /// — the default body is an error, which is what [`Ocat`] and the structural
+    /// wrappers rely on so they do not have to invent a natural scale they do not
+    /// have. [`Self::eta_derivatives`] is the complete one, and is what the scoring
+    /// loop calls.
+    ///
+    /// It carried the plain name `derivatives` and returned *η-scale* pairs until the
+    /// generic-chain-rule refactor (Altitude #1). The rename is the point: an
+    /// embedder calling the old name against the new contract would otherwise have
+    /// read natural-scale numbers as η-scale ones, or hit the error default at
+    /// runtime, with nothing failing at compile time. Same reasoning as the
+    /// deliberately-absent default body on [`Self::eta_derivatives`].
     ///
     /// **The returned `i_θ` must be unfloored.** `MIN_WEIGHT` is applied exactly
     /// once, downstream in `scoring::step`, after the chain rule; see
     /// [`chain_to_eta`] for why flooring here instead is not a rounding difference.
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         _y: &Array1<f64>,
         _params: &HashMap<&str, &Array1<f64>>,
@@ -255,11 +316,11 @@ pub trait Distribution: Debug + Send + Sync {
     ///
     /// This is what the Fisher-scoring step calls. Families with a separable
     /// natural scale implement it as
-    /// `chain_to_eta(self.derivatives(y, params)?, ctx)`; the rest build the η-scale
+    /// `chain_to_eta(self.theta_derivatives(y, params)?, ctx)`; the rest build the η-scale
     /// quantities directly.
     ///
     /// **There is deliberately no default body.** [`Distribution`] is public, so an
-    /// external implementor written against the old η-scale `derivatives` contract
+    /// external implementor written against the old η-scale `theta_derivatives` contract
     /// would keep compiling against a defaulted adapter and silently double-chain
     /// to `mu_eta⁴ · i_θ`, with no error at compile time or run time. Requiring the
     /// method turns that into a compile error.
@@ -274,6 +335,17 @@ pub trait Distribution: Debug + Send + Sync {
         ctx: &LinkContext,
     ) -> DerivativesResult;
 
+    /// Whether [`Self::eta_derivatives`] reads [`LinkContext::mu_eta2`]. Default: `false`.
+    ///
+    /// Only the structural wrappers ([`Censored`] / [`Truncated`] / [`Hurdle`]) do:
+    /// they chain a *CDF* rather than a likelihood, and there the `mu_eta2 · ∂F/∂θ`
+    /// term does not drop out (see [`chain_cdf_to_eta`]). Answering `false` lets the
+    /// scoring loop build a [`LinkContext::first_order`] context and skip computing a
+    /// `d²μ/dη²` array per parameter per step that nothing would read.
+    fn needs_second_order_links(&self) -> bool {
+        false
+    }
+
     /// Per-observation log-density `log f(y_i | params_i)`, used to assemble the model
     /// log-likelihood and observation-level diagnostics (WAIC, leave-one-out, etc.).
     fn loglik_pointwise(
@@ -284,7 +356,7 @@ pub trait Distribution: Debug + Send + Sync {
 
     /// Marginal `Var(Y_i | params_i)` on the response scale, used for Pearson residuals.
     ///
-    /// Distinct from the Fisher-information weight returned by [`Self::derivatives`],
+    /// Distinct from the Fisher-information weight returned by [`Self::theta_derivatives`],
     /// which is on the linear-predictor scale.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError>;
 
@@ -548,6 +620,20 @@ pub(crate) mod test_helpers {
         a.iter().all(|v| v.is_finite())
     }
 
+    /// No NaN — the invariant a *natural-scale* derivative map has to hold.
+    ///
+    /// Finiteness is deliberately not required of
+    /// [`Distribution::theta_derivatives`]: a natural-scale score genuinely diverges
+    /// as its parameter collapses (Gamma's `(2/σ³)·[… + y/μ]` at μ → 0, Weibull's
+    /// `σ(z−1)/μ`), past what an f64 can represent. The old bodies only looked finite
+    /// there because they clamped θ, and that clamp is exactly what this refactor
+    /// removed to keep the chain rule telescoping. [`chain_to_eta`] is the single
+    /// place finiteness is enforced, which is why the *chained* half of each
+    /// saturated-parameter test still asserts [`finite_array`].
+    pub fn no_nan_array(a: &Array1<f64>) -> bool {
+        a.iter().all(|v| !v.is_nan())
+    }
+
     /// Either a link the helper boxed itself or one the caller supplied.
     enum LinkSlot<'a> {
         Owned(Box<dyn Link>),
@@ -722,7 +808,7 @@ pub(crate) mod test_helpers {
         owned.iter().map(|(k, v)| (*k, v)).collect()
     }
 
-    /// Check that the analytic score `u` returned by `derivatives()` matches the
+    /// Check that the analytic score `u` returned by `theta_derivatives()` matches the
     /// central difference of `loglik_pointwise` for `target` on the η-scale,
     /// under the family's *default* link.
     ///
@@ -1155,7 +1241,7 @@ mod tests {
     // --- Altitude #1: the non-default-link contract ---
 
     // The tests below pin the *current, broken* behavior at the derivative
-    // level: `derivatives()` hardcodes each family's default-link chain rule,
+    // level: `theta_derivatives()` hardcodes each family's default-link chain rule,
     // so its score is not `∂l/∂η` for any other link. They are the derivative-
     // level counterpart to the end-to-end oracles in `tests/link_selection.rs`.
     //

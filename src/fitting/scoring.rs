@@ -223,7 +223,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     target_param: &str,
     criterion: SmoothingCriterion,
 ) -> Result<Update, GamlssError> {
-    // 1. Reference every parameter's cached μ; derivatives() expects all of them.
+    // 1. Reference every parameter's cached μ; theta_derivatives() expects all of them.
     //    The cache is maintained by the outer loop so we don't re-run inv_link here.
     let params_ref: HashMap<&str, &Array1<f64>> = family
         .parameters()
@@ -235,11 +235,17 @@ pub(super) fn step<D: Distribution + ?Sized>(
     //    The link derivatives are materialized once per step from each parameter's
     //    resolved link and live η, so a family with a separable natural scale can
     //    apply the chain rule generically instead of hardcoding its default link
-    //    (Altitude #1). `LinkContext::new` costs two O(n) passes per parameter.
-    let link_ctx = LinkContext::new(family.parameters().iter().map(|name| {
+    //    (Altitude #1). Each pass costs O(n) per parameter, so only the structural
+    //    wrappers — the sole readers of `mu_eta2` — pay for the second one.
+    let entries = family.parameters().iter().map(|name| {
         let param = &models[*name];
         (*name, param.link.as_ref(), &param.eta)
-    }));
+    });
+    let link_ctx = if family.needs_second_order_links() {
+        LinkContext::new(entries)
+    } else {
+        LinkContext::first_order(entries)
+    };
     let all_derivs = family.eta_derivatives(y, &params_ref, &link_ctx)?;
     let (deriv_u, deriv_w) = all_derivs
         .get(target_param)
@@ -818,7 +824,7 @@ mod tests {
             SmoothingCriterion::Gcv,
         )
         .unwrap_err();
-        // family.derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
+        // family.theta_derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
         assert!(format!("{}", err).contains("zeta"));
     }
 

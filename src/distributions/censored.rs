@@ -59,7 +59,7 @@ pub struct Censored {
     upper: Array1<f64>,
     /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
     /// immutable after construction, so this is computed once here instead of
-    /// rescanned on every `loglik_pointwise` / `derivatives` call (i.e. every
+    /// rescanned on every `loglik_pointwise` / `theta_derivatives` call (i.e. every
     /// IRLS iteration).
     has_interval: bool,
 }
@@ -155,6 +155,12 @@ impl Distribution for Censored {
             };
         }
         Ok(out)
+    }
+
+    /// The CDF chain rule below reads `mu_eta2`, so the scoring loop must build a
+    /// full second-order [`LinkContext`] rather than a first-order one.
+    fn needs_second_order_links(&self) -> bool {
+        true
     }
 
     /// Overrides the η-scale adapter directly: the censored rows carry *observed*

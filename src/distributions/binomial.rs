@@ -57,7 +57,7 @@ impl Distribution for Binomial {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -326,7 +326,7 @@ mod tests {
         let y = array![0.0, 10.0, 5.0, 3.0];
         let owned = [("mu", array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
         let p = params_view(&owned);
-        let natural = bin.derivatives(&y, &p).unwrap();
+        let natural = bin.theta_derivatives(&y, &p).unwrap();
         let (u_n, i_n) = &natural["mu"];
         assert!(finite_array(u_n) && finite_array(i_n), "natural: {u_n:?}");
 

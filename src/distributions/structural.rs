@@ -129,11 +129,14 @@ pub(crate) fn cdf_eta_grads(
     params: &HashMap<&str, &Array1<f64>>,
     ctx: &LinkContext,
 ) -> CdfEtaResult {
-    let analytic = base.cdf_theta_derivatives(at, params)?;
+    // `remove`, not `get`: the map is freshly built here and dropped on return, so
+    // taking each entry out lets the chain rule work in place. Cloning instead cost
+    // two n-length allocations per analytic parameter, and `Censored` and `Truncated`
+    // each call this twice per scoring step.
+    let mut analytic = base.cdf_theta_derivatives(at, params)?;
     let mut out = HashMap::new();
     for &p in base.parameters() {
-        if let Some((d1, d2)) = analytic.get(p) {
-            let (mut d1, mut d2) = (d1.clone(), d2.clone());
+        if let Some((mut d1, mut d2)) = analytic.remove(p) {
             chain_cdf_to_eta(&mut d1, &mut d2, ctx.mu_eta(p)?, ctx.mu_eta2(p)?, p)?;
             out.insert(p.to_string(), (d1, d2));
         } else {
@@ -212,7 +215,7 @@ fn numeric_cdf_grad(
 }
 
 /// Rewrite each base parameter's `(score, weight)` in place. Shared by the three
-/// structural wrappers' `derivatives`: each already has `base_derivs` (the base
+/// structural wrappers' `theta_derivatives`: each already has `base_derivs` (the base
 /// family's own `(u, w)` per parameter) and a per-row rule for overwriting some
 /// or all of it; this factors out only the "loop over `base.parameters()`, take
 /// that parameter's `(u, w)` out of `base_derivs`, hand it to the caller, put the

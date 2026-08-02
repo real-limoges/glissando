@@ -116,6 +116,12 @@ impl Distribution for Hurdle {
         Ok(out)
     }
 
+    /// The CDF chain rule below reads `mu_eta2`, so the scoring loop must build a
+    /// full second-order [`LinkContext`] rather than a first-order one.
+    fn needs_second_order_links(&self) -> bool {
+        true
+    }
+
     /// Overrides the η-scale adapter directly: the zero-truncation normalizer
     /// contributes *observed* information, which is not link-invariant, so there is
     /// no natural-scale `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See

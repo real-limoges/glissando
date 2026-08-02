@@ -61,7 +61,7 @@ impl Distribution for NegativeBinomial {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -77,29 +77,30 @@ impl Distribution for NegativeBinomial {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
-        let mu_safe = mu.mapv(|m| m.max(MIN_POSITIVE));
-        let sigma_safe = sigma.mapv(|s| s.max(MIN_POSITIVE));
-        let one_plus_sigma_mu = par_zip_map(&sigma_safe, &mu_safe, |s, m| 1.0 + s * m);
+        // **Every guard here is on a denominator, never on μ or σ themselves.** This
+        // body used to clamp both up to `MIN_POSITIVE`, which the folded η-scale form
+        // could afford and the un-folded one cannot: `chain_to_eta` multiplies by a
+        // `mu_eta` computed from η independently of anything clamped here, so a clamp
+        // that binds breaks the telescoping, and `exp(MIN_ETA) ≈ 9.4e-14` is already
+        // below `MIN_POSITIVE`. See the same argument at length in `binomial.rs`.
+        let one_plus_sigma_mu = par_zip_map(sigma, mu, |s, m| 1.0 + s * m);
 
-        // Guard the reciprocal rather than clamping μ further, so the value the
-        // chain rule multiplies back in stays exactly the caller's μ.
-        let i_mu = par_zip_map(&mu_safe, &one_plus_sigma_mu, |m, d| {
+        let i_mu = par_zip_map(mu, &one_plus_sigma_mu, |m, d| {
             1.0 / (m * d).max(DENOM_FLOOR)
         });
-        let u_mu = (y - &mu_safe) * &i_mu;
+        let u_mu = (y - mu) * &i_mu;
 
         // σ (r = 1/σ):
         //   dl/dr = ψ(y+r) − ψ(r) − log(1+σμ) + (μ−y)/(r+μ)
         //   dl/dσ = −(1/σ²)·dl/dr.
-        let r = sigma_safe.mapv(|s| 1.0 / s);
+        let r = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
         let y_plus_r = y + &r;
         let psi_y_r = digamma_batch(&y_plus_r);
         let psi_r = digamma_batch(&r);
         let log_term = one_plus_sigma_mu.mapv(|v| v.ln());
-        let r_plus_mu = &r + &mu_safe;
-        let ratio_term = (&mu_safe - y) / &r_plus_mu;
+        let ratio_term = par_zip3_map(mu, y, &r, |m, yi, ri| (m - yi) / (ri + m).max(DENOM_FLOOR));
 
-        let inv_sigma_sq = sigma_safe.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
+        let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
         let u_sigma = -(&inv_sigma_sq) * (&psi_y_r - &psi_r - &log_term + &ratio_term);
 
         // Working "information" for σ: gamlss NBI's squared-score convention
@@ -192,7 +193,7 @@ mod tests {
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf,
         check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
-        derivative_keys_match_parameters, finite_array, params_view,
+        derivative_keys_match_parameters, finite_array, no_nan_array, params_view,
     };
     use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
@@ -265,11 +266,11 @@ mod tests {
             ("sigma", array![1e-8, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
-        let natural = NegativeBinomial.derivatives(&y, &p).unwrap();
+        let natural = NegativeBinomial.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&NegativeBinomial, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
             let (u, w) = &chained[name];
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));

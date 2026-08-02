@@ -97,7 +97,7 @@ fn check_family_identity<D: Distribution + ?Sized>(
 }
 
 /// Guard: Student-t's ν-floor boundary-freeze projection (see
-/// `distributions::student_t::derivatives`) sums the score across every row
+/// `distributions::student_t::theta_derivatives`) sums the score across every row
 /// pinned at `NU_FLOOR` into one scalar, which is only the exact KKT test
 /// when `eta_nu` is intercept-only (one shared ν coefficient). A covariate or
 /// smooth `nu` formula would silently bias the fitted ν coefficients instead
