@@ -33,6 +33,8 @@ impl Distribution for Gaussian {
         }
     }
 
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,
@@ -152,7 +154,7 @@ mod tests {
     use crate::distributions::test_helpers::{
         check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
         check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        default_link_derivatives, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
     #[cfg(not(target_arch = "wasm32"))]
@@ -177,7 +179,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
-        let derivs = Gaussian.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         let (u_mu, w_mu) = &derivs["mu"];
         assert!(u_mu.iter().all(|&v| v.abs() < 1e-12));
         // w_mu = 1/sigma^2 = 1.0
@@ -192,7 +194,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
-        let derivs = Gaussian.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         let (_, w_sigma) = &derivs["sigma"];
         assert!(w_sigma.iter().all(|&v| (v - 2.0).abs() < 1e-12));
     }

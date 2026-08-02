@@ -22,7 +22,9 @@
 use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
-use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT};
+use super::{
+    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, MIN_WEIGHT,
+};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -156,16 +158,21 @@ impl Distribution for Censored {
         Ok(out)
     }
 
-    fn derivatives(
+    /// Overrides the η-scale adapter directly: the censored rows carry *observed*
+    /// information, which is not link-invariant, so there is no natural-scale
+    /// `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// [`Link::mu_eta2`].
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> DerivativesResult {
         self.check_len(y.len())?;
         // Event rows keep the base score / Fisher weight; censored rows are
         // overwritten with the survival / interval score and observed-information
         // weight built from F, F', F''.
-        let base_derivs = self.base.derivatives(y, params)?;
+        let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let f_y = self.base.cdf(y, params)?;
         let grad_y = cdf_eta_grads(self.base.as_ref(), y, &f_y, params)?;
 
@@ -223,7 +230,8 @@ impl Distribution for Censored {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        params_view,
     };
     use crate::distributions::Gaussian;
     use ndarray::array;
@@ -291,8 +299,8 @@ mod tests {
         let status = Array1::from_elem(4, CensorStatus::Event);
         let cens = Censored::new(Box::new(Gaussian::new()), status);
 
-        let base = Gaussian.derivatives(&y, &p).unwrap();
-        let got = cens.derivatives(&y, &p).unwrap();
+        let base = default_link_derivatives(&Gaussian, &y, &p).unwrap();
+        let got = default_link_derivatives(&cens, &y, &p).unwrap();
         for param in ["mu", "sigma"] {
             let (ub, _) = &base[param];
             let (ug, _) = &got[param];

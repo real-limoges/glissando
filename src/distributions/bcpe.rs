@@ -83,6 +83,8 @@ impl Distribution for BCPE {
         })
     }
 
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,

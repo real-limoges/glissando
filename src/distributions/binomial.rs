@@ -55,6 +55,8 @@ impl Distribution for Binomial {
         }
     }
 
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,
@@ -189,7 +191,7 @@ impl Distribution for Binomial {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
+        check_discrete_cdf_matches_pmf, check_score_via_finite_diff, default_link_derivatives,
         derivative_keys_match_parameters, params_view,
     };
     use approx::assert_relative_eq;
@@ -213,7 +215,7 @@ mod tests {
         let mu = array![0.3, 0.5, 0.4];
         let mut p = HashMap::new();
         p.insert("mu", &mu);
-        let derivs = bin.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
         let (u_mu, _) = &derivs["mu"];
         assert_relative_eq!(u_mu[0], 3.0 - 10.0 * 0.3, epsilon = 1e-12);
         assert_relative_eq!(u_mu[1], 10.0 - 20.0 * 0.5, epsilon = 1e-12);
@@ -226,7 +228,7 @@ mod tests {
         let mu = array![0.3, 0.5, 0.7];
         let mut p = HashMap::new();
         p.insert("mu", &mu);
-        let derivs = bin.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
         let (u, _) = &derivs["mu"];
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }

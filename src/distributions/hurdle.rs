@@ -20,7 +20,8 @@
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
-    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT, PROB_EPS,
+    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, LogitLink,
+    MIN_WEIGHT, PROB_EPS,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -106,17 +107,22 @@ impl Distribution for Hurdle {
         Ok(out)
     }
 
-    fn derivatives(
+    /// Overrides the η-scale adapter directly: the zero-truncation normalizer
+    /// contributes *observed* information, which is not link-invariant, so there is
+    /// no natural-scale `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// [`Link::mu_eta2`].
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> DerivativesResult {
         let xi = params
             .get("xi")
             .copied()
             .ok_or_else(|| self.unknown_param("xi"))?;
         // Base parameters: zero-truncated score on positive rows, nothing on zeros.
-        let base_derivs = self.base.derivatives(y, params)?;
+        let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let zeros = Array1::<f64>::zeros(y.len());
         let f0 = self.base.cdf(&zeros, params)?;
         let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params)?;

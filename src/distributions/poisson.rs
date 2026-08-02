@@ -33,6 +33,8 @@ impl Distribution for Poisson {
         }
     }
 
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,
@@ -103,7 +105,7 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_discrete_cdf_matches_pmf, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        default_link_derivatives, derivative_keys_match_parameters, params_view,
     };
     use ndarray::array;
 
@@ -122,7 +124,7 @@ mod tests {
         let mu = y.clone();
         let mut p = HashMap::new();
         p.insert("mu", &mu);
-        let derivs = Poisson.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&Poisson, &y, &p).unwrap();
         let (u, _) = &derivs["mu"];
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }

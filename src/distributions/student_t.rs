@@ -81,6 +81,8 @@ impl Distribution for StudentT {
         }
     }
 
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,
