@@ -21,7 +21,7 @@ use super::solver::{
 use super::{
     global_deviance, global_deviance_with, max_abs_diff, FittingParameter, SmoothingCriterion,
 };
-use crate::distributions::{Distribution, MIN_WEIGHT};
+use crate::distributions::{Distribution, LinkContext, MIN_WEIGHT};
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
 use indexmap::IndexMap;
@@ -231,8 +231,16 @@ pub(super) fn step<D: Distribution + ?Sized>(
         .map(|name| (*name, &models[*name].mu))
         .collect();
 
-    // 2. Score and Fisher info for the target parameter.
-    let all_derivs = family.derivatives(y, &params_ref)?;
+    // 2. Score and Fisher info for the target parameter, on the η scale.
+    //    The link derivatives are materialized once per step from each parameter's
+    //    resolved link and live η, so a family with a separable natural scale can
+    //    apply the chain rule generically instead of hardcoding its default link
+    //    (Altitude #1). `LinkContext::new` costs two O(n) passes per parameter.
+    let link_ctx = LinkContext::new(family.parameters().iter().map(|name| {
+        let param = &models[*name];
+        (*name, param.link.as_ref(), &param.eta)
+    }));
+    let all_derivs = family.eta_derivatives(y, &params_ref, &link_ctx)?;
     let (deriv_u, deriv_w) = all_derivs
         .get(target_param)
         .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", target_param)))?;

@@ -21,7 +21,10 @@
 use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
-use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, MIN_WEIGHT, PROB_EPS};
+use super::{
+    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, MIN_WEIGHT,
+    PROB_EPS,
+};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -137,16 +140,21 @@ impl Distribution for Truncated {
         Ok(out)
     }
 
-    fn derivatives(
+    /// Overrides the η-scale adapter directly: the normalizer contributes *observed*
+    /// information, which is not link-invariant, so there is no natural-scale
+    /// `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// [`Link::mu_eta2`].
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> DerivativesResult {
         self.check_len(y.len())?;
         // Score / weight = base contribution minus the normalizer's. For the
         // normalizer D = F(hi) − F(lo):
         //   u = u_base − D'/D,   w = w_base + D''/D − (D'/D)²   (observed info).
-        let base_derivs = self.base.derivatives(y, params)?;
+        let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let (f_lo, grad_lo) = self.cdf_and_grads_at(&self.lower, params)?;
         let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params)?;
 

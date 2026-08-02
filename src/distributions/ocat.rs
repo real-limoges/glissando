@@ -198,6 +198,8 @@ impl Distribution for Ocat {
     //
     // Fisher info: E_y[(u_param)²] summed over categories.
     // -------------------------------------------------------------------------
+    eta_derivatives_passthrough!();
+
     fn derivatives(
         &self,
         y: &Array1<f64>,

@@ -31,8 +31,8 @@
 
 use glissando::distributions::{Beta, Binomial};
 use glissando::distributions::{
-    CensorStatus, Censored, Distribution, Gamma, Gaussian, Hurdle, NegativeBinomial, Ocat, Poisson,
-    StudentT, Truncated, Weibull, BCCG, BCPE, BCT,
+    CensorStatus, Censored, Distribution, Gamma, Gaussian, Hurdle, Link, LinkContext,
+    NegativeBinomial, Ocat, Poisson, StudentT, Truncated, Weibull, BCCG, BCPE, BCT,
 };
 use ndarray::{array, Array1};
 use serde::Serialize;
@@ -62,7 +62,55 @@ fn fmt_vec(v: &Array1<f64>) -> Vec<String> {
     v.iter().map(|&x| fmt(x)).collect()
 }
 
-/// Evaluate `family.derivatives` at the fixture and package it for snapshotting.
+/// Every parameter's default link, plus the η the fixture's μ implies under it.
+///
+/// A [`LinkContext`] borrows the links and η it reports on, so the owner has to
+/// outlive it; hence the two-step `let links = ...; let ctx = links.context();`.
+struct DefaultLinks {
+    names: Vec<&'static str>,
+    links: Vec<Box<dyn Link>>,
+    etas: Vec<Array1<f64>>,
+}
+
+impl DefaultLinks {
+    fn new<D: Distribution + ?Sized>(family: &D, owned: &[(&'static str, Array1<f64>)]) -> Self {
+        let mut names = Vec::new();
+        let mut links = Vec::new();
+        let mut etas = Vec::new();
+        for &name in family.parameters() {
+            let link = family
+                .default_link(name)
+                .unwrap_or_else(|e| panic!("{}::{}: {}", family.name(), name, e));
+            let mu = &owned
+                .iter()
+                .find(|(k, _)| *k == name)
+                .unwrap_or_else(|| panic!("{}: fixture has no '{}' entry", family.name(), name))
+                .1;
+            etas.push(mu.mapv(|m| link.link(m)));
+            links.push(link);
+            names.push(name);
+        }
+        Self { names, links, etas }
+    }
+
+    fn context(&self) -> LinkContext<'_> {
+        LinkContext::new(
+            self.names
+                .iter()
+                .zip(&self.links)
+                .zip(&self.etas)
+                .map(|((&name, link), eta)| (name, link.as_ref(), eta)),
+        )
+    }
+}
+
+/// Evaluate `family.eta_derivatives` at the fixture, under every parameter's
+/// default link, and package it for snapshotting.
+///
+/// Goes through the η-scale adapter rather than `derivatives` because that is the
+/// method the Fisher-scoring step calls. Under default links the two agree by
+/// construction, so these snapshots keep their Phase 0 values while gaining the
+/// property that they pin the *seam* rather than one side of it.
 ///
 /// Iterates `family.parameters()` rather than the returned map's keys so a
 /// family that silently stops emitting a parameter fails loudly here.
@@ -72,9 +120,10 @@ fn golden<D: Distribution + ?Sized>(
     owned: &[(&'static str, Array1<f64>)],
 ) -> DerivativeGolden {
     let params: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+    let links = DefaultLinks::new(family, owned);
     let derivs = family
-        .derivatives(y, &params)
-        .expect("derivatives must succeed on a valid fixture");
+        .eta_derivatives(y, &params, &links.context())
+        .expect("eta_derivatives must succeed on a valid fixture");
 
     let mut scores = BTreeMap::new();
     let mut weights = BTreeMap::new();
