@@ -160,6 +160,16 @@ impl Distribution for Ocat {
         }
     }
 
+    /// No Ocat parameter accepts a link override.
+    ///
+    /// The `eta_derivatives` override below is written against this family's own
+    /// links and cannot be lifted to a generic chain rule: `params["mu"]` holds
+    /// η rather than μ, and `jac_k` is `exp(η_k)` only because `delta_k` uses a
+    /// log link. Substituting any other link leaves both wrong with no error.
+    fn allows_link_override(&self, _param: &str) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "Ocat"
     }
@@ -209,8 +219,9 @@ impl Distribution for Ocat {
     /// separable `(∂l/∂θ, i_θ)` for the generic rule to lift.
     ///
     /// Relatedly, this family's `params["mu"]` already holds **η**, not μ, and
-    /// `jac_k` below is `exp(η_k)` only under the log link. Overriding any of its
-    /// links is therefore unsupported; see `docs/planning/ALTITUDE-1-phases.md`.
+    /// `jac_k` below is `exp(η_k)` only under the log link, which is why
+    /// [`Self::allows_link_override`] rejects every parameter. See the
+    /// `[CHAIN-GENERIC]` section of `docs/math/mathematics.md`.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
@@ -401,7 +412,7 @@ impl Distribution for Ocat {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Right-continuous step CDF at the level ⌊y⌋. Proportional-odds model:
-        // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R — the same
+        // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R: the same
         // cumulative the per-category mass in `loglik_pointwise` differences.
         let eta_mu = require(self, params, "mu")?;
         let n_thresh = self.n_thresholds();

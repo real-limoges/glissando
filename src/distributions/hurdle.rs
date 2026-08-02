@@ -2,14 +2,14 @@
 //! zero-truncated base for the positive part.
 //!
 //! ```text
-//! P(Y = 0) = ξ                          — the zero atom (logit-linked)
-//! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0) — base, zero-TRUNCATED
+//! P(Y = 0) = ξ                            the zero atom (logit-linked)
+//! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0)   base, zero-TRUNCATED
 //! ```
 //!
 //! This is a clean generalization of zero-inflation. Contrast with
 //! zero-*inflation* (DIST-5), where the base can still emit zero
 //! (`P(Y=0) = π + (1−π)·g(0)`): a hurdle's positive process is structurally
-//! separate from the zero process — reach for it when the zero-generating
+//! separate from the zero process; reach for it when the zero-generating
 //! mechanism is distinct (a true two-part model), and for zero-inflation when
 //! zeros are a contamination of one process.
 //!
@@ -65,6 +65,15 @@ impl Distribution for Hurdle {
         } else {
             self.base.default_link(param)
         }
+    }
+
+    /// Hand-written rather than delegated: `xi` is the wrapper's own parameter
+    /// and is not in `base.parameters()`, so asking the base about it would let
+    /// a base that refuses every name (Ocat) veto a parameter it has never heard
+    /// of. `xi`'s atom goes through `chain_to_eta` like any plain family, so it
+    /// accepts any link.
+    fn allows_link_override(&self, param: &str) -> bool {
+        param == "xi" || self.base.allows_link_override(param)
     }
 
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
@@ -138,7 +147,7 @@ impl Distribution for Hurdle {
                     // Writing 0.0 here and letting `scoring::step` floor it would be
                     // numerically identical (`u/w = 0` either way), but it would tally
                     // one `weight_floor_hits` per structural zero on every iteration,
-                    // reporting every well-behaved hurdle fit as degenerate — the
+                    // reporting every well-behaved hurdle fit as degenerate, the
                     // opposite of what making that diagnostic accurate was for.
                     u[i] = 0.0;
                     w[i] = MIN_WEIGHT;
@@ -158,7 +167,7 @@ impl Distribution for Hurdle {
         // Under the default logit link `mu_eta = ξ(1−ξ)`, so `chain_to_eta`
         // recovers the classic `u_η = I(y=0) − ξ` and `w_η = ξ(1−ξ)`.
         //
-        // **The guard is on the denominator, not on ξ** — the same decision, for
+        // **The guard is on the denominator, not on ξ**: the same decision, for
         // the same reason, as `binomial.rs`. `clamp_prob` still applies in
         // `loglik_pointwise`, which takes a logarithm, but a clamp here would break
         // the telescoping: the caller multiplies by a `mu_eta` computed from η
@@ -180,7 +189,7 @@ impl Distribution for Hurdle {
 
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         // Reports the untruncated base variance (the zero atom and truncation are
-        // not folded in — a known diagnostic approximation, as for Truncated).
+        // not folded in; a known diagnostic approximation, as for Truncated).
         self.base.variance(params)
     }
 
@@ -283,9 +292,9 @@ mod tests {
     fn score_matches_finite_diff_under_a_non_default_link() {
         // Altitude #1 Phase 3 acceptance gate, covering both of this wrapper's
         // hardcoded-link sites in one fixture:
-        //   μ on `sqrt`  — the zero-truncation normalizer's `F'(0)/D` term, built
+        //   μ on `sqrt`:   the zero-truncation normalizer's `F'(0)/D` term, built
         //                  from Gamma's analytic CDF derivative;
-        //   ξ on `probit`— the zero atom, which used to write the logit chain rule
+        //   ξ on `probit`: the zero atom, which used to write the logit chain rule
         //                  inline and so ignored the override entirely.
         // Gamma's μ is strictly positive, so η = √μ stays in the link's domain.
         let y = array![0.0, 2.0, 3.0, 0.0];

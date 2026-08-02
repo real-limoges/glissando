@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>glissando · structural wrappers — bindings &amp; derivatives implementation guide</title>
+<title>glissando · structural wrappers: bindings &amp; derivatives implementation guide</title>
 <style>
   :root {
     --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
@@ -80,42 +80,46 @@
 <body>
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>D · Structural / likelihood modeling</b> (follow-on)</p>
-  <h1>glissando <span class="sub">· structural wrappers — bindings &amp; derivatives</span></h1>
-  <p class="lede">The two items left open after <span class="id done">STRUCT-1</span>…<span class="id done">STRUCT-4</span> (censoring, truncation, hurdle, finite mixtures) landed in the Rust crate. Both their preconditions are now met — the typed Rust wrapper API ships (<code>src/distributions/censored.rs</code>, <code>truncated.rs</code>, <code>hurdle.rs</code>, <code>src/fitting/mixture.rs</code>) and so does <span class="id done">SER-1</span> (the serializable <code>FamilyDescriptor</code>) — so neither is blocked any longer.</p>
+  <h1>glissando <span class="sub">· structural wrappers: bindings &amp; derivatives</span></h1>
+  <p class="lede">The two items left open after <span class="id done">STRUCT-1</span>…<span class="id done">STRUCT-4</span> (censoring, truncation, hurdle, finite mixtures) landed in the Rust crate. Both their preconditions are now met: the typed Rust wrapper API ships (<code>src/distributions/censored.rs</code>, <code>truncated.rs</code>, <code>hurdle.rs</code>, <code>src/fitting/mixture.rs</code>), and so does <span class="id done">SER-1</span>, the serializable <code>FamilyDescriptor</code>. Neither is blocked any longer.</p>
   <p class="lede">This guide covers <b style="color:#fff">two independent pieces</b> that can be tackled in either order:</p>
   <ul class="lede" style="margin-top:-.5rem">
-    <li><span class="id">BIND-D</span> — Python &amp; WASM construction of the structural wrappers.</li>
-    <li><span class="id">DERIV-D</span> — analytic shape-parameter CDF η-derivatives, retiring the central-difference fallback.</li>
+    <li><span class="id">BIND-D</span>: Python &amp; WASM construction of the structural wrappers.</li>
+    <li><span class="id">DERIV-D</span>: analytic shape-parameter CDF derivatives, retiring the central-difference fallback.</li>
   </ul>
 
   <h2 class="part">BIND-D · cross-surface construction of the wrappers</h2>
   <div class="ns">
-    <p>The wrappers are <b>stateful</b> — each holds a boxed base <code>Distribution</code> plus per-observation response-side state (a censoring-status vector, truncation limits, mixing weights). Like <code>Binomial</code> and <code>Ocat</code>, they are therefore <em>excluded from <code>from_name</code></em> (<code>src/distributions/mod.rs:298</code>): a bare family string cannot carry the base family <em>and</em> the per-row state. They are constructed only through the typed Rust API today; this item carries that typed surface to Python and WASM.</p>
-    <p>The serialization precondition is already met: <span class="id done">SER-1</span> means <code>to_json</code> / <code>from_json</code> bundle a structured <code>FamilyDescriptor</code> (not just a name), and <code>FamilyDescriptor::build()</code> reconstructs the boxed base — so a wrapper built on a surface can round-trip. What is missing is only the surface constructors.</p>
+    <p>The wrappers are <b>stateful</b>: each holds a boxed base <code>Distribution</code> plus per-observation response-side state (a censoring-status vector, truncation limits, mixing weights). Like <code>Binomial</code> and <code>Ocat</code>, they are therefore <em>excluded from <code>from_name</code></em> (<code>src/distributions/mod.rs:298</code>): a bare family string cannot carry the base family <em>and</em> the per-row state. They are constructed only through the typed Rust API today; this item carries that typed surface to Python and WASM.</p>
+    <p>The serialization precondition is already met: <span class="id done">SER-1</span> means <code>to_json</code> / <code>from_json</code> bundle a structured <code>FamilyDescriptor</code> (not just a name), and <code>FamilyDescriptor::build()</code> reconstructs the boxed base, so a wrapper built on a surface can round-trip. What is missing is only the surface constructors.</p>
     <ol class="steps">
-      <li><b>Python classes</b> in <code>src/python.rs</code> — a class per wrapper mirroring the Rust constructor: <code>Censored(base=..., status=...)</code>, <code>Truncated(base=..., lower=..., upper=...)</code>, <code>Hurdle(base=..., ...)</code>, and a mixture entry point over <code>fit_mixture</code>. Accept the base as an already-constructed family object and the response-side state as numpy arrays; marshal to the <code>Array1</code> the Rust constructor expects. The <code>FamilyType</code> enum in <code>src/ffi.rs</code> is the precedent for passing typed family state the name-based dispatch can't.</li>
-      <li><b>WASM constructors</b> in <code>src/wasm.rs</code> — <code>wasm.rs</code> delegates to the <code>glissando::json</code> facade, so expose the wrappers through a JSON shape that names the base family descriptor plus the structural state, and have the facade build the wrapper via <code>FamilyDescriptor</code>. No new serialization format is needed — reuse the descriptor that <span class="id done">SER-1</span> already round-trips.</li>
+      <li><b>Python classes</b> in <code>src/python.rs</code>: a class per wrapper mirroring the Rust constructor: <code>Censored(base=..., status=...)</code>, <code>Truncated(base=..., lower=..., upper=...)</code>, <code>Hurdle(base=..., ...)</code>, and a mixture entry point over <code>fit_mixture</code>. Accept the base as an already-constructed family object and the response-side state as numpy arrays; marshal to the <code>Array1</code> the Rust constructor expects. The <code>FamilyType</code> enum in <code>src/ffi.rs</code> is the precedent for passing typed family state the name-based dispatch can't.</li>
+      <li><b>WASM constructors</b> in <code>src/wasm.rs</code>. <code>wasm.rs</code> delegates to the <code>glissando::json</code> facade, so expose the wrappers through a JSON shape that names the base family descriptor plus the structural state, and have the facade build the wrapper via <code>FamilyDescriptor</code>. No new serialization format is needed; reuse the descriptor that <span class="id done">SER-1</span> already round-trips.</li>
       <li><b>Worked examples</b> (<span class="id">DOC-3</span>): a right-censored Weibull survival fit and a left-truncated Gaussian, one per surface, in the docs.</li>
     </ol>
   </div>
 
   <h2 class="part">DERIV-D · analytic shape-parameter CDF derivatives</h2>
   <div class="ns">
-    <p>Censoring and truncation differentiate the base family's <code>cdf</code> w.r.t. the η of each parameter. The trait hook is <code>Distribution::cdf_eta_derivatives</code> — it returns analytic <code>(∂F/∂η, ∂²F/∂η²)</code> and defaults to empty, in which case <code>src/distributions/structural.rs</code> central-differences the <code>cdf</code> on the η scale (<code>numeric_cdf_grad</code>, <code>structural.rs:49</code>).</p>
-    <p>Analytic derivatives are <b>already supplied for the location/scale parameters</b> where the CDF is elementary — Gaussian μ/σ, Student-t μ/σ, Gamma μ (see the <code>cdf_eta_derivatives</code> impls in <code>gaussian.rs</code>, <code>student_t.rs</code>, <code>gamma.rs</code>). What still falls back to central differencing is the <b>non-elementary shape parameters</b>:</p>
+    <p>Censoring and truncation differentiate the base family's <code>cdf</code> w.r.t. each parameter. The trait hook is <code>Distribution::cdf_theta_derivatives</code>: it returns analytic <b>natural-scale</b> <code>(∂F/∂θ, ∂²F/∂θ²)</code> and defaults to empty, in which case <code>src/distributions/structural.rs</code> central-differences the <code>cdf</code> on the η scale (<code>numeric_cdf_grad</code>).</p>
+    <p><b>The contract is on θ, not η.</b> It was <code>(∂F/∂η, ∂²F/∂η²)</code> until the generic-link-chain-rule work landed; a family that still returns η-scale values here will be chained a second time and silently produce wrong censored / truncated weights. <code>cdf_eta_grads</code> in <code>structural.rs</code> owns the chaining, and it uses the <b>second-order</b> rule, because a CDF is not a likelihood and the <code>mu_eta2</code> term does not vanish:</p>
+    <pre><code>∂F/∂η   = mu_eta · ∂F/∂θ
+∂²F/∂η² = mu_eta² · ∂²F/∂θ² + mu_eta2 · ∂F/∂θ</code></pre>
+    <p>Both <code>mu_eta</code> and <code>mu_eta2</code> come from the <code>LinkContext</code> the scoring step builds, so the link a caller selected through <code>FitConfig::links</code> is honored automatically. The numeric fallback likewise reads <code>(link, η)</code> from that context rather than from <code>default_link</code>.</p>
+    <p>Analytic derivatives are <b>already supplied for the location/scale parameters</b> where the CDF is elementary: Gaussian μ/σ, Student-t μ/σ, Gamma μ (see the <code>cdf_theta_derivatives</code> impls in <code>gaussian.rs</code>, <code>student_t.rs</code>, <code>gamma.rs</code>). What still falls back to central differencing is the <b>non-elementary shape parameters</b>:</p>
     <ul>
-      <li><b>Gamma σ</b> — derivative of the regularized lower incomplete gamma w.r.t. its shape (a series / <code>digamma</code> term).</li>
-      <li><b>Student-t ν</b> — derivative of the regularized incomplete beta w.r.t. the degrees of freedom.</li>
-      <li><b>Beta (both shapes)</b> — derivatives of the regularized incomplete beta w.r.t. its parameters.</li>
+      <li><b>Gamma σ</b>: derivative of the regularized lower incomplete gamma w.r.t. its shape (a series / <code>digamma</code> term).</li>
+      <li><b>Student-t ν</b>: derivative of the regularized incomplete beta w.r.t. the degrees of freedom.</li>
+      <li><b>Beta (both shapes)</b>: derivatives of the regularized incomplete beta w.r.t. its parameters.</li>
     </ul>
-    <p>Each is a matter of differentiating the special function that the family's <code>cdf</code> already calls (<code>statrs::function::gamma::gamma_ur</code>, <code>statrs::function::beta::beta_reg</code>), then mapping <code>∂F/∂θ → ∂F/∂η</code> via the link's <code>mu_eta</code> and the chain rule — the same shape as the location/scale impls already in tree. Extend each family's <code>cdf_eta_derivatives</code> to return the shape-parameter entries; <code>structural.rs</code> will pick them up automatically and stop central-differencing those rows.</p>
-    <p>The shape is the same as the location/scale impls already in tree (<code>gamma.rs:136</code> supplies the <code>μ</code> entry); you add the <code>"sigma"</code> entry alongside it. For Gamma <code>σ</code>, with <code>F = P(α, x)</code>, <code>α = 1/σ²</code>, <code>x = y/(μσ²)</code>:</p>
-    <pre><code>// Gamma σ (η = ln σ):  F = P(α, x).
+    <p>Each is a matter of differentiating the special function that the family's <code>cdf</code> already calls (<code>statrs::function::gamma::gamma_ur</code>, <code>statrs::function::beta::beta_reg</code>) and stopping there. No link appears in the impl at all; that is the whole point of the θ contract. Extend each family's <code>cdf_theta_derivatives</code> to return the shape-parameter entries and <code>structural.rs</code> picks them up automatically, stops central-differencing those rows, and chains them to whatever link the fit is using.</p>
+    <p>The shape is the same as the location/scale impls already in tree (<code>gamma.rs</code> supplies the <code>μ</code> entry); you add the <code>"sigma"</code> entry alongside it. For Gamma <code>σ</code>, with <code>F = P(α, x)</code>, <code>α = 1/σ²</code>, <code>x = y/(μσ²)</code>:</p>
+    <pre><code>// Gamma σ:  F = P(α, x).  Natural scale only; the caller chains to η.
 //   ∂F/∂σ = (∂P/∂α)·(dα/dσ) + (∂P/∂x)·(dx/dσ)
 //   dα/dσ = −2/σ³            dx/dσ = −2x/σ
-//   ∂P/∂x = xᵅ·e⁻ˣ / Γ(α)    (the density term — already used for the μ entry)
-//   ∂P/∂α = the regularized-lower-incomplete-gamma shape derivative — the ONE new
-//           non-elementary piece (a digamma/series term). Then ∂F/∂η_σ = σ·∂F/∂σ.
+//   ∂P/∂x = xᵅ·e⁻ˣ / Γ(α)    (the density term, already used for the μ entry)
+//   ∂P/∂α = the regularized-lower-incomplete-gamma shape derivative: the ONE new
+//           non-elementary piece (a digamma/series term).
 for i in 0..y.len() {
     if !y[i].is_finite() || y[i] &lt;= 0.0 { continue; }   // flat outside support
     let s = sigma[i].max(MIN_POSITIVE);
@@ -123,20 +127,23 @@ for i in 0..y.len() {
     let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
     let dens = (alpha * x.ln() - x - ln_gamma(alpha)).exp();   // ∂P/∂x
     let dp_dalpha = lower_incomplete_gamma_shape_deriv(alpha, x);   // ← todo!()
-    let df_dsigma = dp_dalpha * (-2.0 / (s * s * s)) + dens * (-2.0 * x / s);
-    d1_sigma[i] = s * df_dsigma;          // chain to η = ln σ
-    // d2_sigma[i]: differentiate df_dsigma once more, or fall back numerically
-    //              for the second order if the algebra is not worth it.
+    // Guard each denominator at the power it is used at (DENOM_FLOOR, not a
+    // clamp on σ): a clamp that binds breaks the telescoping against a mu_eta
+    // the caller computes from η independently.
+    d1_sigma[i] = dp_dalpha * (-2.0 / (s * s * s)) + dens * (-2.0 * x / s);
+    // d2_sigma[i]: differentiate once more, or omit the entry entirely and let
+    //              the numeric fallback keep handling σ.
 }</code></pre>
+    <p>Note there is no trailing <code>* s</code>. Multiplying by the link derivative here is the classic mistake against this contract: <code>cdf_eta_grads</code> already applies <code>mu_eta</code>, so a family that chains too would produce <code>mu_eta²·∂F/∂θ</code> and be wrong by a factor of σ under the default link and by something else entirely under an override. Omitting an entry is always safe; returning a pre-chained one is not.</p>
     <p>Student-t <code>ν</code> and Beta's two shapes are the analogous derivatives of the regularized incomplete <em>beta</em> w.r.t. its parameters; once <code>lower_incomplete_gamma_shape_deriv</code> / its beta sibling land in <code>src/math.rs</code>, the per-family wiring is this same dozen lines.</p>
-    <p><b>Validate</b> with the existing <code>check_score_via_finite_diff</code> harness: the new analytic entries must match the central-difference values they replace to tolerance, on both censored and uncensored rows. This is the single test that catches every algebra slip; gate it across Gamma, Student-t, and Beta.</p>
+    <p><b>Validate</b> with <code>check_cdf_theta_derivatives_via_finite_diff</code>, which differences <code>cdf</code> on θ directly with a relative step: the new analytic entries must match to tolerance. Pair it with the wrapper-level <code>check_eta_score_via_finite_diff</code> under a <b>non-default</b> link, which is the check that catches a spurious chain (it fails by exactly the link-derivative factor). Gate both across Gamma, Student-t, and Beta.</p>
   </div>
 
   <h2 class="part">Done when</h2>
   <div class="loop">
     <table>
       <tr><td class="k"><span class="id">BIND-D</span></td><td>Python classes &amp; WASM constructors build all four wrappers from a base family + response-side state; round-trip via the <code>FamilyDescriptor</code> SER-1 path; worked examples shipped.</td></tr>
-      <tr><td class="k"><span class="id">DERIV-D</span></td><td>Analytic <code>cdf_eta_derivatives</code> for Gamma σ, Student-t ν, and Beta shapes; <code>structural.rs</code> no longer central-differences those parameters; analytic-vs-FD checks green.</td></tr>
+      <tr><td class="k"><span class="id">DERIV-D</span></td><td>Analytic <code>cdf_theta_derivatives</code> for Gamma σ, Student-t ν, and Beta shapes; <code>structural.rs</code> no longer central-differences those parameters; analytic-vs-FD checks green, on θ and under a non-default link.</td></tr>
     </table>
   </div>
 

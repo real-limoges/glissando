@@ -89,8 +89,8 @@
 <body>
 <div class="wrap">
   <h1>glissando <span class="sub">· feature-completeness roadmap</span></h1>
-  <p class="lede">Target: <b style="color:#fff">parity with R <code>gamlss</code> / <code>mgcv</code></b> as a GAMLSS engine. Presented two ways — <b style="color:#fff">Part 1</b> groups every gap into workstreams of similar work (good for assigning / batching); <b style="color:#fff">Part 2</b> is a single flat stack-ranking by importance (good for deciding what to do next). The same items appear in both; IDs like <span class="id">DIST-1</span> are shared so you can cross-reference.</p>
-  <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall, step-halving, and global-deviance convergence; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 11 distributions with <code>cdf</code>/<code>pdf</code>/<code>quantile</code> (incl. the Box-Cox family BCCG/BCT/BCPE); 10 links with <code>mu_eta</code> (selectable, but only the family <i>default</i> link fits correctly today; see B); native + WASM + Python + JSON surfaces; AIC/BIC/EDF + GAIC(k), stepwise selection, ANOVA / LR test; Pearson, response, and randomized-quantile residuals; centiles / quantile prediction; posterior sampling. Nothing is published.</p>
+  <p class="lede">Target: <b style="color:#fff">parity with R <code>gamlss</code> / <code>mgcv</code></b> as a GAMLSS engine. Presented two ways. <b style="color:#fff">Part 1</b> groups every gap into workstreams of similar work (good for assigning / batching); <b style="color:#fff">Part 2</b> is a single flat stack-ranking by importance (good for deciding what to do next). The same items appear in both; IDs like <span class="id">DIST-1</span> are shared so you can cross-reference.</p>
+  <p class="lede"><b style="color:#fff">Current state (v0.1.0):</b> RS outer loop with REML/GCV/Fellner-Schall, step-halving, and global-deviance convergence; P-spline 1D, CR-spline 1D, 2D tensor, random intercept; 11 distributions with <code>cdf</code>/<code>pdf</code>/<code>quantile</code> (incl. the Box-Cox family BCCG/BCT/BCPE); 10 links with <code>mu_eta</code> and <code>mu_eta2</code>, any of which fits correctly on any parameter (bar two documented exceptions; see B); native + WASM + Python + JSON surfaces; AIC/BIC/EDF + GAIC(k), stepwise selection, ANOVA / LR test; Pearson, response, and randomized-quantile residuals; centiles / quantile prediction; posterior sampling. Nothing is published.</p>
 
   <h2 class="part ship">✅ Recently shipped</h2>
   <div class="ns">
@@ -100,41 +100,41 @@
     <table>
       <tr>
         <td class="g">trait + infer</td>
-        <td><span class="id done">TRAIT-1</span> <span class="id done">INFER-1</span> <span class="id done">INFER-2</span> <span class="id done">TRAIT-2</span> — distributional <code>cdf</code>/<code>pdf</code>/<code>quantile</code> on all families, randomized quantile residuals, centiles / quantile prediction, and the <code>mu_eta</code> link derivative.</td>
+        <td><span class="id done">TRAIT-1</span> <span class="id done">INFER-1</span> <span class="id done">INFER-2</span> <span class="id done">TRAIT-2</span>: distributional <code>cdf</code>/<code>pdf</code>/<code>quantile</code> on all families, randomized quantile residuals, centiles / quantile prediction, and the <code>mu_eta</code> link derivative.</td>
       </tr>
       <tr>
         <td class="g">model selection</td>
-        <td><span class="id done">INFER-3</span> <span class="id done">INFER-4</span> <span class="id done">INFER-7</span> — GAIC(<code>k</code>), stepwise term selection (<code>stepGAIC</code>), and ANOVA / likelihood-ratio model comparison.</td>
+        <td><span class="id done">INFER-3</span> <span class="id done">INFER-4</span> <span class="id done">INFER-7</span>: GAIC(<code>k</code>), stepwise term selection (<code>stepGAIC</code>), and ANOVA / likelihood-ratio model comparison.</td>
       </tr>
       <tr>
         <td class="g">fitting robustness</td>
-        <td><span class="id done">FIT-1</span> <span class="id done">FIT-2</span> — step-halving / line-search on the global deviance, and global-deviance outer convergence in the RS loop.</td>
+        <td><span class="id done">FIT-1</span> <span class="id done">FIT-2</span>: step-halving / line-search on the global deviance, and global-deviance outer convergence in the RS loop.</td>
       </tr>
       <tr>
         <td class="g">link functions</td>
-        <td><span class="id done">LINK-1</span> <span class="id done">LINK-2</span> <span class="id done">LINK-3</span> <span class="id done">LINK-4</span> <span class="id done">LINK-5</span> <span class="id done">LINK-6</span> — probit, cloglog, inverse, inverse-square, sqrt, and cauchit links, each with analytic <code>mu_eta</code>, selectable by name on every surface.</td>
+        <td><span class="id done">LINK-1</span> <span class="id done">LINK-2</span> <span class="id done">LINK-3</span> <span class="id done">LINK-4</span> <span class="id done">LINK-5</span> <span class="id done">LINK-6</span>: probit, cloglog, inverse, inverse-square, sqrt, and cauchit links, each with analytic <code>mu_eta</code>, selectable by name on every surface.</td>
       </tr>
       <tr>
         <td class="g">distribution families</td>
-        <td><span class="id done">DIST-1</span> — the signature Box-Cox family: BCCG (Cole-Green), BCT (Box-Cox-t), BCPE (Box-Cox power exponential), bringing the catalog to 11 families and unlocking LMS centile curves.</td>
+        <td><span class="id done">DIST-1</span>: the signature Box-Cox family: BCCG (Cole-Green), BCT (Box-Cox-t), BCPE (Box-Cox power exponential), bringing the catalog to 11 families and unlocking LMS centile curves.</td>
       </tr>
       <tr>
         <td class="g">data &amp; formula</td>
-        <td><span class="id done">DATA-1</span> <span class="id done">DATA-2</span> <span class="id done">DATA-3</span> <span class="id done">DATA-4</span> <span class="id done">DATA-5</span> — factors / contrasts, interactions, offsets, NA handling, and the <code>"y ~ s(x) + factor(g) + x:z"</code> string parser, across native / JSON / WASM / Python.</td>
+        <td><span class="id done">DATA-1</span> <span class="id done">DATA-2</span> <span class="id done">DATA-3</span> <span class="id done">DATA-4</span> <span class="id done">DATA-5</span>: factors / contrasts, interactions, offsets, NA handling, and the <code>"y ~ s(x) + factor(g) + x:z"</code> string parser, across native / JSON / WASM / Python.</td>
       </tr>
     </table>
   </div>
 
-  <h2 class="part">Part 1 — Grouped by workstream</h2>
+  <h2 class="part">Part 1 · Grouped by workstream</h2>
 
   <h2>A · Distribution trait foundations</h2>
   <div class="ns">
-    <p>The single highest-leverage area: the <code>Distribution</code> trait (<code>src/distributions/mod.rs</code>) now exposes <code>cdf</code>, <code>pdf</code>, <code>quantile</code>, and <code>is_discrete</code> alongside <code>derivatives</code>, <code>loglik</code>, <code>variance</code>, <code>expected_value</code>, <code>initial_value</code>, <code>default_link</code>. These unlocked centiles, randomized quantile residuals, and full-distribution prediction — the defining outputs of GAMLSS.</p>
+    <p>The single highest-leverage area: the <code>Distribution</code> trait (<code>src/distributions/mod.rs</code>) now exposes <code>cdf</code>, <code>pdf</code>, <code>quantile</code>, and <code>is_discrete</code> alongside <code>derivatives</code>, <code>loglik</code>, <code>variance</code>, <code>expected_value</code>, <code>initial_value</code>, <code>default_link</code>. These unlocked centiles, randomized quantile residuals, and full-distribution prediction: the defining outputs of GAMLSS.</p>
   </div>
   <div class="loop">
     <table>
       <tr class="done"><td class="k"><span class="id done">TRAIT-1</span></td><td>✓ <code>cdf(y, params)</code>, <code>pdf(y, params)</code>, <code>quantile(p, params)</code> (+ <code>is_discrete</code>) on the <code>Distribution</code> trait, implemented for all 8 families.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">TRAIT-2</span></td><td>✓ <code>Link</code> derivative method (<code>mu_eta</code> / <code>g'(μ)</code>) on the <code>Link</code> trait (finite-difference default + analytic overrides for Identity/Log/FlooredLog/Logit). Unblocks B. <b>The generic-weight refactor that routes <code>derivatives</code> through <code>mu_eta</code> was folded into the link-expansion items and never actually done</b>, so <code>mu_eta</code> is still dead outside its own unit tests. See the warning under B.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">TRAIT-2</span></td><td>✓ <code>Link</code> derivative method (<code>mu_eta</code> / <code>g'(μ)</code>) on the <code>Link</code> trait (finite-difference default + analytic overrides on all ten built-ins). Unblocks B. The generic-weight refactor that routes <code>derivatives</code> through <code>mu_eta</code> landed 2026-08-01: <code>derivatives</code> now returns natural-scale <code>(∂l/∂θ, i_θ)</code> and the chain rule is applied once, generically, from the link the caller selected. A second derivative <code>mu_eta2</code> was added alongside it for the structural wrappers, whose observed information is not link-invariant.</td></tr>
     </table>
   </div>
 
@@ -142,15 +142,17 @@
   <div class="ns">
     <p>Identity, Log, Logit, FlooredLog plus the standard set below now exist (<code>src/distributions/links.rs</code>), each with an analytic <code>mu_eta</code> validated against finite differences and selectable by name on every surface. <span class="id done">TRAIT-2</span> (the <code>mu_eta</code> hinge) unblocked them. The six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span>) are done; the one remaining item is the shifted / bounded "own"-logit variant. <b>Implementation guide:</b> <a href="../guides/GUIDE-bounded-shifted-links.html">bounded / shifted links (LINK-7)</a>.</p>
 
-    <p><b>⚠ The ✓ below means "constructible and selectable", not "fits correctly".</b> Every family hardcodes the chain rule for <i>its own default link</i> inside <code>Distribution::derivatives</code>, and <code>fitting/scoring.rs</code> never corrects for the link the caller actually chose. Since the IRLS fixed point solves <code>Σᵢ (dμ/dη)ᵢ·(∂l/∂μ)ᵢ·xᵢⱼ = 0</code>, a wrong <code>dμ/dη</code> moves the estimate; the weights additionally move SEs, EDF and λ selection. Measured against an independent maximum-likelihood optimizer (<code>tests/link_mle_oracle.rs</code>), the fitted log-likelihood falls short of the true maximum by <b>45.5</b> for gamma/inverse, 8.5e-3 for binomial/probit, 1.0e-4 for poisson/sqrt and 6.4e-5 for binomial/cloglog. Default links are unaffected and verified correct by the same oracle. The fix is the generic-weight refactor (Altitude #1 in <a href="code-quality-backlog.md">the code-quality backlog</a>); its test scaffolding landed 2026-08-01 and the four failing cases above are committed as <code>#[ignore]</code>d acceptance gates.</p>
+    <p><b>✓ now means "fits correctly", not merely "constructible and selectable".</b> Until 2026-08-01 every family hardcoded the chain rule for <i>its own default link</i> inside <code>Distribution::derivatives</code>, and <code>fitting/scoring.rs</code> never corrected for the link the caller actually chose. Since the IRLS fixed point solves <code>Σᵢ (dμ/dη)ᵢ·(∂l/∂μ)ᵢ·xᵢⱼ = 0</code>, a wrong <code>dμ/dη</code> moved the estimate, and a wrong weight moved SEs, EDF and λ selection. Measured against an independent maximum-likelihood optimizer (<code>tests/link_mle_oracle.rs</code>), the fitted log-likelihood fell short of the true maximum by <b>45.5</b> for gamma/inverse, 8.5e-3 for binomial/probit, 1.0e-4 for poisson/sqrt and 6.4e-5 for binomial/cloglog.</p>
+    <p>All four gaps are closed. <code>derivatives</code> now returns natural-scale <code>(∂l/∂θ, i_θ)</code>; <code>eta_derivatives</code> applies <code>u = mu_eta·∂l/∂θ</code> and <code>w = mu_eta²·i_θ</code> once, generically, from the resolved link; the structural wrappers chain their CDF gradients with the second-order rule <code>∂²F/∂η² = mu_eta²·∂²F/∂θ² + mu_eta2·∂F/∂θ</code>; and <code>MIN_WEIGHT</code> is now applied in exactly one place, downstream of the multiply, which also fixed the <code>weight_floor_hits</code> diagnostic (Altitude #4). The four oracle cases run un-<code>#[ignore]</code>d as standing acceptance gates, alongside per-family finite-difference checks under non-default links and saturated-fixture finiteness gates. Default links were unaffected throughout and are verified by the same oracle.</p>
+    <p><b>Two documented exceptions.</b> <code>FitConfig::links</code> now <i>rejects</i> an override it cannot honor rather than silently ignoring it (<code>Distribution::allows_link_override</code>): every <b>Ocat</b> parameter, because its <code>params["mu"]</code> holds η and its threshold Jacobian is <code>exp(η_k)</code> only under the log link; and <b>Student-t ν</b>, because its floor is a KKT-style aggregate projection written against <code>FlooredLogLink</code>. An override naming a parameter the family does not have is also an error now; it used to be a silent no-op. No <i>domain</i> checking is done: a logit link on a Poisson μ is accepted and produces nonsense.</p>
   </div>
   <div class="loop">
     <table>
-      <tr class="done"><td class="k"><span class="id done">LINK-1</span></td><td>✓ Probit (Φ⁻¹) — binary alternative to logit.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">LINK-2</span></td><td>✓ Complementary log-log (cloglog) — binomial / discrete survival.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">LINK-3</span></td><td>✓ Inverse / reciprocal (1/μ) — classical Gamma canonical link.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">LINK-4</span></td><td>✓ Inverse-square (1/μ²) — Inverse Gaussian canonical link.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">LINK-5</span></td><td>✓ Sqrt — Poisson variance-stabilizing link.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">LINK-1</span></td><td>✓ Probit (Φ⁻¹), the binary alternative to logit.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">LINK-2</span></td><td>✓ Complementary log-log (cloglog), for binomial / discrete survival.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">LINK-3</span></td><td>✓ Inverse / reciprocal (1/μ), the classical Gamma canonical link.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">LINK-4</span></td><td>✓ Inverse-square (1/μ²), the Inverse Gaussian canonical link.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">LINK-5</span></td><td>✓ Sqrt, the Poisson variance-stabilizing link.</td></tr>
       <tr class="done"><td class="k"><span class="id done">LINK-6</span></td><td>✓ Cauchit (heavy-tailed bounded link); shifted / bounded "own" logit variants remain.</td></tr>
     </table>
   </div>
@@ -162,23 +164,23 @@
   </div>
   <div class="loop">
     <table>
-      <tr class="done"><td class="k"><span class="id done">DIST-1</span></td><td>✓ Box-Cox / power family — <b>the signature GAMLSS distributions</b>: BCCG (Box-Cox Cole-Green), BCT (Box-Cox-t), BCPE (Box-Cox power exponential). Powers LMS centile / growth-chart curves.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DIST-1</span></td><td>✓ Box-Cox / power family, <b>the signature GAMLSS distributions</b>: BCCG (Box-Cox Cole-Green), BCT (Box-Cox-t), BCPE (Box-Cox power exponential). Powers LMS centile / growth-chart curves.</td></tr>
       <tr><td class="k"><span class="id">DIST-2</span></td><td>Common continuous-positive: Inverse Gaussian (IG), Weibull, Lognormal (LOGNO), Exponential, Generalized Gamma (GG), Pareto. <em>Activates the just-shipped inverse / inverse-square / sqrt canonical links.</em></td></tr>
       <tr><td class="k"><span class="id">DIST-3</span></td><td>Skew / kurtotic continuous: Skew Normal (SN1/SN2), Skew-t (ST1–ST5), Sinh-Arcsinh (SHASH), Johnson SU (JSU), Power Exponential (PE), Generalized t (GT).</td></tr>
       <tr><td class="k"><span class="id">DIST-4</span></td><td>Count families: Geometric, Logarithmic, Beta-Binomial, Double Poisson, Poisson-Inverse-Gaussian (PIG), Sichel, Delaporte.</td></tr>
       <tr><td class="k"><span class="id">DIST-5</span></td><td>Zero-inflated / zero-adjusted: ZIP, ZINBI, Zero-Adjusted Gamma (ZAGA), Zero-Adjusted IG (ZAIG), Zero/One-Inflated Beta (BEINF/BEZI/BEOI).</td></tr>
       <tr><td class="k"><span class="id">DIST-6</span></td><td>Ocat generalization beyond the 2–5 category cap (<code>src/distributions/ocat.rs</code> panics outside 2–5).</td></tr>
-      <tr><td class="k"><span class="id">DIST-7</span></td><td><b>Tweedie</b> — compound Poisson-Gamma for zero-inflated continuous data. <b>A high-value real-world use case</b>: insurance claims, rainfall, e-commerce spend — the canonical "exact zeros plus a positive continuous part" distribution. Carries a power-variance parameter <code>p</code> (1&lt;p&lt;2); unlike DIST-2 it has <b>no closed-form density</b>, so <code>loglik</code>/<code>cdf</code> need a series or saddlepoint evaluation — a focused mini-project closer to the Box-Cox derivative work than to the easy positive-continuous template.</td></tr>
+      <tr><td class="k"><span class="id">DIST-7</span></td><td><b>Tweedie</b>: compound Poisson-Gamma for zero-inflated continuous data. <b>A high-value real-world use case</b>: insurance claims, rainfall, e-commerce spend; the canonical "exact zeros plus a positive continuous part" distribution. Carries a power-variance parameter <code>p</code> (1&lt;p&lt;2); unlike DIST-2 it has <b>no closed-form density</b>, so <code>loglik</code>/<code>cdf</code> need a series or saddlepoint evaluation, making it a focused mini-project closer to the Box-Cox derivative work than to the easy positive-continuous template.</td></tr>
     </table>
   </div>
 
   <h2>D · Structural / likelihood modeling</h2>
   <div class="ns">
-    <p>The trait has no hooks for these; they need new machinery, not just new families. <span class="id done">STRUCT-1</span>..<span class="id done">STRUCT-4</span> (the wrapper-distribution + response-side-state approach) have landed in the Rust crate. <b>Implementation guide:</b> <a href="../guides/GUIDE-structural-bindings-and-derivatives.html">structural wrappers — bindings &amp; derivatives</a> covers the two follow-on items (Python/WASM construction; analytic shape-parameter CDF derivatives).</p>
+    <p>The trait has no hooks for these; they need new machinery, not just new families. <span class="id done">STRUCT-1</span>..<span class="id done">STRUCT-4</span> (the wrapper-distribution + response-side-state approach) have landed in the Rust crate. <b>Implementation guide:</b> <a href="../guides/GUIDE-structural-bindings-and-derivatives.html">structural wrappers: bindings &amp; derivatives</a> covers the two follow-on items (Python/WASM construction; analytic shape-parameter CDF derivatives).</p>
   </div>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id done">STRUCT-1</span></td><td>Censoring (left / right / interval) — survival-style response.</td></tr>
+      <tr><td class="k"><span class="id done">STRUCT-1</span></td><td>Censoring (left / right / interval): survival-style response.</td></tr>
       <tr><td class="k"><span class="id done">STRUCT-2</span></td><td>Truncation (left / right / interval) bounds.</td></tr>
       <tr><td class="k"><span class="id done">STRUCT-3</span></td><td>Hurdle / two-part structure (generalizes zero-inflation cleanly).</td></tr>
       <tr><td class="k"><span class="id done">STRUCT-4</span></td><td>Finite mixture models (component machinery).</td></tr>
@@ -191,7 +193,7 @@
   </div>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">SMOOTH-1</span></td><td>Cyclic splines (mgcv <code>bs="cc"</code>) — seasonal / periodic.</td></tr>
+      <tr><td class="k"><span class="id">SMOOTH-1</span></td><td>Cyclic splines (mgcv <code>bs="cc"</code>): seasonal / periodic.</td></tr>
       <tr><td class="k"><span class="id">SMOOTH-2</span></td><td>Thin-plate regression splines (<code>bs="tp"</code>).</td></tr>
       <tr><td class="k"><span class="id">SMOOTH-3</span></td><td>By-factor / varying-coefficient smooths (<code>s(x, by=f)</code>).</td></tr>
       <tr><td class="k"><span class="id">SMOOTH-4</span></td><td>Random slopes (only random intercepts exist today).</td></tr>
@@ -203,13 +205,13 @@
 
   <h2>F · Fitting engine robustness</h2>
   <div class="ns">
-    <p><code>fit_gamlss</code> (<code>src/fitting/mod.rs</code>) is RS-only with per-parameter coefficient-change convergence; stability comes from weight floors + step caps. <b>Implementation guide:</b> <a href="../guides/GUIDE-fitting-algorithms.html">fitting algorithms — CG &amp; grid λ</a> covers <span class="id">FIT-3</span> (Cole-Green) / <span class="id">FIT-4</span> (grid λ).</p>
+    <p><code>fit_gamlss</code> (<code>src/fitting/mod.rs</code>) is RS-only with per-parameter coefficient-change convergence; stability comes from weight floors + step caps. <b>Implementation guide:</b> <a href="../guides/GUIDE-fitting-algorithms.html">fitting algorithms: CG &amp; grid λ</a> covers <span class="id">FIT-3</span> (Cole-Green) / <span class="id">FIT-4</span> (grid λ).</p>
   </div>
   <div class="loop">
     <table>
       <tr class="done"><td class="k"><span class="id done">FIT-1</span></td><td>✓ Step-halving / line-search on the global deviance in the RS loop.</td></tr>
       <tr class="done"><td class="k"><span class="id done">FIT-2</span></td><td>✓ Global-deviance outer convergence criterion (in addition to Δβ), surfaced via <code>FitConfig::gd_tolerance</code> and <code>FitDiagnostics::final_deviance</code>.</td></tr>
-      <tr><td class="k"><span class="id">FIT-3</span></td><td>CG (Cole-Green) algorithm for cross-parameter derivative coupling — gamlss's second fitting algorithm, for when RS mixes slowly.</td></tr>
+      <tr><td class="k"><span class="id">FIT-3</span></td><td>CG (Cole-Green) algorithm for cross-parameter derivative coupling; gamlss's second fitting algorithm, for when RS mixes slowly.</td></tr>
       <tr><td class="k"><span class="id">FIT-4</span></td><td>GAIC-based / grid ("magic"-style) λ selection as an alternative to the L-BFGS criteria.</td></tr>
     </table>
   </div>
@@ -220,7 +222,7 @@
   </div>
   <div class="loop">
     <table>
-      <tr class="done"><td class="k"><span class="id done">INFER-1</span></td><td>✓ Randomized (normalized) quantile residuals — gamlss's <b>default</b> residual (<code>GamlssModel::quantile_residuals</code>).</td></tr>
+      <tr class="done"><td class="k"><span class="id done">INFER-1</span></td><td>✓ Randomized (normalized) quantile residuals, gamlss's <b>default</b> residual (<code>GamlssModel::quantile_residuals</code>).</td></tr>
       <tr class="done"><td class="k"><span class="id done">INFER-2</span></td><td>✓ Centile / quantile prediction (<code>centiles()</code> / <code>quantile_prediction()</code>); full-distribution prediction is already <code>predict()</code>.</td></tr>
       <tr class="done"><td class="k"><span class="id done">INFER-3</span></td><td>✓ GAIC with arbitrary penalty <code>k</code> (<code>compute_gaic</code> / <code>GamlssModel::gaic</code>).</td></tr>
       <tr class="done"><td class="k"><span class="id done">INFER-4</span></td><td>✓ Stepwise term selection (<code>step_gaic</code>: forward / backward / both).</td></tr>
@@ -236,25 +238,25 @@
   </div>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">DIAG-1</span></td><td>Worm plots (the gamlss diagnostic) — needs <span class="id">INFER-1</span>.</td></tr>
-      <tr><td class="k"><span class="id">DIAG-2</span></td><td>Q-Q plots and detrended Q-Q — needs <span class="id">INFER-1</span>.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-1</span></td><td>Worm plots (the gamlss diagnostic); needs <span class="id">INFER-1</span>.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-2</span></td><td>Q-Q plots and detrended Q-Q; needs <span class="id">INFER-1</span>.</td></tr>
       <tr><td class="k"><span class="id">DIAG-3</span></td><td>Deviance residuals.</td></tr>
       <tr><td class="k"><span class="id">DIAG-4</span></td><td>Goodness-of-fit statistics (Filliben correlation, Z/Q stats).</td></tr>
-      <tr><td class="k"><span class="id">DIAG-5</span></td><td>Term-effect plotting data (partial-effect curves + CI bands) — needs <span class="id">INFER-6</span>.</td></tr>
+      <tr><td class="k"><span class="id">DIAG-5</span></td><td>Term-effect plotting data (partial-effect curves + CI bands); needs <span class="id">INFER-6</span>.</td></tr>
     </table>
   </div>
 
   <h2>I · Data handling &amp; formula</h2>
   <div class="ns">
-    <p><code>DataSet</code> is <code>HashMap&lt;String, Array1&lt;f64&gt;&gt;</code> (all f64); <code>Formula</code> is term lists. <b style="color:var(--good)">Shipped</b> on native / JSON / WASM / Python — the implementation guide has been retired now that the work landed (see git history; the code and tests are the source of truth).</p>
+    <p><code>DataSet</code> is <code>HashMap&lt;String, Array1&lt;f64&gt;&gt;</code> (all f64); <code>Formula</code> is term lists. <b style="color:var(--good)">Shipped</b> on native / JSON / WASM / Python. The implementation guide has been retired now that the work landed (see git history; the code and tests are the source of truth).</p>
   </div>
   <div class="loop">
     <table>
       <tr class="done"><td class="k"><span class="id done">DATA-1</span></td><td>✓ Factor / categorical type with treatment / sum-to-zero contrast coding (<code>Term::factor</code> / <code>Contrast</code>); levels resolve at fit and replay at predict.</td></tr>
       <tr class="done"><td class="k"><span class="id done">DATA-2</span></td><td>✓ Interaction terms (<code>x:z</code>, <code>x*z</code>) via row-Kronecker products (<code>Term::interaction</code>); factor×continuous and factor×factor included.</td></tr>
-      <tr class="done"><td class="k"><span class="id done">DATA-3</span></td><td>✓ Offsets (<code>Term::offset</code>) — fixed per-row carry <code>η = Xβ + offset</code> threaded through fit and predict.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-3</span></td><td>✓ Offsets (<code>Term::offset</code>): a fixed per-row carry <code>η = Xβ + offset</code> threaded through fit and predict.</td></tr>
       <tr class="done"><td class="k"><span class="id done">DATA-4</span></td><td>✓ Missing-data / NA handling (<code>FitConfig::na_action</code>: <code>DropRows</code> default à la <code>na.omit</code>, or <code>Fail</code>).</td></tr>
-      <tr class="done"><td class="k"><span class="id done">DATA-5</span></td><td>✓ String formula parser (<code>Formula::parse</code> / <code>from_strings</code>, <code>"y ~ s(x) + factor(g) + x:z"</code>) — exposed on native / JSON / WASM / Python.</td></tr>
+      <tr class="done"><td class="k"><span class="id done">DATA-5</span></td><td>✓ String formula parser (<code>Formula::parse</code> / <code>from_strings</code>, <code>"y ~ s(x) + factor(g) + x:z"</code>), exposed on native / JSON / WASM / Python.</td></tr>
     </table>
   </div>
 
@@ -281,7 +283,7 @@
   <h2>L · Serialization</h2>
   <div class="loop">
     <table>
-      <tr><td class="k"><span class="id">SER-1</span></td><td><code>to_json</code>/<code>from_json</code> cannot round-trip stateful distributions — <code>Binomial</code> (n_trials) and <code>Ocat</code> (n_categories) can't be rebuilt via <code>load</code> (<code>src/json.rs:206</code>). Serialize distribution params, not just the name.</td></tr>
+      <tr><td class="k"><span class="id">SER-1</span></td><td><code>to_json</code>/<code>from_json</code> cannot round-trip stateful distributions: <code>Binomial</code> (n_trials) and <code>Ocat</code> (n_categories) can't be rebuilt via <code>load</code> (<code>src/json.rs:206</code>). Serialize distribution params, not just the name.</td></tr>
     </table>
   </div>
 
@@ -313,49 +315,49 @@
     <table>
       <tr><td class="k"><span class="id">REL-1</span></td><td>crates.io publish workflow + semver tagging.</td></tr>
       <tr><td class="k"><span class="id">REL-2</span></td><td>npm publish workflow for the WASM package.</td></tr>
-      <tr><td class="k"><span class="id">REL-3</span></td><td>PyPI publish via maturin / cibuildwheel — manylinux + macOS + Windows + aarch64, multi-Python matrix (today a single ubuntu wheel).</td></tr>
+      <tr><td class="k"><span class="id">REL-3</span></td><td>PyPI publish via maturin / cibuildwheel: manylinux + macOS + Windows + aarch64, multi-Python matrix (today a single ubuntu wheel).</td></tr>
       <tr><td class="k"><span class="id">REL-4</span></td><td>Release automation (tag → build → publish) and move off the feature branch.</td></tr>
     </table>
   </div>
 
-  <h2 class="part">Part 2 — Stack-ranked by importance (R gamlss parity)</h2>
+  <h2 class="part">Part 2 · Stack-ranked by importance (R gamlss parity)</h2>
   <p class="lede">Ranked so that each item's prerequisites sit above it, and "what makes GAMLSS GAMLSS" (flexible distributions, centiles, quantile residuals) sits near the top.</p>
   <ol class="steps">
-    <li class="done"><b><span class="id done">TRAIT-1</span></b> — ✓ <code>cdf</code> / <code>pdf</code> / <code>quantile</code> on the <code>Distribution</code> trait.<div class="sub2"><em>Foundational; unlocked centiles, quantile residuals, full-distribution prediction.</em></div></li>
-    <li class="done"><b><span class="id done">INFER-1</span></b> — ✓ Randomized quantile residuals (gamlss's default residual).</li>
-    <li class="done"><b><span class="id done">INFER-2</span></b> — ✓ Centile / quantile prediction (the signature GAMLSS output).</li>
-    <li class="done"><b><span class="id done">DIST-1</span></b> — ✓ Box-Cox family (BCCG / BCT / BCPE), the distributions GAMLSS is known for.</li>
-    <li><b><span class="id">DIST-2</span></b> — Common continuous-positive families (IG, Weibull, Lognormal, Exponential, GG).</li>
-    <li><b><span class="id">DIST-7</span></b> — <b>Tweedie</b> (compound Poisson-Gamma) — high-value zero-inflated continuous use case (insurance, rainfall, e-commerce spend); no closed-form density, needs series / saddlepoint evaluation.</li>
-    <li><b><span class="id">DIST-5</span></b> — Zero-inflated / zero-adjusted families (ZIP, ZINBI, ZAGA, BEINF) — very common in real count / semicontinuous data.</li>
-    <li class="done"><b><span class="id done">TRAIT-2</span></b> — ✓ <code>Link</code> derivative method (<code>mu_eta</code>). <em>Unblocks the link expansion.</em></li>
-    <li class="done"><b><span class="id done">LINK-1..6</span></b> — ✓ Probit, cloglog, inverse, inverse-square, sqrt, cauchit links.</li>
-    <li><b><span class="id">DIST-3</span></b> — Skew / kurtotic families (SN, ST, SHASH, JSU, PE).</li>
-    <li><b><span class="id">DIST-4</span></b> — Additional count families (Geometric, Beta-Binomial, PIG, Sichel, Delaporte, Logarithmic).</li>
-    <li><b><span class="id">DIAG-1</span> / <span class="id">DIAG-2</span></b> — Worm plots and Q-Q plots (the core gamlss diagnostics).</li>
-    <li class="done"><b><span class="id done">INFER-3</span> / <span class="id done">INFER-4</span></b> — ✓ GAIC(k) and stepwise term selection (<code>stepGAIC</code>).</li>
-    <li class="done"><b><span class="id done">FIT-1</span> / <span class="id done">FIT-2</span></b> — ✓ Step-halving + global-deviance convergence (robustness for the heavy-tailed / skew families).</li>
-    <li><b><span class="id">INFER-5</span> / <span class="id">INFER-6</span></b> / <span class="id done">INFER-7</span> — Smooth-term p-values, confidence intervals; <em>ANOVA (INFER-7) ✓ done</em>.</li>
-    <li class="done"><b><span class="id done">DATA-1</span> / <span class="id done">DATA-2</span> / <span class="id done">DATA-3</span></b> — ✓ Factor / categorical encoding, interactions, offsets.</li>
-    <li><b><span class="id done">STRUCT-1</span> / <span class="id done">STRUCT-2</span></b> — Censoring and truncation.</li>
-    <li><b><span class="id">SMOOTH-1..4</span></b> — Cyclic, thin-plate, by-factor smooths, random slopes.</li>
-    <li><b><span class="id done">DATA-5</span></b> ✓ / <b><span class="id">API-1</span> / <span class="id">API-2</span></b> — Formula parser <em>done</em>; fluent builder, <code>summary()</code> remain.</li>
-    <li><b><span class="id">FIT-3</span> / <span class="id">FIT-4</span></b> — CG algorithm, GAIC / grid λ selection.</li>
-    <li><b><span class="id done">STRUCT-3</span> / <span class="id done">STRUCT-4</span></b> — Hurdle / mixture structure.</li>
-    <li><b><span class="id">DIST-6</span></b> — Ocat beyond 5 categories.</li>
-    <li><b><span class="id">DIAG-3</span> / <span class="id">DIAG-4</span> / <span class="id">DIAG-5</span></b> — Deviance residuals, GoF stats, partial-effect plots.</li>
-    <li><b><span class="id">SMOOTH-5..7</span></b> — Monotonic / SCAM, &gt;2D tensors, MRF / adaptive / factor-smooth.</li>
-    <li><b><span class="id">BIND-2</span></b> — Python sklearn / pandas ergonomics.</li>
-    <li class="done"><b><span class="id done">BIND-1</span> / <span class="id done">BIND-3</span></b> — ✓ WASM pkg refresh + cross-surface feature parity (Python / JSON / WASM carry the new selection &amp; distributional methods; recurs as future features land).</li>
-    <li><b><span class="id">SER-1</span></b> — Stateful-distribution serialization round-trip.</li>
-    <li><b><span class="id">DOC-1..4</span></b> — docs.rs, user guide, examples, migration guide.</li>
-    <li><b><span class="id">TEST-1..4</span></b> — proptest, fuzzing, un-ignore mgcv_reference, more snapshots.</li>
-    <li><b><span class="id">REL-1..4</span></b> — Publishing to crates.io / npm / PyPI + release automation.</li>
+    <li class="done"><b><span class="id done">TRAIT-1</span></b>: ✓ <code>cdf</code> / <code>pdf</code> / <code>quantile</code> on the <code>Distribution</code> trait.<div class="sub2"><em>Foundational; unlocked centiles, quantile residuals, full-distribution prediction.</em></div></li>
+    <li class="done"><b><span class="id done">INFER-1</span></b>: ✓ Randomized quantile residuals (gamlss's default residual).</li>
+    <li class="done"><b><span class="id done">INFER-2</span></b>: ✓ Centile / quantile prediction (the signature GAMLSS output).</li>
+    <li class="done"><b><span class="id done">DIST-1</span></b>: ✓ Box-Cox family (BCCG / BCT / BCPE), the distributions GAMLSS is known for.</li>
+    <li><b><span class="id">DIST-2</span></b>: Common continuous-positive families (IG, Weibull, Lognormal, Exponential, GG).</li>
+    <li><b><span class="id">DIST-7</span></b>: <b>Tweedie</b> (compound Poisson-Gamma), a high-value zero-inflated continuous use case (insurance, rainfall, e-commerce spend); no closed-form density, needs series / saddlepoint evaluation.</li>
+    <li><b><span class="id">DIST-5</span></b>: Zero-inflated / zero-adjusted families (ZIP, ZINBI, ZAGA, BEINF); very common in real count / semicontinuous data.</li>
+    <li class="done"><b><span class="id done">TRAIT-2</span></b>: ✓ <code>Link</code> derivative method (<code>mu_eta</code>). <em>Unblocks the link expansion.</em></li>
+    <li class="done"><b><span class="id done">LINK-1..6</span></b>: ✓ Probit, cloglog, inverse, inverse-square, sqrt, cauchit links.</li>
+    <li><b><span class="id">DIST-3</span></b>: Skew / kurtotic families (SN, ST, SHASH, JSU, PE).</li>
+    <li><b><span class="id">DIST-4</span></b>: Additional count families (Geometric, Beta-Binomial, PIG, Sichel, Delaporte, Logarithmic).</li>
+    <li><b><span class="id">DIAG-1</span> / <span class="id">DIAG-2</span></b>: Worm plots and Q-Q plots (the core gamlss diagnostics).</li>
+    <li class="done"><b><span class="id done">INFER-3</span> / <span class="id done">INFER-4</span></b>: ✓ GAIC(k) and stepwise term selection (<code>stepGAIC</code>).</li>
+    <li class="done"><b><span class="id done">FIT-1</span> / <span class="id done">FIT-2</span></b>: ✓ Step-halving + global-deviance convergence (robustness for the heavy-tailed / skew families).</li>
+    <li><b><span class="id">INFER-5</span> / <span class="id">INFER-6</span></b> / <span class="id done">INFER-7</span>: Smooth-term p-values, confidence intervals; <em>ANOVA (INFER-7) ✓ done</em>.</li>
+    <li class="done"><b><span class="id done">DATA-1</span> / <span class="id done">DATA-2</span> / <span class="id done">DATA-3</span></b>: ✓ Factor / categorical encoding, interactions, offsets.</li>
+    <li><b><span class="id done">STRUCT-1</span> / <span class="id done">STRUCT-2</span></b>: Censoring and truncation.</li>
+    <li><b><span class="id">SMOOTH-1..4</span></b>: Cyclic, thin-plate, by-factor smooths, random slopes.</li>
+    <li><b><span class="id done">DATA-5</span></b> ✓ / <b><span class="id">API-1</span> / <span class="id">API-2</span></b>: Formula parser <em>done</em>; fluent builder, <code>summary()</code> remain.</li>
+    <li><b><span class="id">FIT-3</span> / <span class="id">FIT-4</span></b>: CG algorithm, GAIC / grid λ selection.</li>
+    <li><b><span class="id done">STRUCT-3</span> / <span class="id done">STRUCT-4</span></b>: Hurdle / mixture structure.</li>
+    <li><b><span class="id">DIST-6</span></b>: Ocat beyond 5 categories.</li>
+    <li><b><span class="id">DIAG-3</span> / <span class="id">DIAG-4</span> / <span class="id">DIAG-5</span></b>: Deviance residuals, GoF stats, partial-effect plots.</li>
+    <li><b><span class="id">SMOOTH-5..7</span></b>: Monotonic / SCAM, &gt;2D tensors, MRF / adaptive / factor-smooth.</li>
+    <li><b><span class="id">BIND-2</span></b>: Python sklearn / pandas ergonomics.</li>
+    <li class="done"><b><span class="id done">BIND-1</span> / <span class="id done">BIND-3</span></b>: ✓ WASM pkg refresh + cross-surface feature parity (Python / JSON / WASM carry the new selection &amp; distributional methods; recurs as future features land).</li>
+    <li><b><span class="id">SER-1</span></b>: Stateful-distribution serialization round-trip.</li>
+    <li><b><span class="id">DOC-1..4</span></b>: docs.rs, user guide, examples, migration guide.</li>
+    <li><b><span class="id">TEST-1..4</span></b>: proptest, fuzzing, un-ignore mgcv_reference, more snapshots.</li>
+    <li><b><span class="id">REL-1..4</span></b>: Publishing to crates.io / npm / PyPI + release automation.</li>
   </ol>
 
   <h2>Critical path</h2>
   <div class="ns">
-    <p><span class="id done">TRAIT-1</span> → (<span class="id done">INFER-1</span>, <span class="id done">INFER-2</span>), <span class="id done">TRAIT-2</span> → links (<span class="id done">LINK-1..6</span>), the signature Box-Cox family (<span class="id done">DIST-1</span>), and the data / formula ergonomics (<span class="id done">DATA-1..5</span>) have <b>all landed</b>. <span class="id">TRAIT-1</span> was the single most important item in the roadmap because almost everything statistically distinctive about GAMLSS depended on it. With the foundations, links, and Box-Cox catalog shipped, the critical path now runs through the rest of the distribution catalog — chiefly the continuous-positive families (<span class="id">DIST-2</span>, which would also exercise the new inverse / inverse-square / sqrt links) and the high-value zero-inflated continuous case <b>Tweedie</b> (<span class="id">DIST-7</span>).</p>
+    <p><span class="id done">TRAIT-1</span> → (<span class="id done">INFER-1</span>, <span class="id done">INFER-2</span>), <span class="id done">TRAIT-2</span> → links (<span class="id done">LINK-1..6</span>), the signature Box-Cox family (<span class="id done">DIST-1</span>), and the data / formula ergonomics (<span class="id done">DATA-1..5</span>) have <b>all landed</b>. <span class="id">TRAIT-1</span> was the single most important item in the roadmap because almost everything statistically distinctive about GAMLSS depended on it. With the foundations, links, and Box-Cox catalog shipped, the critical path now runs through the rest of the distribution catalog, chiefly the continuous-positive families (<span class="id">DIST-2</span>, which would also exercise the new inverse / inverse-square / sqrt links) and the high-value zero-inflated continuous case <b>Tweedie</b> (<span class="id">DIST-7</span>).</p>
   </div>
 
   <footer>glissando · feature-completeness roadmap · v0.1.0 · parity with R gamlss / mgcv</footer>

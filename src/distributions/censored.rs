@@ -47,7 +47,7 @@ pub enum CensorStatus {
 /// The response `y` passed to fit / predict carries the observed time (or, for
 /// interval rows, the interval's lower bound); `upper` carries the interval upper
 /// bound for [`CensorStatus::Interval`] rows and is ignored for the rest. The
-/// wrapper fits the base family's parameters — censoring only reshapes the
+/// wrapper fits the base family's parameters; censoring only reshapes the
 /// likelihood, so `cdf` / `quantile` / `variance` / `expected_value` delegate to
 /// the base.
 #[derive(Debug)]
@@ -119,6 +119,7 @@ impl Distribution for Censored {
     delegate_to_base!(
         parameters,
         default_link,
+        allows_link_override,
         initial_value,
         is_discrete,
         variance,
