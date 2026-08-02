@@ -65,7 +65,7 @@ impl Distribution for BCCG {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -221,7 +221,7 @@ mod tests {
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
-        derivative_keys_match_parameters, finite_array, params_view,
+        derivative_keys_match_parameters, finite_array, no_nan_array, params_view,
     };
     use crate::distributions::{LogLink, SqrtLink};
     use ndarray::array;
@@ -312,11 +312,11 @@ mod tests {
             ("nu", array![1.0, 0.5, -0.5]),
         ];
         let p = params_view(&owned);
-        let natural = BCCG.derivatives(&y, &p).unwrap();
+        let natural = BCCG.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&BCCG, &y, &p).unwrap();
         for name in ["mu", "sigma", "nu"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
             let (u, w) = &chained[name];
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }

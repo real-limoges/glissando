@@ -7,7 +7,7 @@
 // Hessian are pure central differences, and asserts the two agree.
 //
 // WHY IT IS A GENUINE ORACLE. The optimizer never touches
-// `Distribution::derivatives`, `Link::mu_eta`, `fitting::scoring`, or the PWLS
+// `Distribution::theta_derivatives`, `Link::mu_eta`, `fitting::scoring`, or the PWLS
 // solver. It only evaluates `loglik_pointwise`, which is validated
 // independently by each family's own unit tests. So a disagreement localizes
 // precisely to the IRLS machinery: the fit did not find the maximum of the

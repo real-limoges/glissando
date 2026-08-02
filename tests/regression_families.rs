@@ -1,7 +1,7 @@
 // Per-family end-to-end fit snapshots.
 //
 // `tests/regression.rs` snapshots three Gaussian fits, 1 of 15 families. This
-// file covers the rest, so that a change to any family's `derivatives()` shows
+// file covers the rest, so that a change to any family's `theta_derivatives()` shows
 // up as fitted-coefficient drift rather than passing unnoticed.
 //
 // It is the end-to-end counterpart to `tests/derivative_golden.rs`: that file

@@ -35,7 +35,7 @@ impl Distribution for Poisson {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -141,7 +141,7 @@ mod tests {
     fn poisson_unknown_parameter_errors() {
         let y = array![1.0];
         let p: HashMap<&str, &Array1<f64>> = HashMap::new();
-        let err = Poisson.derivatives(&y, &p).unwrap_err();
+        let err = Poisson.theta_derivatives(&y, &p).unwrap_err();
         assert!(matches!(err, GamlssError::UnknownParameter { .. }));
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let y = array![0.0, 3.0, 10.0];
         let owned = [("mu", array![0.0, 1e-320, 1e-8])];
         let p = params_view(&owned);
-        let natural = Poisson.derivatives(&y, &p).unwrap();
+        let natural = Poisson.theta_derivatives(&y, &p).unwrap();
         let (u_nat, i_nat) = &natural["mu"];
         assert!(finite_array(u_nat) && finite_array(i_nat));
 

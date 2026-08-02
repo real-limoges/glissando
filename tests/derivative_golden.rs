@@ -1,4 +1,4 @@
-// Golden characterization tables for `Distribution::derivatives`.
+// Golden characterization tables for `Distribution::theta_derivatives`.
 //
 // PURPOSE. These snapshots freeze the exact `(score, weight)` arrays every
 // family returns today, per parameter, at a fixed fixture. They exist to gate
@@ -107,7 +107,7 @@ impl DefaultLinks {
 /// Evaluate `family.eta_derivatives` at the fixture, under every parameter's
 /// default link, and package it for snapshotting.
 ///
-/// Goes through the η-scale adapter rather than `derivatives` because that is the
+/// Goes through the η-scale adapter rather than `theta_derivatives` because that is the
 /// method the Fisher-scoring step calls. Under default links the two agree by
 /// construction, so these snapshots keep their Phase 0 values while gaining the
 /// property that they pin the *seam* rather than one side of it.

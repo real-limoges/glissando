@@ -110,8 +110,16 @@ impl Distribution for StudentT {
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
     ) -> DerivativesResult {
-        let mut out = chain_to_eta(self.derivatives(y, params)?, ctx)?;
-        out.insert("nu".to_string(), self.nu_eta_derivatives(y, params)?);
+        // Build the standardized-residual block once and hand it to both halves.
+        // `theta_derivatives` and the ν block each need `(z², w_robust)`, and recomputing
+        // it in the second cost two extra O(n) passes plus n divisions on every
+        // Fisher-scoring step — and, worse, disagreed with the first: the ν block
+        // divided by a raw σ where this body uses the `DENOM_FLOOR`-guarded
+        // reciprocal, so at σ = 0 the μ/σ pairs stayed finite while the ν score alone
+        // came out NaN (`z² = ∞` → `w_robust = 0` → `(0·∞ − 1)/ν`).
+        let shared = Standardized::new(self, y, params)?;
+        let mut out = chain_to_eta(self.mu_sigma_derivatives(&shared, params)?, ctx)?;
+        out.insert("nu".to_string(), self.nu_eta_derivatives(&shared, params)?);
         Ok(out)
     }
 
@@ -120,54 +128,12 @@ impl Distribution for StudentT {
     /// ν is deliberately absent: it has no separable natural scale (see
     /// [`Self::eta_derivatives`]). Callers that need all three parameters must go
     /// through `eta_derivatives`, which is what the scoring loop does.
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Student-t log-likelihood, location-scale parameterization. Full derivation
-        // in docs/math/mathematics.md.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
-
-        // Guard each reciprocal at the power it is used at, rather than clamping σ:
-        // raising an already-guarded reciprocal to a power would overflow to infinity
-        // for a σ the log link can still underflow to, and `inf · 0` is NaN. μ's
-        // score and weight divided by a raw σ before Phase 2b; guarding them here
-        // costs nothing and keeps the whole family finite at a saturated σ.
-        let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
-        let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
-
-        let z = (y - mu) * &inv_sigma;
-        let z_sq = z.mapv(|v| v * v);
-
-        // The "robustifying weight" w = (ν+1)/(ν+z²) downweights outliers (large |z|).
-        // It → 1 as ν → ∞, recovering Gaussian behavior.
-        let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
-
-        // μ derivatives (identity link, so the chain rule leaves these untouched).
-        // The score uses the robustifying weight (that IS dl/dμ); the working weight
-        // uses the *expected* information I_μ = (ν+1)/((ν+3)·σ²), the same convention
-        // as gamlss TF's d2ldm2, rather than the data-dependent w_robust/σ², so the
-        // PWLS subproblem (and hence λ selection, EDF, and SEs) matches the RS oracle.
-        let u_mu = &w_robust * &z * &inv_sigma;
-        let i_mu = par_zip_map(nu, &inv_sigma_sq, |nu_i, iss| {
-            (nu_i + 1.0) / (nu_i + 3.0) * iss
-        });
-
-        // σ derivatives, natural scale: ∂l/∂σ = (w·z² − 1)/σ, i_σ = [2ν/(ν+3)]/σ².
-        // Under the default log link `chain_to_eta` (mu_eta = σ) recovers the
-        // previous `u_η = w·z² − 1` and `w_η = 2ν/(ν+3)`. Returned unfloored.
-        let u_sigma = (&w_robust * &z_sq - 1.0) * &inv_sigma;
-        let i_sigma: Array1<f64> = par_zip_map(nu, &inv_sigma_sq, |nu_i, iss| {
-            (2.0 * nu_i) / (nu_i + 3.0) * iss
-        });
-
-        Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
-        ]))
+        self.mu_sigma_derivatives(&Standardized::new(self, y, params)?, params)
     }
 
     fn loglik_pointwise(
@@ -257,6 +223,14 @@ impl Distribution for StudentT {
             let s = sigma[i].max(MIN_POSITIVE);
             let nu_i = nu[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
+            // As in `gaussian.rs`: every derivative below has limit 0 as |z| → ∞, and
+            // taking that limit explicitly is the only way to get it. z overflows to
+            // infinity once the bound and σ are far enough apart (σ on its
+            // `MIN_POSITIVE` floor against a far-out censoring bound), and then
+            // `g' = −g(ν+1)z/(ν+z²)` is ∞/∞ = NaN rather than the 0 it tends to.
+            if !z.is_finite() {
+                continue;
+            }
             // standardized t density g(z)
             let log_g = ln_gamma((nu_i + 1.0) / 2.0)
                 - ln_gamma(nu_i / 2.0)
@@ -268,10 +242,10 @@ impl Distribution for StudentT {
             d1_mu[i] = -g / s;
             d2_mu[i] = g_prime / (s * s);
             d1_sigma[i] = -z * g / s;
-            // As in `gaussian.rs`: `g'` decays fast enough that `z²·g' → 0`, but z²
-            // overflows to infinity around |z| ≈ 1e154 while `g'` has already
-            // underflowed to 0, and `0 · ∞` is NaN. The guard fires only where the
-            // unguarded expression is NaN, leaving every in-range value untouched.
+            // z² still overflows on its own around |z| ≈ 1e154, where z is finite but
+            // `g'` has already underflowed to 0 and `z²·g'` is `∞ · 0`. The guard
+            // fires only where the unguarded expression is NaN, leaving every in-range
+            // value untouched.
             d2_sigma[i] = if z_sq.is_finite() {
                 (2.0 * z * g + z_sq * g_prime) / (s * s)
             } else {
@@ -309,24 +283,104 @@ impl Distribution for StudentT {
     }
 }
 
+/// The standardized-residual block every Student-t derivative body starts from.
+///
+/// Built once per [`Distribution::eta_derivatives`] call and shared by the μ/σ and
+/// ν halves, which both need `(z², w_robust)`. Keeping it in one place is also what
+/// keeps the two halves *agreeing*: the σ guard below has to be the same on both
+/// sides or a saturated σ leaves one block finite and the other NaN.
+struct Standardized {
+    z: Array1<f64>,
+    z_sq: Array1<f64>,
+    /// `w = (ν+1)/(ν+z²)`, the robustifying weight that downweights outliers
+    /// (large `|z|`). It → 1 as ν → ∞, recovering Gaussian behavior.
+    w_robust: Array1<f64>,
+    inv_sigma: Array1<f64>,
+    inv_sigma_sq: Array1<f64>,
+}
+
+impl Standardized {
+    fn new(
+        family: &StudentT,
+        y: &Array1<f64>,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> Result<Self, GamlssError> {
+        let mu = require(family, params, "mu")?;
+        let sigma = require(family, params, "sigma")?;
+        let nu = require(family, params, "nu")?;
+
+        // Guard each reciprocal at the power it is used at, rather than clamping σ:
+        // raising an already-guarded reciprocal to a power would overflow to infinity
+        // for a σ the log link can still underflow to, and `inf · 0` is NaN. μ's
+        // score and weight divided by a raw σ before Phase 2b; guarding them here
+        // costs nothing and keeps the whole family finite at a saturated σ.
+        let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
+        let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
+
+        let z = (y - mu) * &inv_sigma;
+        let z_sq = z.mapv(|v| v * v);
+        let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
+
+        Ok(Self {
+            z,
+            z_sq,
+            w_robust,
+            inv_sigma,
+            inv_sigma_sq,
+        })
+    }
+}
+
 impl StudentT {
+    /// Natural-scale score and expected information for μ and σ.
+    ///
+    /// Student-t log-likelihood, location-scale parameterization. Full derivation
+    /// in docs/math/mathematics.md.
+    fn mu_sigma_derivatives(
+        &self,
+        s: &Standardized,
+        params: &HashMap<&str, &Array1<f64>>,
+    ) -> DerivativesResult {
+        let nu = require(self, params, "nu")?;
+
+        // μ derivatives (identity link, so the chain rule leaves these untouched).
+        // The score uses the robustifying weight (that IS dl/dμ); the working weight
+        // uses the *expected* information I_μ = (ν+1)/((ν+3)·σ²), the same convention
+        // as gamlss TF's d2ldm2, rather than the data-dependent w_robust/σ², so the
+        // PWLS subproblem (and hence λ selection, EDF, and SEs) matches the RS oracle.
+        let u_mu = &s.w_robust * &s.z * &s.inv_sigma;
+        let i_mu = par_zip_map(nu, &s.inv_sigma_sq, |nu_i, iss| {
+            (nu_i + 1.0) / (nu_i + 3.0) * iss
+        });
+
+        // σ derivatives, natural scale: ∂l/∂σ = (w·z² − 1)/σ, i_σ = [2ν/(ν+3)]/σ².
+        // Under the default log link `chain_to_eta` (mu_eta = σ) recovers the
+        // previous `u_η = w·z² − 1` and `w_η = 2ν/(ν+3)`. Returned unfloored.
+        let u_sigma = (&s.w_robust * &s.z_sq - 1.0) * &s.inv_sigma;
+        let i_sigma: Array1<f64> = par_zip_map(nu, &s.inv_sigma_sq, |nu_i, iss| {
+            (2.0 * nu_i) / (nu_i + 3.0) * iss
+        });
+
+        Ok(HashMap::from([
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
+        ]))
+    }
+
     /// The η-scale `(u_ν, w_ν)` pair, deliberately outside the generic chain rule.
     ///
     /// See [`Distribution::eta_derivatives`] on this type for why ν has no
     /// separable natural scale. Nothing here changed in Phase 2b beyond being
-    /// lifted out of `derivatives` and having its `MIN_WEIGHT` floor removed, so
+    /// lifted out of `theta_derivatives` and having its `MIN_WEIGHT` floor removed, so
     /// that `scoring::step` stays the single place any weight is floored.
     fn nu_eta_derivatives(
         &self,
-        y: &Array1<f64>,
+        s: &Standardized,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
-
-        let z_sq = ((y - mu) / sigma).mapv(|v| v * v);
-        let w_robust = par_zip_map(nu, &z_sq, |nu_i, z2_i| (nu_i + 1.0) / (nu_i + z2_i));
+        let z_sq = &s.z_sq;
+        let w_robust = &s.w_robust;
 
         // ν score involves digamma differences.
         let nu_plus_1_half = nu.mapv(|nu_i| (nu_i + 1.0) / 2.0);
@@ -334,8 +388,8 @@ impl StudentT {
         let d1 = digamma_batch(&nu_plus_1_half);
         let d2 = digamma_batch(&nu_half);
 
-        let term3 = par_zip_map(nu, &z_sq, |nu_i, z2_i| (1.0 + z2_i / nu_i).ln());
-        let term4 = par_zip3_map(nu, &w_robust, &z_sq, |nu_i, w_i, z2_i| {
+        let term3 = par_zip_map(nu, z_sq, |nu_i, z2_i| (1.0 + z2_i / nu_i).ln());
+        let term4 = par_zip3_map(nu, w_robust, z_sq, |nu_i, w_i, z2_i| {
             (w_i * z2_i - 1.0) / nu_i
         });
 
@@ -356,7 +410,7 @@ impl StudentT {
         // an intercept (the standard TF usage, and all this crate's ν formulas
         // in practice). Under a covariate/smooth model on ν the pinned rows
         // load on different coefficients and a per-coefficient projected
-        // gradient X'g⁺ would be needed; derivatives() has no design-matrix
+        // gradient X'g⁺ would be needed; theta_derivatives() has no design-matrix
         // access, so that refinement belongs in the scoring layer if ν
         // covariates become a supported pattern.
         let pinned_tol = NU_FLOOR * (1.0 + 1e-9);
@@ -403,7 +457,7 @@ mod tests {
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
-        finite_array, params_view,
+        finite_array, no_nan_array, params_view,
     };
     use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
@@ -540,6 +594,51 @@ mod tests {
     }
 
     #[test]
+    fn the_nu_block_shares_the_guarded_sigma_with_the_mu_sigma_block() {
+        // The ν block used to rebuild `z` from a raw σ where `mu_sigma_derivatives`
+        // divides by the `DENOM_FLOOR`-guarded reciprocal. On an exactly-fitting row
+        // (y = μ) with a collapsed σ that is `0/0` = NaN against the guarded form's
+        // `0 · 1e300` = 0, so the ν score alone went NaN while μ and σ stayed finite.
+        let y = array![1.0, 2.0];
+        let owned = [
+            ("mu", array![1.0, 2.0]),
+            ("sigma", array![0.0, 1.0]),
+            ("nu", array![5.0, 5.0]),
+        ];
+        let p = params_view(&owned);
+        let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
+        for name in ["mu", "sigma", "nu"] {
+            let (u, w) = &chained[name];
+            assert!(
+                finite_array(u) && finite_array(w),
+                "{name}: u={u:?} w={w:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_an_overflowing_z() {
+        // As in `gaussian.rs`: at a far-out bound against a floored σ, z overflows and
+        // `g' = −g(ν+1)z/(ν+z²)` is ∞/∞ = NaN rather than the 0 it tends to.
+        let bounds = array![1e300, -1e300, 1e200];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0]),
+            ("sigma", array![1e-10, 1e-10, 1.0]),
+            ("nu", array![5.0, 5.0, 5.0]),
+        ];
+        let p = params_view(&owned);
+        let d = StudentT.cdf_theta_derivatives(&bounds, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+            assert_eq!((d1[0], d2[0]), (0.0, 0.0), "{name} row 0");
+        }
+    }
+
+    #[test]
     fn derivatives_stay_finite_at_a_saturated_sigma() {
         // Un-folding introduces `1/σ` and `1/σ²` that the previous η-scale forms
         // cancelled.
@@ -555,11 +654,11 @@ mod tests {
             ("nu", array![5.0, 8.0, 4.0]),
         ];
         let p = params_view(&owned);
-        let natural = StudentT.derivatives(&y, &p).unwrap();
+        let natural = StudentT.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
         }
         for name in ["mu", "sigma", "nu"] {
             let (u, w) = &chained[name];
@@ -569,7 +668,7 @@ mod tests {
 
     #[test]
     fn natural_derivatives_omit_nu_but_eta_derivatives_supply_it() {
-        // The hybrid contract: `derivatives` covers only the two separable
+        // The hybrid contract: `theta_derivatives` covers only the two separable
         // parameters, and `eta_derivatives` fills ν back in. A family that silently
         // dropped ν from the η-scale map would freeze the ν block with no error.
         let y = array![-1.0, 0.5, 2.0];
@@ -579,7 +678,7 @@ mod tests {
             ("nu", array![5.0, 8.0, 4.0]),
         ];
         let p = params_view(&owned);
-        let natural = StudentT.derivatives(&y, &p).unwrap();
+        let natural = StudentT.theta_derivatives(&y, &p).unwrap();
         let mut keys: Vec<&str> = natural.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, ["mu", "sigma"]);

@@ -25,7 +25,7 @@ fn bench_poisson_derivatives(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu)]);
-                Poisson.derivatives(black_box(&y), black_box(&params))
+                Poisson.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
     }
@@ -42,7 +42,7 @@ fn bench_gaussian_derivatives(c: &mut Criterion) {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> =
                     HashMap::from([("mu", &mu), ("sigma", &sigma)]);
-                Gaussian.derivatives(black_box(&y), black_box(&params))
+                Gaussian.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
     }
@@ -59,7 +59,7 @@ fn bench_student_t_derivatives(c: &mut Criterion) {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> =
                     HashMap::from([("mu", &mu), ("sigma", &sigma), ("nu", &nu)]);
-                StudentT.derivatives(black_box(&y), black_box(&params))
+                StudentT.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
     }
@@ -78,7 +78,7 @@ fn bench_gamma_derivatives(c: &mut Criterion) {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> =
                     HashMap::from([("mu", &mu), ("sigma", &sigma)]);
-                Gamma.derivatives(black_box(&y_positive), black_box(&params))
+                Gamma.theta_derivatives(black_box(&y_positive), black_box(&params))
             })
         });
     }
@@ -96,7 +96,7 @@ fn bench_negative_binomial_derivatives(c: &mut Criterion) {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> =
                     HashMap::from([("mu", &mu), ("sigma", &sigma)]);
-                NegativeBinomial.derivatives(black_box(&y), black_box(&params))
+                NegativeBinomial.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
     }
@@ -118,7 +118,7 @@ fn bench_beta_derivatives(c: &mut Criterion) {
             b.iter(|| {
                 let params: HashMap<&str, &Array1<f64>> =
                     HashMap::from([("mu", &mu), ("phi", &phi)]);
-                Beta.derivatives(black_box(&y), black_box(&params))
+                Beta.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
     }

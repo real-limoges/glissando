@@ -35,7 +35,7 @@ impl Distribution for Gaussian {
 
     eta_derivatives_via_chain!();
 
-    fn derivatives(
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -135,17 +135,24 @@ impl Distribution for Gaussian {
             }
             let s = sigma[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
+            // φ decays like e^{−z²/2}, so φ·z^k → 0 for every k and every derivative
+            // below has limit 0 as |z| → ∞. Take that limit explicitly rather than
+            // evaluating the formulas: z overflows to infinity once the bound and σ
+            // are far enough apart (σ on its `MIN_POSITIVE` floor against a 1e300
+            // censoring bound), long after φ has underflowed to exactly 0, and
+            // `∞ · 0` is NaN — which `chain_cdf_to_eta` then spreads into every
+            // censored or truncated row's score and weight. This mirrors the ±∞-bound
+            // arm above and leaves every in-range value untouched.
+            if !z.is_finite() {
+                continue;
+            }
             let phi = std_normal_pdf(z);
             let z_sq = z * z;
             d1_mu[i] = -phi / s;
             d2_mu[i] = -z * phi / (s * s);
             d1_sigma[i] = -z * phi / s;
-            // φ decays like e^{−z²/2}, so φ·z^k → 0 for every k and the limit here is
-            // 0. Take it explicitly: z² overflows to infinity around |z| ≈ 1e154,
-            // long after φ has underflowed to exactly 0, and `0 · ∞` is NaN. The
-            // guard fires only where the unguarded expression is NaN, so every
-            // in-range value is bit-identical. Reachable from a wrapper evaluating
-            // `F` at a far-out censoring or truncation bound.
+            // z² still overflows on its own around |z| ≈ 1e154, where z is finite but
+            // `z² · φ` is again `∞ · 0`.
             d2_sigma[i] = if z_sq.is_finite() {
                 z * phi * (2.0 - z_sq) / (s * s)
             } else {
@@ -183,12 +190,38 @@ mod tests {
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
         check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
-        finite_array, params_view,
+        finite_array, no_nan_array, params_view,
     };
     use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
     #[cfg(not(target_arch = "wasm32"))]
     use proptest::prelude::*;
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_an_overflowing_z() {
+        // A wrapper evaluating `F` at a far-out censoring or truncation bound against
+        // a σ on its floor sends `z = (bound − μ)/σ` past f64. φ has long since
+        // underflowed to exactly 0, so `−z·φ` and `z²·φ` are `∞ · 0` = NaN, and
+        // `chain_cdf_to_eta` spreads that into every censored row's score and weight.
+        // Row 2 is the milder case where z is finite but z² is not.
+        let bounds = array![1e300, -1e300, 1e200];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0]),
+            ("sigma", array![1e-10, 1e-10, 1.0]),
+        ];
+        let p = params_view(&owned);
+        let d = Gaussian.cdf_theta_derivatives(&bounds, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+            // φ·z^k → 0 for every k, so the saturated rows take the limit exactly.
+            assert_eq!((d1[0], d2[0]), (0.0, 0.0), "{name} row 0");
+            assert_eq!((d1[2], d2[2]), (0.0, 0.0), "{name} row 2");
+        }
+    }
 
     #[test]
     fn gaussian_derivatives() {
@@ -248,11 +281,11 @@ mod tests {
             ("sigma", array![0.0, 1e-320, 1e-8]),
         ];
         let p = params_view(&owned);
-        let natural = Gaussian.derivatives(&y, &p).unwrap();
+        let natural = Gaussian.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
             let (u_n, i_n) = &natural[name];
-            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
             let (u, w) = &chained[name];
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
