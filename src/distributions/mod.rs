@@ -61,9 +61,23 @@ pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>,
 
 /// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name — the same
 /// shape as a derivatives map, used by the structural wrappers (SER-1 / STRUCT).
+///
+/// This is the *chained* map, produced by `structural::cdf_eta_grads`. A family's
+/// own [`Distribution::cdf_theta_derivatives`] returns the natural-scale
+/// [`CdfThetaMap`] instead.
 pub type CdfEtaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
-/// Result wrapper around [`CdfEtaMap`], returned by [`Distribution::cdf_eta_derivatives`].
+/// Result wrapper around [`CdfEtaMap`].
 pub type CdfEtaResult = Result<CdfEtaMap, GamlssError>;
+
+/// Per-parameter `(∂F/∂θ, ∂²F/∂θ²)` pairs — the *natural-scale* counterpart of
+/// [`CdfEtaMap`], returned by [`Distribution::cdf_theta_derivatives`].
+///
+/// Structurally identical to [`CdfEtaMap`]; the two are distinct names so a
+/// reader can tell at a glance which side of the chain rule a value sits on.
+pub type CdfThetaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
+/// Result wrapper around [`CdfThetaMap`], returned by
+/// [`Distribution::cdf_theta_derivatives`].
+pub type CdfThetaResult = Result<CdfThetaMap, GamlssError>;
 
 /// Map a natural-scale derivatives map onto the linear-predictor scale:
 /// `u_η = mu_eta · ∂l/∂θ` and `w_η = mu_eta² · i_θ`, per parameter.
@@ -112,6 +126,51 @@ pub fn chain_to_eta(
             Ok((name, (u, i)))
         })
         .collect()
+}
+
+/// Map one parameter's natural-scale CDF derivatives `(∂F/∂θ, ∂²F/∂θ²)` onto the
+/// linear-predictor scale.
+///
+/// This is the **second-order** chain rule, and it is deliberately *not*
+/// [`chain_to_eta`]:
+///
+/// ```text
+/// ∂F/∂η   = mu_eta · ∂F/∂θ
+/// ∂²F/∂η² = mu_eta² · ∂²F/∂θ² + mu_eta2 · ∂F/∂θ
+/// ```
+///
+/// [`chain_to_eta`] transforms a *score and expected information* pair, where the
+/// `mu_eta2 · ∂l/∂θ` term drops out because `E[∂l/∂θ] = 0`. A CDF is not a
+/// likelihood, so here the term stays, and dropping it would move every censored,
+/// truncated and hurdle model's weights (and with them its standard errors, EDF
+/// and λ selection). See [`Link::mu_eta2`].
+///
+/// Applied per parameter by `structural::cdf_eta_grads`, which is the sole caller.
+fn chain_cdf_to_eta(
+    d1: &mut Array1<f64>,
+    d2: &mut Array1<f64>,
+    mu_eta: &Array1<f64>,
+    mu_eta2: &Array1<f64>,
+    param: &str,
+) -> Result<(), GamlssError> {
+    if mu_eta.len() != d1.len() || mu_eta.len() != d2.len() {
+        return Err(GamlssError::Internal(format!(
+            "chain_cdf_to_eta length mismatch for '{}': mu_eta {}, d1 {}, d2 {}",
+            param,
+            mu_eta.len(),
+            d1.len(),
+            d2.len()
+        )));
+    }
+    Zip::from(d1)
+        .and(d2)
+        .and(mu_eta)
+        .and(mu_eta2)
+        .for_each(|d1_out, d2_out, &me, &me2| {
+            *d2_out = me * me * *d2_out + me2 * *d1_out;
+            *d1_out *= me;
+        });
+    Ok(())
 }
 
 /// Implement [`Distribution::eta_derivatives`] by chaining the family's
@@ -256,23 +315,30 @@ pub trait Distribution: Debug + Send + Sync {
     ) -> Result<Array1<f64>, GamlssError>;
 
     /// Analytic first and second derivatives of the CDF `F(y_i)` with respect to
-    /// each parameter's linear predictor η, returned per parameter as
-    /// `(∂F/∂η, ∂²F/∂η²)`, vectorized over rows.
+    /// each parameter **on its own natural scale θ**, returned per parameter as
+    /// `(∂F/∂θ, ∂²F/∂θ²)`, vectorized over rows.
+    ///
+    /// **This is a natural-scale contract, not an η-scale one.** Return the
+    /// derivative w.r.t. the parameter itself and let the caller apply the link;
+    /// `structural::cdf_eta_grads` chains to η generically via
+    /// [`Link::mu_eta`] and [`Link::mu_eta2`], so an overridden link is honored
+    /// rather than silently ignored (Altitude #1). Baking a default-link chain
+    /// rule in here is exactly the bug this contract replaced.
     ///
     /// Only parameters with a closed form are included — the default returns an
-    /// empty map. The structural wrappers ([`Censored`] / [`Truncated`]) build
-    /// the censoring / truncation score and observed-information weight from
-    /// these, and fall back to a central difference of [`Self::cdf`] (perturbed
-    /// on the parameter's η via its [`Self::default_link`]) for any parameter a
-    /// family omits. Location/scale parameters are analytic (Gaussian μ/σ,
-    /// Student-t μ/σ, Gamma μ); shape parameters whose CDF derivative is
-    /// non-elementary (Gamma σ, Student-t ν, both Beta params) are left to the
-    /// numeric fallback. See the structural-likelihoods guide.
-    fn cdf_eta_derivatives(
+    /// empty map. The structural wrappers ([`Censored`] / [`Truncated`] /
+    /// [`Hurdle`]) build the censoring / truncation score and
+    /// observed-information weight from these, and fall back to a central
+    /// difference of [`Self::cdf`] (perturbed on the parameter's live η) for any
+    /// parameter a family omits. Location/scale parameters are analytic
+    /// (Gaussian μ/σ, Student-t μ/σ, Gamma μ); shape parameters whose CDF
+    /// derivative is non-elementary (Gamma σ, Student-t ν, both Beta params) are
+    /// left to the numeric fallback. See the structural-likelihoods guide.
+    fn cdf_theta_derivatives(
         &self,
         _y: &Array1<f64>,
         _params: &HashMap<&str, &Array1<f64>>,
-    ) -> CdfEtaResult {
+    ) -> CdfThetaResult {
         Ok(HashMap::new())
     }
 
@@ -561,10 +627,47 @@ pub(crate) mod test_helpers {
         family.eta_derivatives(y, params, &links.context())
     }
 
+    /// Keys, lengths, finiteness, and `w ≥ 0`, on the family's default links.
+    ///
+    /// The non-negativity assertion is what makes this the *expected*-information
+    /// variant. Use [`derivative_keys_match_parameters_observed_info`] for a family
+    /// that returns observed information, which may legitimately be negative.
     pub fn derivative_keys_match_parameters<D: Distribution>(
         d: &D,
         params: HashMap<&str, &Array1<f64>>,
         y: &Array1<f64>,
+    ) {
+        keys_and_arrays_are_well_formed(d, params, y, true)
+    }
+
+    /// As [`derivative_keys_match_parameters`], but without the `w ≥ 0` assertion.
+    ///
+    /// For the structural wrappers ([`Censored`] / [`Truncated`] / [`Hurdle`]),
+    /// whose censoring / normalizer rows carry *observed* information
+    /// `−∂²l/∂η²` rather than expected Fisher information. Observed information is
+    /// not a variance and is genuinely allowed to be negative: a left-censored
+    /// Gaussian row at z ≈ 0.125 gives `w_σ = −d2/F + (d1/F)² ≈ −0.08`, because the
+    /// curvature term dominates the squared-score term there.
+    ///
+    /// This does not reach the solver. `scoring::step` floors with `w < MIN_WEIGHT`,
+    /// which catches negatives as well as small positives, and it is the only floor
+    /// in the pipeline (the floor-once rule of Altitude #1). Until Phase 3 the
+    /// wrappers pre-floored these rows themselves, which produced the same number
+    /// but hid them from `weight_floor_hits`; that is the Altitude #4 half of the
+    /// same work.
+    pub fn derivative_keys_match_parameters_observed_info<D: Distribution>(
+        d: &D,
+        params: HashMap<&str, &Array1<f64>>,
+        y: &Array1<f64>,
+    ) {
+        keys_and_arrays_are_well_formed(d, params, y, false)
+    }
+
+    fn keys_and_arrays_are_well_formed<D: Distribution>(
+        d: &D,
+        params: HashMap<&str, &Array1<f64>>,
+        y: &Array1<f64>,
+        require_non_negative_weights: bool,
     ) {
         let derivs = default_link_derivatives(d, y, &params).unwrap();
         let mut keys: Vec<&str> = derivs.keys().map(String::as_str).collect();
@@ -572,13 +675,20 @@ pub(crate) mod test_helpers {
         let mut expected: Vec<&str> = d.parameters().to_vec();
         expected.sort();
         assert_eq!(keys, expected);
-        for (u, w) in derivs.values() {
+        for (name, (u, w)) in &derivs {
             assert_eq!(u.len(), y.len());
             assert_eq!(w.len(), y.len());
             assert!(finite_array(u));
             assert!(finite_array(w));
-            // Fisher info should be non-negative.
-            assert!(w.iter().all(|&v| v >= 0.0));
+            if require_non_negative_weights {
+                assert!(
+                    w.iter().all(|&v| v >= 0.0),
+                    "{}::{}: expected information must be non-negative, got {:?}",
+                    d.name(),
+                    name,
+                    w.to_vec()
+                );
+            }
         }
     }
 
@@ -678,15 +788,22 @@ pub(crate) mod test_helpers {
         }
     }
 
-    /// Check the analytic `(∂F/∂η, ∂²F/∂η²)` returned by [`Distribution::cdf_eta_derivatives`]
-    /// for `target` against central differences of [`Distribution::cdf`] on the
-    /// η-scale.
+    /// Check the analytic `(∂F/∂θ, ∂²F/∂θ²)` returned by
+    /// [`Distribution::cdf_theta_derivatives`] for `target` against central
+    /// differences of [`Distribution::cdf`] on the parameter's **own natural
+    /// scale**.
+    ///
+    /// The step is *relative* — `h = eps·max(|θ|, 1)`. For a positive parameter
+    /// that is numerically the same perturbation the previous η-scale version took
+    /// through a log link (`σ·e^{±eps} ≈ σ(1 ± eps)`), so the callers' tolerances
+    /// carry over; for an identity-linked parameter it is unchanged. An *absolute*
+    /// step would put the minus side at or below zero for any θ ≲ eps.
     ///
     /// **Fails** if the family does not supply `target` analytically. A silent
     /// skip was the previous behavior and it was a coverage hole: a family that
     /// stopped emitting an analytic entry would quietly degrade to the
     /// structural wrappers' numeric fallback with every test still green.
-    pub fn check_cdf_eta_derivatives_via_finite_diff<D: Distribution + ?Sized>(
+    pub fn check_cdf_theta_derivatives_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
         owned: &[(&'static str, Array1<f64>)],
@@ -694,10 +811,10 @@ pub(crate) mod test_helpers {
         tol: f64,
     ) {
         let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
-        let derivs = family.cdf_eta_derivatives(y, &p).unwrap();
+        let derivs = family.cdf_theta_derivatives(y, &p).unwrap();
         let Some((analytic_d1, analytic_d2)) = derivs.get(target) else {
             panic!(
-                "{}::{} supplies no analytic cdf_eta_derivatives entry, so this \
+                "{}::{} supplies no analytic cdf_theta_derivatives entry, so this \
                  check would be vacuous. The structural wrappers fall back to a \
                  central difference for such parameters — cover it there, or \
                  stop asserting on it here.",
@@ -706,42 +823,41 @@ pub(crate) mod test_helpers {
             )
         };
 
-        let link = family.default_link(target).unwrap();
         let eps: f64 = 1e-5;
         let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
         let mut perturbed: Vec<(&'static str, Array1<f64>)> =
             owned.iter().map(|(k, v)| (*k, v.clone())).collect();
 
         for i in 0..y.len() {
-            let mu_orig = owned[idx].1[i];
-            let eta = link.link(mu_orig);
+            let theta = owned[idx].1[i];
+            let h = eps * theta.abs().max(1.0);
 
             let f0 = {
                 let pv: HashMap<&str, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
-            perturbed[idx].1[i] = link.inv_link(eta + eps);
+            perturbed[idx].1[i] = theta + h;
             let f_plus = {
                 let pv: HashMap<&str, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
-            perturbed[idx].1[i] = link.inv_link(eta - eps);
+            perturbed[idx].1[i] = theta - h;
             let f_minus = {
                 let pv: HashMap<&str, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
-            perturbed[idx].1[i] = mu_orig;
+            perturbed[idx].1[i] = theta;
 
-            let numeric_d1 = (f_plus - f_minus) / (2.0 * eps);
-            let numeric_d2 = (f_plus - 2.0 * f0 + f_minus) / (eps * eps);
+            let numeric_d1 = (f_plus - f_minus) / (2.0 * h);
+            let numeric_d2 = (f_plus - 2.0 * f0 + f_minus) / (h * h);
 
             let s1 = analytic_d1[i].abs().max(1.0);
             assert!(
                 (analytic_d1[i] - numeric_d1).abs() / s1 < tol,
-                "{}::{} obs {}: ∂F/∂η analytic={:.6e} numeric={:.6e}",
+                "{}::{} obs {}: ∂F/∂θ analytic={:.6e} numeric={:.6e}",
                 family.name(),
                 target,
                 i,
@@ -751,7 +867,7 @@ pub(crate) mod test_helpers {
             let s2 = analytic_d2[i].abs().max(1.0);
             assert!(
                 (analytic_d2[i] - numeric_d2).abs() / s2 < tol,
-                "{}::{} obs {}: ∂²F/∂η² analytic={:.6e} numeric={:.6e}",
+                "{}::{} obs {}: ∂²F/∂θ² analytic={:.6e} numeric={:.6e}",
                 family.name(),
                 target,
                 i,

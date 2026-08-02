@@ -22,8 +22,7 @@ use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
 use super::{
-    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, MIN_WEIGHT,
-    PROB_EPS,
+    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, PROB_EPS,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -93,10 +92,11 @@ impl Truncated {
         &self,
         bound: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> Result<(Array1<f64>, super::CdfEtaMap), GamlssError> {
         let f = self.cdf_at(bound, params)?;
         let sanitized = bound.mapv(|v| if v.is_finite() { v } else { 0.0 });
-        let mut grads = cdf_eta_grads(self.base.as_ref(), &sanitized, &f, params)?;
+        let mut grads = cdf_eta_grads(self.base.as_ref(), &sanitized, &f, params, ctx)?;
         for i in 0..bound.len() {
             if bound[i].is_finite() {
                 continue;
@@ -155,8 +155,8 @@ impl Distribution for Truncated {
         // normalizer D = F(hi) − F(lo):
         //   u = u_base − D'/D,   w = w_base + D''/D − (D'/D)²   (observed info).
         let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
-        let (f_lo, grad_lo) = self.cdf_and_grads_at(&self.lower, params)?;
-        let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params)?;
+        let (f_lo, grad_lo) = self.cdf_and_grads_at(&self.lower, params, ctx)?;
+        let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params, ctx)?;
 
         rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
             let (d1_lo, d2_lo) = &grad_lo[param];
@@ -166,7 +166,7 @@ impl Distribution for Truncated {
                 let d1 = d1_hi[i] - d1_lo[i];
                 let d2 = d2_hi[i] - d2_lo[i];
                 u[i] -= d1 / dmass;
-                w[i] = (w[i] + d2 / dmass - (d1 / dmass).powi(2)).max(MIN_WEIGHT);
+                w[i] = w[i] + d2 / dmass - (d1 / dmass).powi(2);
             }
         })
     }
@@ -231,9 +231,10 @@ impl Distribution for Truncated {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters_observed_info, finite_array, params_view,
     };
-    use crate::distributions::Gaussian;
+    use crate::distributions::{Gaussian, InverseLink};
     use ndarray::array;
 
     fn full_range(n: usize) -> (Array1<f64>, Array1<f64>) {
@@ -286,7 +287,7 @@ mod tests {
     #[test]
     fn derivative_keys_and_weights_are_well_formed() {
         // See the matching test in `censored.rs`: the wrappers had no
-        // `derivative_keys_match_parameters` coverage at all. A two-sided
+        // `derivative_keys_match_parameters_observed_info` coverage at all. A two-sided
         // truncation is used so the normalizer `D = F(hi) − F(lo)` is a genuine
         // difference rather than collapsing to `1 − F(lo)`.
         let y = array![1.0, 2.0, 1.5, 3.0];
@@ -297,7 +298,7 @@ mod tests {
         let lo = Array1::from_elem(4, 0.0);
         let hi = Array1::from_elem(4, 5.0);
         let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
-        derivative_keys_match_parameters(&trunc, params_view(&owned), &y);
+        derivative_keys_match_parameters_observed_info(&trunc, params_view(&owned), &y);
     }
 
     #[test]
@@ -312,6 +313,49 @@ mod tests {
         let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
         check_score_via_finite_diff(&trunc, &y, &owned, "mu", 1e-4);
         check_score_via_finite_diff(&trunc, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_a_non_default_link() {
+        // Altitude #1 Phase 3 acceptance gate: the normalizer's `D'/D` term has to
+        // be built from the link the fit resolved, not from Gaussian's default.
+        // `inverse` puts η = 1/σ, so a positive σ stays in the link's domain; μ
+        // stays on identity because this fixture allows μ ≤ 0 under perturbation.
+        //
+        // Finite bounds on both sides so `cdf_and_grads_at` is exercised twice
+        // rather than short-circuiting on ±∞.
+        let y = array![1.0, 2.0, 1.5, 3.0];
+        let owned = [
+            ("mu", array![1.0, 1.5, 1.0, 2.0]),
+            ("sigma", array![1.0, 1.2, 0.9, 1.1]),
+        ];
+        let lo = Array1::from_elem(4, 0.0);
+        let hi = Array1::from_elem(4, 5.0);
+        let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
+        check_eta_score_via_finite_diff(&trunc, &y, &owned, "sigma", &InverseLink, 1e-4);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_fixture() {
+        // Altitude #1 Phase 3, gate (d). Covers a degenerate normalizer (bounds so
+        // far out that `F(hi) − F(lo)` saturates and `PROB_EPS` binds), the ±∞
+        // short-circuit in `cdf_and_grads_at`, and a σ at both ends of the log
+        // link's reach. Finiteness only: these weights are observed information and
+        // may be negative.
+        let y = array![0.0, 1.0, 0.5, -1.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0, 0.0]),
+            ("sigma", array![1e-320, 1e13, 1e-8, 1.0]),
+        ];
+        let lo = array![f64::NEG_INFINITY, -1e300, 1e-3, 1e-3];
+        let hi = array![f64::INFINITY, 1e300, 2e-3, 1e300];
+        let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
+        let p = params_view(&owned);
+        let d = default_link_derivatives(&trunc, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u, w) = &d[name];
+            assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
+        }
     }
 
     #[test]

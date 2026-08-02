@@ -354,6 +354,17 @@ fn wrapper_base_fixture() -> (Array1<f64>, [(&'static str, Array1<f64>); 2]) {
 fn golden_censored_all_statuses() {
     // Exercises all four `CensorStatus` arms in one table, including `Interval`,
     // which drives the `with_upper` path and the second-derivative difference.
+    //
+    // This table was regenerated once, deliberately, in Altitude #1 Phase 3, and
+    // it is the only one of the 36 that moved across Phases 1-3. Two `sigma`
+    // weights read `1.0000000000e-6` — `MIN_WEIGHT` exactly, because `censored.rs`
+    // pre-floored them — and now read the unfloored observed information the
+    // wrapper actually computes: `-1.1406392216e-1` on the right-censored row
+    // (observed information is not a variance and is legitimately negative) and
+    // `0.0000000000e0` on the left-censored row, where z = 0 makes both `d1` and
+    // `d2` vanish identically. That is the Altitude #4 half of the work: the floor
+    // now happens once, in `scoring::step`, which is why all 20 fit snapshots were
+    // unaffected. Any *further* drift here is a defect, not a snapshot to accept.
     let (y, owned) = wrapper_base_fixture();
     let status = Array1::from_vec(vec![
         CensorStatus::Event,

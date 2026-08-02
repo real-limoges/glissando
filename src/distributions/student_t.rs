@@ -213,15 +213,20 @@ impl Distribution for StudentT {
         Ok(out)
     }
 
-    fn cdf_eta_derivatives(
+    fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfEtaResult {
-        // Location-scale derivatives of F = T_ν(z), z = (y−μ)/σ, with standardized
-        // t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²):
-        //   μ (identity):  ∂F/∂η = −g/σ,   ∂²F/∂η² = g'/σ².
-        //   σ (log):       ∂F/∂η = −zg,    ∂²F/∂η² = zg + z²g'.
+    ) -> super::CdfThetaResult {
+        // Natural-scale (Altitude #1) location-scale derivatives of F = T_ν(z),
+        // z = (y−μ)/σ, with standardized t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²).
+        // ∂z/∂μ = −1/σ and ∂z/∂σ = −z/σ, so:
+        //   μ:  ∂F/∂μ = −g/σ,    ∂²F/∂μ² = g'/σ².
+        //   σ:  ∂F/∂σ = −zg/σ,   ∂²F/∂σ² = (2zg + z²g')/σ².
+        // The caller chains to η. Under the default links (identity, log) that
+        // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
+        // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
+        // σ·(−zg/σ) = −zg and (2zg + z²g') − zg = zg + z²g'.
         // ν has no elementary CDF derivative (incomplete-beta shape derivative) and
         // is left to the wrapper's numeric fallback.
         let mu = require(self, params, "mu")?;
@@ -246,10 +251,19 @@ impl Distribution for StudentT {
                 - 0.5 * (nu_i + 1.0) * (1.0 + z * z / nu_i).ln();
             let g = log_g.exp();
             let g_prime = -g * (nu_i + 1.0) * z / (nu_i + z * z);
+            let z_sq = z * z;
             d1_mu[i] = -g / s;
             d2_mu[i] = g_prime / (s * s);
-            d1_sigma[i] = -z * g;
-            d2_sigma[i] = z * g + z * z * g_prime;
+            d1_sigma[i] = -z * g / s;
+            // As in `gaussian.rs`: `g'` decays fast enough that `z²·g' → 0`, but z²
+            // overflows to infinity around |z| ≈ 1e154 while `g'` has already
+            // underflowed to 0, and `0 · ∞` is NaN. The guard fires only where the
+            // unguarded expression is NaN, leaving every in-range value untouched.
+            d2_sigma[i] = if z_sq.is_finite() {
+                (2.0 * z * g + z_sq * g_prime) / (s * s)
+            } else {
+                0.0
+            };
         }
         Ok(HashMap::from([
             ("mu".to_string(), (d1_mu, d2_mu)),
@@ -373,8 +387,8 @@ impl StudentT {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_eta_score_via_finite_diff,
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
         check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
         finite_array, params_view,
     };
@@ -564,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn cdf_eta_derivatives_match_finite_diff_studentt() {
+    fn cdf_theta_derivatives_match_finite_diff_studentt() {
         // μ and σ are analytic; ν is intentionally absent (numeric fallback).
         let y = array![-2.0, 0.3, 1.4, 3.0];
         let owned = [
@@ -572,12 +586,36 @@ mod tests {
             ("sigma", array![1.0, 1.2, 0.9, 1.4]),
             ("nu", array![5.0, 8.0, 6.0, 12.0]),
         ];
-        check_cdf_eta_derivatives_via_finite_diff(&StudentT, &y, &owned, "mu", 2e-4);
-        check_cdf_eta_derivatives_via_finite_diff(&StudentT, &y, &owned, "sigma", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, "mu", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, "sigma", 2e-4);
         // ν must not be supplied analytically.
         let p = params_view(&owned);
-        let derivs = StudentT.cdf_eta_derivatives(&y, &p).unwrap();
+        let derivs = StudentT.cdf_theta_derivatives(&y, &p).unwrap();
         assert!(!derivs.contains_key("nu"));
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
+        // Same exposure as Gaussian's: un-folding σ introduced a `1/σ` and a `1/σ²`
+        // the η-scale forms did not have. ν is swept alongside σ because `g` and
+        // `g'` both carry it. σ = 0 exactly is excluded here for the reason Phase 2b
+        // recorded: `z = (y−μ)/σ` overflows there and `w_robust · z²` is a `0 · ∞`
+        // NaN, a fragility that predates this work and is unchanged by it.
+        let y = array![0.0, 1.0, 2.0, -1.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0, 0.0]),
+            ("sigma", array![1e-320, 1e-8, 1e13, 1.0]),
+            ("nu", array![2.0, 1e-8, 1e13, 2.0]),
+        ];
+        let p = params_view(&owned);
+        let d = StudentT.cdf_theta_derivatives(&y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+        }
     }
 
     #[test]
