@@ -140,7 +140,7 @@ impl Distribution for Gaussian {
             // evaluating the formulas: z overflows to infinity once the bound and σ
             // are far enough apart (σ on its `MIN_POSITIVE` floor against a 1e300
             // censoring bound), long after φ has underflowed to exactly 0, and
-            // `∞ · 0` is NaN — which `chain_cdf_to_eta` then spreads into every
+            // `∞ · 0` is NaN, which `chain_cdf_to_eta` then spreads into every
             // censored or truncated row's score and weight. This mirrors the ±∞-bound
             // arm above and leaves every in-range value untouched.
             if !z.is_finite() {

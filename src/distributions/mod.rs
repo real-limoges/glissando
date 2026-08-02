@@ -156,7 +156,7 @@ pub fn chain_to_eta(
                         // however large the natural-scale pair is. Taking the
                         // product literally would be `inf · 0` = NaN for a family
                         // whose natural-scale derivative diverges at a saturated θ,
-                        // and one NaN row poisons the entire PWLS solve —
+                        // and one NaN row poisons the entire PWLS solve:
                         // `scoring::step`'s `w < MIN_WEIGHT` and `step > MAX_STEP`
                         // tests are both false for NaN, so nothing downstream
                         // catches it. A hard zero is reachable, not hypothetical:
@@ -283,8 +283,8 @@ pub trait Distribution: Debug + Send + Sync {
     ///
     /// **This is not the whole model's derivative map, and it is not every family's.**
     /// The returned map covers only the parameters with a separable natural scale, so
-    /// it may be partial ([`StudentT`] returns μ and σ but not ν) or absent entirely
-    /// — the default body is an error, which is what [`Ocat`] and the structural
+    /// it may be partial ([`StudentT`] returns μ and σ but not ν) or absent entirely:
+    /// the default body is an error, which is what [`Ocat`] and the structural
     /// wrappers rely on so they do not have to invent a natural scale they do not
     /// have. [`Self::eta_derivatives`] is the complete one, and is what the scoring
     /// loop calls.
@@ -620,7 +620,7 @@ pub(crate) mod test_helpers {
         a.iter().all(|v| v.is_finite())
     }
 
-    /// No NaN — the invariant a *natural-scale* derivative map has to hold.
+    /// No NaN: the invariant a *natural-scale* derivative map has to hold.
     ///
     /// Finiteness is deliberately not required of
     /// [`Distribution::theta_derivatives`]: a natural-scale score genuinely diverges
@@ -1239,15 +1239,15 @@ mod tests {
     }
 
     // --- Altitude #1: the non-default-link contract ---
-
-    // The tests below pin the *current, broken* behavior at the derivative
-    // level: `theta_derivatives()` hardcodes each family's default-link chain rule,
-    // so its score is not `∂l/∂η` for any other link. They are the derivative-
-    // level counterpart to the end-to-end oracles in `tests/link_selection.rs`.
     //
-    // Each is written as an assertion that the analytic score DISAGREES with a
-    // finite difference on the overridden link's η. When the generic chain rule
-    // lands, these must be inverted into
-    // `check_eta_score_via_finite_diff(...)` calls that assert agreement; the
-    // failure of these tests is the signal the refactor worked.
+    // The derivative-level gate for this lives with each family, not here: every
+    // family file has a `score_matches_finite_diff_under_non_default_links` test
+    // asserting its `eta_derivatives` agrees with a finite difference on an
+    // *overridden* link's η. Three characterization tests used to sit at this spot
+    // asserting the opposite (that the score DISAGREED) to pin the pre-refactor
+    // behavior; the generic chain rule landed, so they were replaced by the
+    // per-family gates rather than inverted in place.
+    //
+    // The end-to-end counterparts are `tests/link_selection.rs` and the independent
+    // MLE oracle in `tests/link_mle_oracle.rs`.
 }

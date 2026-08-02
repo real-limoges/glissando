@@ -430,7 +430,7 @@ impl<'a> LinkContext<'a> {
     /// Build a context carrying `dμ/dη` only.
     ///
     /// [`Self::mu_eta2`] then returns an error, so this is for a family that never
-    /// asks for it — which is every family except the structural wrappers. See the
+    /// asks for it, which is every family except the structural wrappers. See the
     /// type-level docs for why skipping it is worth a second constructor.
     pub fn first_order<I>(entries: I) -> Self
     where
