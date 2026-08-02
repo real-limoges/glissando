@@ -1,8 +1,8 @@
 //! Weibull distribution for positive continuous data
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, MIN_POSITIVE,
-    MIN_WEIGHT,
+    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
+    MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -45,40 +45,53 @@ impl Distribution for Weibull {
         }
     }
 
-    eta_derivatives_passthrough!();
+    eta_derivatives_via_chain!();
 
     fn derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // z = (y/μ)^σ ~ Exp(1) at the truth.
-        // μ (η = ln μ): u = σ(z−1),               w = σ².
-        // σ (η = ln σ): u = 1 + σ·ln(y/μ)·(1−z),  w = π²/6 + (1−γ)² (constant).
+        // z = (y/μ)^σ ~ Exp(1) at the truth. Natural scale (Altitude #1):
+        //   μ: ∂l/∂μ = σ(z−1)/μ,                    i_μ = σ²/μ².
+        //   σ: ∂l/∂σ = [1 + σ·ln(y/μ)·(1−z)]/σ,     i_σ = (π²/6 + (1−γ)²)/σ².
+        // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
+        // the previous `u_μ = σ(z−1)`, `w_μ = σ²`, `u_σ = 1 + σ·ln(y/μ)(1−z)` and
+        // the constant `w_σ`. Weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
         const EULER: f64 = 0.577_215_664_901_532_9;
-        let w_sigma_const = std::f64::consts::PI.powi(2) / 6.0 + (1.0 - EULER).powi(2);
+        let i_sigma_numer = std::f64::consts::PI.powi(2) / 6.0 + (1.0 - EULER).powi(2);
+
+        // Guard each reciprocal rather than clamping μ or σ, so the value the chain
+        // rule multiplies back in stays exactly the caller's parameter. Guard each
+        // denominator *at the power it is used at*: squaring an already-guarded
+        // reciprocal would overflow to infinity for a parameter the log link can
+        // still underflow to, and `inf · 0` is NaN.
+        let inv_mu = mu.mapv(|m| 1.0 / m.max(DENOM_FLOOR));
+        let inv_mu_sq = mu.mapv(|m| 1.0 / (m * m).max(DENOM_FLOOR));
+        let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
+        let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
         let u_mu = par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let m = mui.max(MIN_POSITIVE);
             let z = (yi.max(MIN_POSITIVE) / m).powf(si);
             si * (z - 1.0)
-        });
-        let w_mu = sigma.mapv(|s| (s * s).max(MIN_WEIGHT));
+        }) * &inv_mu;
+        let i_mu = par_zip_map(sigma, &inv_mu_sq, |s, ims| (s * s) * ims);
 
         let u_sigma = par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let m = mui.max(MIN_POSITIVE);
             let r = yi.max(MIN_POSITIVE) / m;
             let z = r.powf(si);
             1.0 + si * r.ln() * (1.0 - z)
-        });
-        let w_sigma = Array1::from_elem(y.len(), w_sigma_const.max(MIN_WEIGHT));
+        }) * &inv_sigma;
+        let i_sigma = inv_sigma_sq.mapv(|iss| i_sigma_numer * iss);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -162,8 +175,10 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -208,6 +223,42 @@ mod tests {
         ];
         check_score_via_finite_diff(&Weibull, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Weibull, &y, &owned, "sigma", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate: both parameters default to a log link, under which
+        // `∂l/∂η` and the folded form agree by construction. `sqrt` and `inverse`
+        // want a different `dμ/dη`, which this family no longer hardcodes.
+        let y = array![1.0, 2.5, 5.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0]),
+            ("sigma", array![0.8, 1.0, 1.5]),
+        ];
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "mu", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/μ` and `1/σ` the old η-scale forms cancelled.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-8, 0.0, 1e-320]),
+        ];
+        let p = params_view(&owned);
+        let natural = Weibull.derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Weibull, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(finite_array(u_n) && finite_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+            assert!(w.iter().all(|&v| v >= 0.0));
+        }
     }
 
     #[test]

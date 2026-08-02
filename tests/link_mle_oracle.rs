@@ -516,7 +516,6 @@ fn default_link_fits_reach_the_mle() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Altitude #1 acceptance gate: fails until the generic link chain rule lands. Run with --ignored to see the defect."]
 fn binomial_probit_fit_reaches_the_mle() {
     let (data, y, x) = binary_data();
     let family = Binomial::new(1);
@@ -548,7 +547,6 @@ fn binomial_probit_fit_reaches_the_mle() {
 }
 
 #[test]
-#[ignore = "Altitude #1 acceptance gate: fails until the generic link chain rule lands. Run with --ignored to see the defect."]
 fn binomial_cloglog_fit_reaches_the_mle() {
     let (data, y, x) = binary_data();
     let family = Binomial::new(1);
@@ -580,7 +578,6 @@ fn binomial_cloglog_fit_reaches_the_mle() {
 }
 
 #[test]
-#[ignore = "Altitude #1 acceptance gate: fails until the generic link chain rule lands. Run with --ignored to see the defect."]
 fn poisson_sqrt_fit_reaches_the_mle() {
     let (data, y, x) = count_data();
     let family = Poisson::new();
@@ -612,7 +609,6 @@ fn poisson_sqrt_fit_reaches_the_mle() {
 }
 
 #[test]
-#[ignore = "Altitude #1 acceptance gate: fails until the generic link chain rule lands. Run with --ignored to see the defect."]
 fn gamma_inverse_fit_reaches_the_mle() {
     let (data, y, x) = positive_data();
     let family = Gamma::new();
