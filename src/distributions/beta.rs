@@ -2,7 +2,7 @@
 
 use super::{
     clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, LogitLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    MIN_POSITIVE, TRIGAMMA_FLOOR,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -37,7 +37,9 @@ impl Distribution for Beta {
         }
     }
 
-    fn derivatives(
+    eta_derivatives_via_chain!();
+
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
@@ -47,54 +49,65 @@ impl Distribution for Beta {
         let mu = require(self, params, "mu")?;
         let phi = require(self, params, "phi")?;
 
-        let mu_safe = mu.mapv(|m| m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
-        let phi_safe = phi.mapv(|p| p.max(MIN_POSITIVE));
+        // **The floor is on the Gamma-function arguments, not on μ or φ.** This
+        // family used to clamp `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]`, which the folded
+        // η-scale form could afford and the un-folded one cannot: `chain_to_eta`
+        // multiplies by a `mu_eta` computed from η independently of anything clamped
+        // here, so a clamp that binds breaks the telescoping. μ is now allowed
+        // probit/cloglog/cauchit, and under a probit at η = −10 the true
+        // μ = Φ(−10) ≈ 7.6e-24, fourteen orders of magnitude below the old clamp,
+        // which would have evaluated ψ and ψ' at the wrong α entirely. See the same
+        // argument spelled out at length in `binomial.rs`.
+        //
+        // What actually needs a guard is α = μφ and β = (1−μ)φ reaching exactly 0,
+        // where ψ(0) = −∞ and ψ'(0) = +∞. `TRIGAMMA_FLOOR` is the binding one of the
+        // two (ψ' ~ 1/x² overflows ~150 decades before ψ ~ −1/x does) and sits far
+        // below anything a link produces inside its own η clamp.
         let y_clamped = y.mapv(|v| v.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE));
 
-        let one_minus_mu = mu_safe.mapv(|m| 1.0 - m);
-        let alpha = &mu_safe * &phi_safe;
-        let beta_param = &one_minus_mu * &phi_safe;
+        let one_minus_mu = mu.mapv(|m| 1.0 - m);
+        let alpha = par_zip_map(mu, phi, |m, p| (m * p).max(TRIGAMMA_FLOOR));
+        let beta_param = par_zip_map(&one_minus_mu, phi, |om, p| (om * p).max(TRIGAMMA_FLOOR));
+        let phi_floored = phi.mapv(|p| p.max(TRIGAMMA_FLOOR));
 
         let log_y = y_clamped.mapv(|v| v.ln());
         let log_1_minus_y = y_clamped.mapv(|v| (1.0 - v).ln());
 
         let psi_alpha = digamma_batch(&alpha);
         let psi_beta = digamma_batch(&beta_param);
-        let psi_phi = digamma_batch(&phi_safe);
+        let psi_phi = digamma_batch(&phi_floored);
         let psi_prime_alpha = trigamma_batch(&alpha);
         let psi_prime_beta = trigamma_batch(&beta_param);
-        let psi_prime_phi = trigamma_batch(&phi_safe);
+        let psi_prime_phi = trigamma_batch(&phi_floored);
 
-        // μ (logit link). dl/dμ = φ·[log(y) − log(1−y) − ψ(α) + ψ(β)].
-        // Chain rule: dl/dη = μ(1−μ)·dl/dμ.
-        let dl_dmu = &phi_safe * (&log_y - &log_1_minus_y - &psi_alpha + &psi_beta);
-        let mu_1_minus_mu = &mu_safe * &one_minus_mu;
-        let u_mu = &mu_1_minus_mu * &dl_dmu;
+        // Natural scale (Altitude #1): this family was already separable, so the
+        // conversion is purely the deletion of the two trailing chain-rule
+        // multiplies. `chain_to_eta` reapplies them from the resolved link
+        // (`mu_eta = μ(1−μ)` for logit, `φ` for log), reproducing the previous
+        // η-scale values under the defaults. Weights are returned unfloored.
 
-        // Fisher info for μ on η-scale: w = (μ(1−μ))² · φ²·(ψ'(α) + ψ'(β)).
-        let phi_sq = phi_safe.mapv(|p| p * p);
+        // μ. dl/dμ = φ·[log(y) − log(1−y) − ψ(α) + ψ(β)].
+        let dl_dmu = phi * (&log_y - &log_1_minus_y - &psi_alpha + &psi_beta);
+
+        // I_μ = φ²·(ψ'(α) + ψ'(β)).
+        let phi_sq = phi.mapv(|p| p * p);
         let i_mu = &phi_sq * (&psi_prime_alpha + &psi_prime_beta);
-        let mu_1_minus_mu_sq = mu_1_minus_mu.mapv(|v| v * v);
-        let w_mu = (&mu_1_minus_mu_sq * &i_mu).mapv(|v| v.max(MIN_WEIGHT));
 
-        // φ (log link). dl/dφ = ψ(φ) − μ·ψ(α) − (1−μ)·ψ(β) + μ·log(y) + (1−μ)·log(1−y).
-        // Chain rule: dl/dη = φ · dl/dφ.
-        let dl_dphi = &psi_phi - &mu_safe * &psi_alpha - &one_minus_mu * &psi_beta
-            + &mu_safe * &log_y
+        // φ. dl/dφ = ψ(φ) − μ·ψ(α) − (1−μ)·ψ(β) + μ·log(y) + (1−μ)·log(1−y).
+        let dl_dphi = &psi_phi - mu * &psi_alpha - &one_minus_mu * &psi_beta
+            + mu * &log_y
             + &one_minus_mu * &log_1_minus_y;
-        let u_phi = &phi_safe * &dl_dphi;
 
-        // Fisher info for φ on η-scale: I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ),
-        // so w = φ²·I_φ. (ψ' is decreasing and convex, so I_φ > 0; the previous
-        // expression had the sign inverted and relied on `.abs()` to rescue it.)
-        let mu_sq = mu_safe.mapv(|m| m * m);
+        // I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ). (ψ' is decreasing and convex, so
+        // I_φ > 0; an earlier expression had the sign inverted and relied on
+        // `.abs()` to rescue it.)
+        let mu_sq = mu.mapv(|m| m * m);
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v * v);
         let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_beta - &psi_prime_phi;
-        let w_phi = (&phi_sq * &i_phi).mapv(|v| v.max(MIN_WEIGHT));
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("phi".to_string(), (u_phi, w_phi)),
+            ("mu".to_string(), (dl_dmu, i_mu)),
+            ("phi".to_string(), (dl_dphi, i_phi)),
         ]))
     }
 
@@ -172,9 +185,31 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, no_nan_array, params_view,
     };
+    use crate::distributions::{CloglogLink, ProbitLink, SqrtLink};
     use ndarray::array;
+
+    #[test]
+    fn score_tracks_a_mu_far_below_the_old_clamp() {
+        // Regression for the `μ.clamp(MIN_POSITIVE, 1−MIN_POSITIVE)` this body used to
+        // apply. Under a probit link at η = −10 the true μ is Φ(−10) ≈ 7.6e-24; the
+        // clamp evaluated ψ and ψ' at 1e-10 instead, fourteen orders of magnitude
+        // away, so `chain_to_eta` multiplied a `mu_eta` taken from the real η into a
+        // score taken from a fictional μ and the product stopped telescoping. Two μ
+        // that far apart must not collapse onto the same derivative.
+        let y = array![0.5];
+        let clamped = [("mu", array![1e-10]), ("phi", array![10.0])];
+        let truthful = [("mu", array![7.6e-24]), ("phi", array![10.0])];
+        let a = Beta.theta_derivatives(&y, &params_view(&clamped)).unwrap();
+        let b = Beta.theta_derivatives(&y, &params_view(&truthful)).unwrap();
+        let (ua, ub) = (a["mu"].0[0], b["mu"].0[0]);
+        assert!(
+            ua.is_finite() && ub.is_finite() && (ua - ub).abs() > 1.0,
+            "μ = 1e-10 and μ = 7.6e-24 gave {ua} and {ub}"
+        );
+    }
 
     #[test]
     fn beta_derivatives() {
@@ -216,6 +251,41 @@ mod tests {
         ];
         check_score_via_finite_diff(&Beta, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&Beta, &y, &owned, "phi", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. μ lives on (0,1), so probit and cloglog are the
+        // meaningful overrides; φ is positive, so sqrt is.
+        let y = array![0.2, 0.5, 0.85];
+        let owned = [
+            ("mu", array![0.3, 0.5, 0.7]),
+            ("phi", array![10.0, 12.0, 8.0]),
+        ];
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, "mu", &ProbitLink, 1e-5);
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, "mu", &CloglogLink, 1e-5);
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, "phi", &SqrtLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Beta was already separable, so no new division appears here; the gate
+        // still runs so the family is covered uniformly with the rest of Phase 2b.
+        let y = array![0.01, 0.5, 0.99];
+        let owned = [
+            ("mu", array![0.0, 1.0, 1e-12]),
+            ("phi", array![0.0, 1e-320, 1e8]),
+        ];
+        let p = params_view(&owned);
+        let natural = Beta.theta_derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Beta, &y, &p).unwrap();
+        for name in ["mu", "phi"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+            assert!(w.iter().all(|&v| v >= 0.0));
+        }
     }
 
     #[test]

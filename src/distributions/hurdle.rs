@@ -2,14 +2,14 @@
 //! zero-truncated base for the positive part.
 //!
 //! ```text
-//! P(Y = 0) = ξ                          — the zero atom (logit-linked)
-//! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0) — base, zero-TRUNCATED
+//! P(Y = 0) = ξ                            the zero atom (logit-linked)
+//! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0)   base, zero-TRUNCATED
 //! ```
 //!
 //! This is a clean generalization of zero-inflation. Contrast with
 //! zero-*inflation* (DIST-5), where the base can still emit zero
 //! (`P(Y=0) = π + (1−π)·g(0)`): a hurdle's positive process is structurally
-//! separate from the zero process — reach for it when the zero-generating
+//! separate from the zero process; reach for it when the zero-generating
 //! mechanism is distinct (a true two-part model), and for zero-inflation when
 //! zeros are a contamination of one process.
 //!
@@ -20,7 +20,8 @@
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
-    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LogitLink, MIN_WEIGHT, PROB_EPS,
+    chain_to_eta, clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext,
+    LogitLink, DENOM_FLOOR, MIN_WEIGHT, PROB_EPS,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -66,6 +67,15 @@ impl Distribution for Hurdle {
         }
     }
 
+    /// Hand-written rather than delegated: `xi` is the wrapper's own parameter
+    /// and is not in `base.parameters()`, so asking the base about it would let
+    /// a base that refuses every name (Ocat) veto a parameter it has never heard
+    /// of. `xi`'s atom goes through `chain_to_eta` like any plain family, so it
+    /// accepts any link.
+    fn allows_link_override(&self, param: &str) -> bool {
+        param == "xi" || self.base.allows_link_override(param)
+    }
+
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         if param == "xi" {
             // Empirical zero fraction, clamped away from {0, 1}.
@@ -106,54 +116,86 @@ impl Distribution for Hurdle {
         Ok(out)
     }
 
-    fn derivatives(
+    /// The CDF chain rule below reads `mu_eta2`, so the scoring loop must build a
+    /// full second-order [`LinkContext`] rather than a first-order one.
+    fn needs_second_order_links(&self) -> bool {
+        true
+    }
+
+    /// Overrides the η-scale adapter directly: the zero-truncation normalizer
+    /// contributes *observed* information, which is not link-invariant, so there is
+    /// no natural-scale `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// [`Link::mu_eta2`].
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        ctx: &LinkContext,
     ) -> DerivativesResult {
         let xi = params
             .get("xi")
             .copied()
             .ok_or_else(|| self.unknown_param("xi"))?;
         // Base parameters: zero-truncated score on positive rows, nothing on zeros.
-        let base_derivs = self.base.derivatives(y, params)?;
+        let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let zeros = Array1::<f64>::zeros(y.len());
         let f0 = self.base.cdf(&zeros, params)?;
-        let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params)?;
+        let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params, ctx)?;
 
         let mut out = rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
             let (d1_0, d2_0) = &grad0[param];
             for i in 0..y.len() {
                 if Self::is_zero(y[i]) {
                     // Zero rows carry no information about the positive-part params.
+                    //
+                    // This `MIN_WEIGHT` is a *sentinel*, not a floor, and is the one
+                    // family-level use of the constant that survives Altitude #1.
+                    // Writing 0.0 here and letting `scoring::step` floor it would be
+                    // numerically identical (`u/w = 0` either way), but it would tally
+                    // one `weight_floor_hits` per structural zero on every iteration,
+                    // reporting every well-behaved hurdle fit as degenerate, the
+                    // opposite of what making that diagnostic accurate was for.
                     u[i] = 0.0;
                     w[i] = MIN_WEIGHT;
                 } else {
                     // Zero-truncation at 0: D = 1 − F(0), D' = −F'(0), D'' = −F''(0).
                     let dmass = (1.0 - f0[i]).max(PROB_EPS);
                     u[i] += d1_0[i] / dmass; // u_base − D'/D = u_base + F'(0)/D
-                    w[i] = (w[i] - d2_0[i] / dmass - (d1_0[i] / dmass).powi(2)).max(MIN_WEIGHT);
+                    w[i] = w[i] - d2_0[i] / dmass - (d1_0[i] / dmass).powi(2);
                 }
             }
         })?;
 
-        // xi atom (logit link): a Bernoulli on the zero indicator.
-        //   u = I(y=0) − xi,   w = xi(1 − xi).
+        // xi atom: a Bernoulli on the zero indicator. Unlike the base parameters
+        // above, this one *is* expected Fisher information, so it has a separable
+        // natural scale and goes through the generic chain rule (Altitude #1):
+        //   ∂l/∂ξ = (I(y=0) − ξ) / (ξ(1−ξ)),   i_ξ = 1 / (ξ(1−ξ)).
+        // Under the default logit link `mu_eta = ξ(1−ξ)`, so `chain_to_eta`
+        // recovers the classic `u_η = I(y=0) − ξ` and `w_η = ξ(1−ξ)`.
+        //
+        // **The guard is on the denominator, not on ξ**: the same decision, for
+        // the same reason, as `binomial.rs`. `clamp_prob` still applies in
+        // `loglik_pointwise`, which takes a logarithm, but a clamp here would break
+        // the telescoping: the caller multiplies by a `mu_eta` computed from η
+        // independently of anything clamped, and under a probit link at the link's
+        // own η clamp ξ = Φ(−30) ≈ 5e-198, far below `PROB_EPS`.
         let mut u_xi = Array1::<f64>::zeros(y.len());
-        let mut w_xi = Array1::<f64>::zeros(y.len());
+        let mut i_xi = Array1::<f64>::zeros(y.len());
         for i in 0..y.len() {
-            let xi_i = clamp_prob(xi[i]);
+            let xi_i = xi[i];
+            let denom = (xi_i * (1.0 - xi_i)).max(DENOM_FLOOR);
             let z = if Self::is_zero(y[i]) { 1.0 } else { 0.0 };
-            u_xi[i] = z - xi_i;
-            w_xi[i] = (xi_i * (1.0 - xi_i)).max(MIN_WEIGHT);
+            u_xi[i] = (z - xi_i) / denom;
+            i_xi[i] = 1.0 / denom;
         }
-        out.insert("xi".to_string(), (u_xi, w_xi));
+        let xi_eta = chain_to_eta(HashMap::from([("xi".to_string(), (u_xi, i_xi))]), ctx)?;
+        out.extend(xi_eta);
         Ok(out)
     }
 
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         // Reports the untruncated base variance (the zero atom and truncation are
-        // not folded in — a known diagnostic approximation, as for Truncated).
+        // not folded in; a known diagnostic approximation, as for Truncated).
         self.base.variance(params)
     }
 
@@ -171,8 +213,11 @@ impl Distribution for Hurdle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::distributions::test_helpers::{check_score_via_finite_diff, params_view};
-    use crate::distributions::Gamma;
+    use crate::distributions::test_helpers::{
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters_observed_info, finite_array, params_view,
+    };
+    use crate::distributions::{Gamma, ProbitLink, SqrtLink};
     use ndarray::array;
 
     fn gamma_hurdle_owned() -> Vec<(&'static str, Array1<f64>)> {
@@ -181,6 +226,17 @@ mod tests {
             ("sigma", array![0.5, 0.4, 0.6, 0.3]),
             ("xi", array![0.3, 0.3, 0.3, 0.3]),
         ]
+    }
+
+    #[test]
+    fn derivative_keys_and_weights_are_well_formed() {
+        // See the matching test in `censored.rs`. Mixed zero / positive rows so
+        // both the structural-zero mask and the zero-truncated base path are
+        // exercised in one call.
+        let y = array![0.0, 2.0, 0.0, 4.0];
+        let owned = gamma_hurdle_owned();
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        derivative_keys_match_parameters_observed_info(&h, params_view(&owned), &y);
     }
 
     #[test]
@@ -236,5 +292,43 @@ mod tests {
         check_score_via_finite_diff(&h, &y, &owned, "mu", 1e-4);
         check_score_via_finite_diff(&h, &y, &owned, "sigma", 1e-4);
         check_score_via_finite_diff(&h, &y, &owned, "xi", 1e-4);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_a_non_default_link() {
+        // Altitude #1 Phase 3 acceptance gate, covering both of this wrapper's
+        // hardcoded-link sites in one fixture:
+        //   μ on `sqrt`:   the zero-truncation normalizer's `F'(0)/D` term, built
+        //                  from Gamma's analytic CDF derivative;
+        //   ξ on `probit`: the zero atom, which used to write the logit chain rule
+        //                  inline and so ignored the override entirely.
+        // Gamma's μ is strictly positive, so η = √μ stays in the link's domain.
+        let y = array![0.0, 2.0, 3.0, 0.0];
+        let owned = gamma_hurdle_owned();
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        check_eta_score_via_finite_diff(&h, &y, &owned, "mu", &SqrtLink, 1e-4);
+        check_eta_score_via_finite_diff(&h, &y, &owned, "xi", &ProbitLink, 1e-4);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_fixture() {
+        // Altitude #1 Phase 3, gate (d). ξ at both rails is the new exposure: the
+        // natural-scale atom divides by ξ(1−ξ), which the folded `u = I − ξ`,
+        // `w = ξ(1−ξ)` never did, and `DENOM_FLOOR` is what keeps it finite there.
+        // μ and σ sweep the log link's reach at the same time so the zero-truncation
+        // normalizer's `F'(0)/D` is evaluated in the saturated tail too.
+        let y = array![0.0, 2.0, 0.0, 3.0];
+        let owned = [
+            ("mu", array![1e-320, 1e13, 2.0, 1e-8]),
+            ("sigma", array![1e-8, 1e13, 0.5, 1e-320]),
+            ("xi", array![0.0, 1.0, 1e-320, 0.5]),
+        ];
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        let p = params_view(&owned);
+        let d = default_link_derivatives(&h, &y, &p).unwrap();
+        for name in ["mu", "sigma", "xi"] {
+            let (u, w) = &d[name];
+            assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
+        }
     }
 }

@@ -1,0 +1,19 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&family, &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "1.3451e-1"
+    - "1.0268e0"
+  sigma:
+    - "-2.4833e0"
+  xi:
+    - "-1.0986e0"
+edf:
+  mu: "2.0000e0"
+  sigma: "1.0000e0"
+  xi: "1.0000e0"
+log_likelihood: "-1.4893e1"
+aic: "3.7785e1"

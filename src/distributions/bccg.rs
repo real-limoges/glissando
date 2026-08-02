@@ -14,7 +14,7 @@ use super::boxcox::{
 };
 use super::{
     clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    MIN_POSITIVE, MIN_WEIGHT,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{std_normal_cdf, std_normal_quantile};
 use ndarray::Array1;
@@ -63,30 +63,34 @@ impl Distribution for BCCG {
         })
     }
 
-    fn derivatives(
+    eta_derivatives_via_chain!();
+
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Box-Cox z-score and η-scale score/Fisher pairs. Full derivation in
+        // Box-Cox z-score and natural-scale score/Fisher pairs. Full derivation in
         // docs/math/mathematics.md [BCCG]. By the definition of z, T = (y/μ)^ν = 1+νσz,
-        // so the η-scale scores collapse to the clean forms below.
-        //   u_μ (log)      = μ·dl/dμ = z/σ + ν(z²−1)
-        //   u_σ (log)      = σ·dl/dσ = z²−1
-        //   u_ν (identity) =   dl/dν = −z·∂z/∂ν + log(y/μ)
-        // Expected Fisher information (matches gamlss BCCG):
-        //   w_μ = μ²·I_μμ = 1/σ² + 2ν²,   w_σ = σ²·I_σσ = 2,   w_ν = I_νν = 7σ²/4.
+        // so the bracketed numerators collapse to the clean forms below.
+        //   dl/dμ = [z/σ + ν(z²−1)] / μ
+        //   dl/dσ = (z²−1) / σ
+        //   dl/dν = −z·∂z/∂ν + log(y/μ)          (ν is identity-linked)
+        // Expected Fisher information (matches gamlss BCCG once chained):
+        //   I_μμ = (1/σ² + 2ν²)/μ²,   I_σσ = 2/σ²,   I_νν = 7σ²/4.
+        // Under the default links (log, log, identity) `chain_to_eta` reproduces the
+        // previous η-scale pairs exactly. Weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
         let n = y.len();
 
         let mut u_mu = Array1::<f64>::zeros(n);
-        let mut w_mu = Array1::<f64>::zeros(n);
+        let mut i_mu = Array1::<f64>::zeros(n);
         let mut u_sigma = Array1::<f64>::zeros(n);
-        let mut w_sigma = Array1::<f64>::zeros(n);
+        let mut i_sigma = Array1::<f64>::zeros(n);
         let mut u_nu = Array1::<f64>::zeros(n);
-        let mut w_nu = Array1::<f64>::zeros(n);
+        let mut i_nu = Array1::<f64>::zeros(n);
 
         for i in 0..n {
             let m = mu[i].max(MIN_POSITIVE);
@@ -95,18 +99,26 @@ impl Distribution for BCCG {
             let yi = y[i].max(MIN_POSITIVE);
             let (z, dz_dnu, l) = boxcox_z_dz_dnu(yi, m, s, nu_i); // l = log(y/μ)
 
-            u_mu[i] = z / s + nu_i * (z * z - 1.0);
-            w_mu[i] = 1.0 / (s * s) + 2.0 * nu_i * nu_i;
-            u_sigma[i] = z * z - 1.0;
-            w_sigma[i] = 2.0;
+            // Guard each reciprocal at the power it is used at: raising an
+            // already-guarded reciprocal to a power would overflow to infinity for a
+            // parameter the log link can still underflow to, and `inf · 0` is NaN.
+            let inv_m = 1.0 / m.max(DENOM_FLOOR);
+            let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
+            let inv_s = 1.0 / s.max(DENOM_FLOOR);
+            let inv_s_sq = 1.0 / (s * s).max(DENOM_FLOOR);
+
+            u_mu[i] = (z / s + nu_i * (z * z - 1.0)) * inv_m;
+            i_mu[i] = (inv_s_sq + 2.0 * nu_i * nu_i) * inv_m_sq;
+            u_sigma[i] = (z * z - 1.0) * inv_s;
+            i_sigma[i] = 2.0 * inv_s_sq;
             u_nu[i] = -z * dz_dnu + l;
-            w_nu[i] = (7.0 * s * s / 4.0).max(MIN_WEIGHT);
+            i_nu[i] = 7.0 * s * s / 4.0;
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
-            ("nu".to_string(), (u_nu, w_nu)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("nu".to_string(), (u_nu, i_nu)),
         ]))
     }
 
@@ -208,8 +220,10 @@ mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
         check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
-        check_score_via_finite_diff, derivative_keys_match_parameters, params_view,
+        check_eta_score_via_finite_diff, check_score_via_finite_diff, default_link_derivatives,
+        derivative_keys_match_parameters, finite_array, no_nan_array, params_view,
     };
+    use crate::distributions::{LogLink, SqrtLink};
     use ndarray::array;
 
     #[test]
@@ -268,6 +282,44 @@ mod tests {
         check_score_via_finite_diff(&BCCG, &y, &owned, "mu", 1e-5);
         check_score_via_finite_diff(&BCCG, &y, &owned, "sigma", 1e-5);
         check_score_via_finite_diff(&BCCG, &y, &owned, "nu", 1e-5);
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. μ, σ (and τ) default to log, ν to identity, so
+        // only a non-default link can tell a natural-scale score from an η-scale
+        // one. ν is held positive here so a log link is well defined on it; the
+        // default-link test above covers the negative and near-zero branches.
+        let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
+        let owned = [
+            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            ("nu", array![1.0, 0.5, 1.5, 0.75, 2.0]),
+        ];
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "nu", &LogLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_saturated_parameters() {
+        // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
+        // η-scale forms cancelled.
+        let y = array![1.0, 2.0, 3.0];
+        let owned = [
+            ("mu", array![0.0, 1e-320, 1e-8]),
+            ("sigma", array![1e-8, 0.0, 1e-320]),
+            ("nu", array![1.0, 0.5, -0.5]),
+        ];
+        let p = params_view(&owned);
+        let natural = BCCG.theta_derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&BCCG, &y, &p).unwrap();
+        for name in ["mu", "sigma", "nu"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+        }
     }
 
     #[test]

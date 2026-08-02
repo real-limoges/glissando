@@ -1,0 +1,19 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&StudentT::new(), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "1.0397e0"
+    - "1.9240e0"
+  nu:
+    - "3.2843e1"
+  sigma:
+    - "-1.4127e0"
+edf:
+  mu: "2.0000e0"
+  nu: "1.0000e0"
+  sigma: "1.0000e0"
+log_likelihood: "1.6743e0"
+aic: "4.6513e0"

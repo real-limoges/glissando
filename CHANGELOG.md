@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: non-default links now fit correctly
+
+**Refit any model fitted with a non-default link.** Its coefficients were
+estimated under the wrong working weights and the wrong chain rule. Standard
+errors, EDF and smoothing-parameter selection are affected too. Default-link
+models are unchanged, bit for bit, and were never affected. `predict` uses only
+`inv_link`, so predictions already stored from such a model are internally
+consistent with its (wrong) coefficients; there is no serialization format
+change, since `FittedParameter.link` already existed, so a saved model reloads
+and can be refit directly.
+
+- **`Distribution::derivatives` returned score and information "on the
+  linear-predictor scale", but every family hardcoded the chain rule for *its
+  own default link*.** `FitConfig::with_link` meanwhile honored the caller's
+  choice for `η → μ` only, so probit, cloglog, inverse, inverse-square, sqrt and
+  cauchit fits were silently wrong. Measured against an independent
+  maximum-likelihood optimizer, the fitted log-likelihood fell short of the true
+  maximum by 45.5 for gamma/inverse, 8.5e-3 for binomial/probit, 1.0e-4 for
+  poisson/sqrt and 6.4e-5 for binomial/cloglog. All four are now zero and run as
+  standing acceptance gates.
+
+  `derivatives` now returns natural-scale `(∂l/∂θ, i_θ)` and a new required
+  `eta_derivatives` applies `u = mu_eta·∂l/∂θ`, `w = mu_eta²·i_θ` once,
+  generically, from the resolved link. The structural wrappers chain their CDF
+  gradients with the second-order rule `∂²F/∂η² = mu_eta²·∂²F/∂θ² +
+  mu_eta2·∂F/∂θ`, using a new `Link::mu_eta2`.
+
+- **`FitConfig::links` now rejects an override it cannot honor**, instead of
+  accepting it and computing the wrong thing. Two parameters refuse: every
+  `Ocat` parameter (its `params["mu"]` holds η, and its threshold Jacobian is
+  `exp(η_k)` only under the log link) and `StudentT`'s `nu` (its ν-floor
+  projection is written against `FlooredLogLink`). Families declare this through
+  a new `Distribution::allows_link_override`, which defaults to `true`.
+
+- **An override naming a parameter the family does not have is now an error.**
+  It used to be a silent no-op: `FitConfig::with_link("sigma", "log")` on `Beta`,
+  whose second parameter is `phi`, fit under the default links and reported
+  success. Note that no *domain* checking is done: a logit link on a Poisson μ is
+  still accepted and produces nonsense.
+
+- **`weight_floor_hits` is accurate for the first time.** `MIN_WEIGHT` used to be
+  applied at two layers, and ~20 families pre-floored internally to exactly
+  `MIN_WEIGHT`, which the diagnostic's strict `<` test then never counted, so it
+  under-reported for precisely the families most likely to need it. The floor now
+  lives in exactly one place, the scoring loop, applied after the chain rule
+  (`max(mu_eta²·i_θ, F) ≠ mu_eta²·max(i_θ, F)`, so the order is not a rounding
+  difference).
+
+**Breaking, for anyone implementing `Distribution` outside this crate.**
+`eta_derivatives` is required and deliberately has no default body: an external
+implementor whose `derivatives` returns η-scale values would otherwise keep
+compiling against a defaulted adapter and silently double-chain to
+`mu_eta⁴ · i_θ`. Requiring the method turns that into a compile error.
+`cdf_eta_derivatives` is likewise renamed to `cdf_theta_derivatives` and its
+contract inverted to the natural scale.
+
 ### Fixed: solver convergence & mgcv/gamlss parity
 
 - **Working-response clipping no longer inverts the Fisher step.** The
@@ -101,31 +157,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cdf` (`1 − exp(−(y/μ)^σ)`) and `quantile` (`μ·(−ln(1−p))^(1/σ)`). Registered across
   every surface: `from_name`, the FFI `FamilyType` (WASM), and the Python `Weibull`
   class. Full derivation in `docs/math/mathematics.md` `[WEIBULL]`.
-- **Tag-based cross-references in `docs/math/mathematics.md`** — named subsections are
+- **Tag-based cross-references in `docs/math/mathematics.md`**: named subsections are
   now cited by stable bracketed tags (e.g. `[WEIBULL]`, `[CDF-TRIO]`, `[PWLS-CHOLESKY]`)
   instead of section numbers, so inserting a family no longer renumbers the document.
   Chapter-level references keep the `§N` form.
 
-- **Weibull family** — a two-parameter (`mu`, `sigma`) Weibull distribution in
+- **Weibull family**: a two-parameter (`mu`, `sigma`) Weibull distribution in
   `src/distributions/weibull.rs`, with analytic score/Fisher `derivatives`,
   `cdf` (`1 − exp(−(y/μ)^σ)`), `quantile`, and log-linked `mu`/`sigma`.
   Selectable by name (`"Weibull"`) across native, JSON/WASM, and Python
   (`Weibull()`) surfaces, bringing the catalog to 12 families.
-- **Structural likelihoods (STRUCT-1..3)** — `Censored`, `Truncated`, and
+- **Structural likelihoods (STRUCT-1..3)**: `Censored`, `Truncated`, and
   `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base
   family, in `src/distributions/{censored,truncated,hurdle}.rs`. Censoring swaps
   the density for a survival/interval probability built from the base `cdf`;
   truncation renormalizes by the in-support mass; hurdle composes a logit-linked
   zero atom (`xi`) with a zero-truncated base.
-- **Finite mixtures (STRUCT-4)** — `MixtureModel` and `fit_mixture` in
+- **Finite mixtures (STRUCT-4)**: `MixtureModel` and `fit_mixture` in
   `src/fitting/mixture.rs` fit a `K`-component mixture by EM, reusing the
   prior-weighted RS fit as the M-step. Re-exported at the crate root.
-- **`Distribution::cdf_eta_derivatives`** — a new trait hook returning analytic
+- **`Distribution::cdf_eta_derivatives`**: a new trait hook returning analytic
   `(∂F/∂η, ∂²F/∂η²)` per parameter; implemented for the location/scale parameters
   of Gaussian, Student-t, and Gamma, with a central-difference fallback (shared
   helper `src/distributions/structural.rs`) for shape parameters. Drives the
   censoring/truncation score and observed-information weight.
-- **SER-1 serialization** — a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`)
+- **SER-1 serialization**: a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`)
   and a `Distribution::descriptor` hook; `Binomial`, `Ocat`, and the structural
   wrappers now round-trip through `to_json` / `from_json`, not just the stateless
   families. `MixtureModel` has its own `to_json` / `from_json`.
@@ -136,7 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Clone` derive on `fitting::FittedParameter` so callers can duplicate fitted
   parameters without a serde round-trip.
 - `ParamDiagnostic` now carries `weight_floor_hits: usize` and
-  `step_cap_hits: usize` — counts of observations whose IRLS weight or step
+  `step_cap_hits: usize`, counts of observations whose IRLS weight or step
   was clamped in the final iteration. Non-zero values signal a degenerate fit.
 - Python bindings reach parity with WASM: new methods `fit_with_config`,
   `predict_with_se`, `predict_samples`, `fitted_values(param)`,
@@ -153,12 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_inputs`.
 - New Poisson cases for `predict_with_se` and `predict_samples` integration
   tests covering the non-identity-link path.
-- `FlooredLogLink` — a log link with a lower bound on the response-scale value
+- `FlooredLogLink`: a log link with a lower bound on the response-scale value
   (`μ = max(exp(η), floor)`). Used for StudentT's ν with `floor = 2` so the
   variance `σ²ν/(ν−2)` stays finite as the optimizer explores the heavy-tail
   region.
-- Student-t parity is now validated against R **gamlss `TF()`** — the
-  like-for-like Rigby–Stasinopoulos oracle (same μ/σ/ν parameterization) — via
+- Student-t parity is now validated against R **gamlss `TF()`**, the
+  like-for-like Rigby–Stasinopoulos oracle (same μ/σ/ν parameterization), via
   the new `benchmark/fit_gamlss.R`, wired into `orchestrate.py` /
   `run_comparison.sh`. This gates μ, σ, ν, EDF, SE and the (unweighted)
   log-likelihood; mgcv `scat()` is retained only as a loose μ-only cross-method
@@ -230,8 +286,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under an order-2 penalty) while repairing a spuriously collapsed one. The fix
   is criterion-agnostic (REML/GCV/Fellner-Schall) and fires only on collapse, so
   well-behaved fits are unchanged. Investigation notes: the objective being
-  unimodal means the collapse was never a competing optimum, and Fellner-Schall —
-  despite no line search — is *not* immune (it still consumes
+  unimodal means the collapse was never a competing optimum, and Fellner-Schall,
+  despite no line search, is *not* immune (it still consumes
   reduction-order-dependent traces and has a one-way denominator-floor trap), so
   the fix targets the mechanism rather than swapping the default criterion.
 
@@ -257,7 +313,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   + their tests).
 - `src/splines.rs` items (`sum_to_zero_basis`, `kronecker_product`,
   `row_kronecker_into`, `create_basis_matrix`, `create_penalty_matrix`)
-  narrowed from `pub` to `pub(crate)` — they were already in a private module
+  narrowed from `pub` to `pub(crate)`; they were already in a private module
   but the misleading `pub` keyword is now gone.
 - `argmin-math 0.5.1` dependency duplication situation
   (`ndarray 0.16` + `ndarray-linalg 0.17` alongside our `0.17`/`0.18`)

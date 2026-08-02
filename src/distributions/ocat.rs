@@ -18,8 +18,10 @@
 //! WASM / JSON string-dispatch routes.  Construct it explicitly in Rust or via the
 //! Python `Ocat(n_categories=4)` class.
 
-use super::{require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink};
-use crate::distributions::{MAX_ETA, MIN_ETA, MIN_WEIGHT};
+use super::{
+    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LinkContext, LogLink,
+};
+use crate::distributions::{MAX_ETA, MIN_ETA};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -158,6 +160,16 @@ impl Distribution for Ocat {
         }
     }
 
+    /// No Ocat parameter accepts a link override.
+    ///
+    /// The `eta_derivatives` override below is written against this family's own
+    /// links and cannot be lifted to a generic chain rule: `params["mu"]` holds
+    /// η rather than μ, and `jac_k` is `exp(η_k)` only because `delta_k` uses a
+    /// log link. Substituting any other link leaves both wrong with no error.
+    fn allows_link_override(&self, _param: &str) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "Ocat"
     }
@@ -198,10 +210,23 @@ impl Distribution for Ocat {
     //
     // Fisher info: E_y[(u_param)²] summed over categories.
     // -------------------------------------------------------------------------
-    fn derivatives(
+    /// Overrides the η-scale adapter directly, permanently.
+    ///
+    /// Ocat's thresholds are a *cumulative reparameterization*
+    /// `θ_k = δ₁ + Σ_{j≤k} exp(η_j)`, so the map from η to the natural parameters has
+    /// a lower-triangular Jacobian rather than the `diag(mu_eta)` that
+    /// [`chain_to_eta`](crate::distributions::chain_to_eta) assumes. There is no
+    /// separable `(∂l/∂θ, i_θ)` for the generic rule to lift.
+    ///
+    /// Relatedly, this family's `params["mu"]` already holds **η**, not μ, and
+    /// `jac_k` below is `exp(η_k)` only under the log link, which is why
+    /// [`Self::allows_link_override`] rejects every parameter. See the
+    /// `[CHAIN-GENERIC]` section of `docs/math/mathematics.md`.
+    fn eta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
+        _ctx: &LinkContext,
     ) -> DerivativesResult {
         let eta_mu = require(self, params, "mu")?;
         let n_obs = y.len();
@@ -261,8 +286,7 @@ impl Distribution for Ocat {
                     let fu = if r < n_thresh { f_vals[r] } else { 0.0 };
                     (fl - fu).powi(2) / pi[r].max(MIN_PROB)
                 })
-                .sum::<f64>()
-                .max(MIN_WEIGHT);
+                .sum::<f64>();
 
             // ── Score and Fisher info for each threshold delta_k ──────────────
             for k in 1..=n_thresh {
@@ -293,8 +317,7 @@ impl Distribution for Ocat {
                         let a = jac_k * (fu - eff_fl);
                         a.powi(2) / pi[r - 1].max(MIN_PROB)
                     })
-                    .sum::<f64>()
-                    .max(MIN_WEIGHT);
+                    .sum::<f64>();
             }
         }
 
@@ -389,7 +412,7 @@ impl Distribution for Ocat {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Right-continuous step CDF at the level ⌊y⌋. Proportional-odds model:
-        // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R — the same
+        // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R: the same
         // cumulative the per-category mass in `loglik_pointwise` differences.
         let eta_mu = require(self, params, "mu")?;
         let n_thresh = self.n_thresholds();

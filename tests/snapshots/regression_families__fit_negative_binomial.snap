@@ -1,0 +1,16 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&NegativeBinomial::new(), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "1.1858e0"
+    - "1.0122e0"
+  sigma:
+    - "-1.0230e0"
+edf:
+  mu: "2.0000e0"
+  sigma: "1.0000e0"
+log_likelihood: "-1.5895e2"
+aic: "3.2391e2"

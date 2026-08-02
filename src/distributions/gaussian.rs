@@ -2,7 +2,7 @@
 
 use super::{
     require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    MIN_POSITIVE,
+    DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, std_normal_cdf, std_normal_pdf, std_normal_quantile};
 use ndarray::Array1;
@@ -33,31 +33,45 @@ impl Distribution for Gaussian {
         }
     }
 
-    fn derivatives(
+    eta_derivatives_via_chain!();
+
+    fn theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
-        //   μ (identity link):  u = (y−μ)/σ²,                w = 1/σ².
-        //   σ (log link, η = log σ):  u = ((y−μ)² − σ²)/σ²,  w = 2.
+        // Natural scale (Altitude #1; no link folded in):
+        //   μ:  ∂l/∂μ = (y−μ)/σ²,               i_μ = 1/σ².
+        //   σ:  ∂l/∂σ = ((y−μ)² − σ²)/σ³,       i_σ = 2/σ².
         // Full derivation in docs/math/mathematics.md.
+        //
+        // `chain_to_eta` recovers the classic η-scale pairs under the default
+        // links: μ is identity (`mu_eta = 1`, so its entries pass through
+        // untouched), and σ is log (`mu_eta = σ`), giving `u_η = ((y−μ)²−σ²)/σ²`
+        // and `w_η = σ²·(2/σ²) = 2`. The weights are returned unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
         let sigma_sq = sigma.mapv(|s| s * s);
+        // Guard each reciprocal at its own power of σ rather than clamping σ, so
+        // the value `chain_to_eta` multiplies back in stays exactly the caller's σ.
+        // Guarding σ instead and then cubing would overflow to infinity for a σ the
+        // log link can still underflow to, and `inf · 0` is NaN.
+        let inv_sigma_sq = sigma_sq.mapv(|s2| 1.0 / s2.max(DENOM_FLOOR));
+        let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
         let residual = y - mu;
         let residual_sq = residual.mapv(|r| r * r);
 
-        let u_mu = &residual / &sigma_sq;
-        let w_mu = sigma_sq.mapv(|s2| 1.0 / s2);
+        let u_mu = &residual * &inv_sigma_sq;
+        let i_mu = inv_sigma_sq.clone();
 
-        let u_sigma = (&residual_sq - &sigma_sq) / &sigma_sq;
-        let w_sigma = Array1::from_elem(y.len(), 2.0);
+        let u_sigma = (&residual_sq - &sigma_sq) * &inv_sigma_cubed;
+        let i_sigma = 2.0 * &inv_sigma_sq;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, w_mu)),
-            ("sigma".to_string(), (u_sigma, w_sigma)),
+            ("mu".to_string(), (u_mu, i_mu)),
+            ("sigma".to_string(), (u_sigma, i_sigma)),
         ]))
     }
 
@@ -94,15 +108,20 @@ impl Distribution for Gaussian {
         }))
     }
 
-    fn cdf_eta_derivatives(
+    fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfEtaResult {
-        // Location-scale derivatives of F = Φ(z), z = (y−μ)/σ, std-normal pdf φ,
-        // φ'(z) = −z·φ(z). Both parameters are closed form:
-        //   μ (identity):  ∂F/∂η = −φ/σ,        ∂²F/∂η² = φ'/σ² = −zφ/σ².
-        //   σ (log):       ∂F/∂η = −zφ,         ∂²F/∂η² = zφ + z²φ' = zφ(1 − z²).
+    ) -> super::CdfThetaResult {
+        // Natural-scale (Altitude #1) location-scale derivatives of F = Φ(z),
+        // z = (y−μ)/σ, std-normal pdf φ, φ'(z) = −z·φ(z). ∂z/∂μ = −1/σ and
+        // ∂z/∂σ = −z/σ, so:
+        //   μ:  ∂F/∂μ = −φ/σ,    ∂²F/∂μ² = φ'/σ² = −zφ/σ².
+        //   σ:  ∂F/∂σ = −zφ/σ,   ∂²F/∂σ² = zφ(2 − z²)/σ².
+        // The caller chains to η. Under the default links (identity, log) that
+        // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
+        // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
+        // σ·(−zφ/σ) = −zφ and σ²·zφ(2−z²)/σ² + σ·(−zφ/σ) = zφ(1 − z²).
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
@@ -116,11 +135,29 @@ impl Distribution for Gaussian {
             }
             let s = sigma[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
+            // φ decays like e^{−z²/2}, so φ·z^k → 0 for every k and every derivative
+            // below has limit 0 as |z| → ∞. Take that limit explicitly rather than
+            // evaluating the formulas: z overflows to infinity once the bound and σ
+            // are far enough apart (σ on its `MIN_POSITIVE` floor against a 1e300
+            // censoring bound), long after φ has underflowed to exactly 0, and
+            // `∞ · 0` is NaN, which `chain_cdf_to_eta` then spreads into every
+            // censored or truncated row's score and weight. This mirrors the ±∞-bound
+            // arm above and leaves every in-range value untouched.
+            if !z.is_finite() {
+                continue;
+            }
             let phi = std_normal_pdf(z);
+            let z_sq = z * z;
             d1_mu[i] = -phi / s;
             d2_mu[i] = -z * phi / (s * s);
-            d1_sigma[i] = -z * phi;
-            d2_sigma[i] = z * phi * (1.0 - z * z);
+            d1_sigma[i] = -z * phi / s;
+            // z² still overflows on its own around |z| ≈ 1e154, where z is finite but
+            // `z² · φ` is again `∞ · 0`.
+            d2_sigma[i] = if z_sq.is_finite() {
+                z * phi * (2.0 - z_sq) / (s * s)
+            } else {
+                0.0
+            };
         }
         Ok(HashMap::from([
             ("mu".to_string(), (d1_mu, d2_mu)),
@@ -150,13 +187,41 @@ impl Distribution for Gaussian {
 mod tests {
     use super::*;
     use crate::distributions::test_helpers::{
-        check_cdf_eta_derivatives_via_finite_diff, check_cdf_monotone_in_unit,
-        check_cdf_pdf_consistency, check_cdf_quantile_roundtrip, check_score_via_finite_diff,
-        derivative_keys_match_parameters, params_view,
+        check_cdf_monotone_in_unit, check_cdf_pdf_consistency, check_cdf_quantile_roundtrip,
+        check_cdf_theta_derivatives_via_finite_diff, check_eta_score_via_finite_diff,
+        check_score_via_finite_diff, default_link_derivatives, derivative_keys_match_parameters,
+        finite_array, no_nan_array, params_view,
     };
+    use crate::distributions::{InverseLink, SqrtLink};
     use ndarray::array;
     #[cfg(not(target_arch = "wasm32"))]
     use proptest::prelude::*;
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_an_overflowing_z() {
+        // A wrapper evaluating `F` at a far-out censoring or truncation bound against
+        // a σ on its floor sends `z = (bound − μ)/σ` past f64. φ has long since
+        // underflowed to exactly 0, so `−z·φ` and `z²·φ` are `∞ · 0` = NaN, and
+        // `chain_cdf_to_eta` spreads that into every censored row's score and weight.
+        // Row 2 is the milder case where z is finite but z² is not.
+        let bounds = array![1e300, -1e300, 1e200];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0]),
+            ("sigma", array![1e-10, 1e-10, 1.0]),
+        ];
+        let p = params_view(&owned);
+        let d = Gaussian.cdf_theta_derivatives(&bounds, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+            // φ·z^k → 0 for every k, so the saturated rows take the limit exactly.
+            assert_eq!((d1[0], d2[0]), (0.0, 0.0), "{name} row 0");
+            assert_eq!((d1[2], d2[2]), (0.0, 0.0), "{name} row 2");
+        }
+    }
 
     #[test]
     fn gaussian_derivatives() {
@@ -177,11 +242,54 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
-        let derivs = Gaussian.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         let (u_mu, w_mu) = &derivs["mu"];
         assert!(u_mu.iter().all(|&v| v.abs() < 1e-12));
         // w_mu = 1/sigma^2 = 1.0
         assert!(w_mu.iter().all(|&v| (v - 1.0).abs() < 1e-12));
+    }
+
+    #[test]
+    fn score_matches_finite_diff_under_non_default_links() {
+        // The Altitude #1 gate. Gaussian μ is identity-linked, so a default-link
+        // finite difference cannot distinguish `∂l/∂μ` from `∂l/∂η` at all; a log
+        // link on μ is what makes the check bite. This replaces
+        // `identity_link_parameters_are_only_checked_vacuously_today`, the Phase 0
+        // characterization test that asserted the opposite.
+        //
+        // μ is positive throughout the fixture so the log and sqrt links are
+        // well defined on it.
+        let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
+        let owned = [
+            ("mu", array![1.0, 1.5, 2.5, 3.0, 4.0]),
+            ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0]),
+        ];
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &InverseLink, 1e-5);
+    }
+
+    #[test]
+    fn derivatives_stay_finite_at_a_saturated_sigma() {
+        // Un-folding introduces `1/σ²` and `1/σ³` that the old `w_σ = 2` cancelled.
+        // Both have to stay finite where the log link can still land, including
+        // where σ has underflowed to exactly zero.
+        let y = array![0.0, 1.0, 2.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0]),
+            ("sigma", array![0.0, 1e-320, 1e-8]),
+        ];
+        let p = params_view(&owned);
+        let natural = Gaussian.theta_derivatives(&y, &p).unwrap();
+        let chained = default_link_derivatives(&Gaussian, &y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (u_n, i_n) = &natural[name];
+            assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
+            let (u, w) = &chained[name];
+            assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
+            assert!(w.iter().all(|&v| v >= 0.0));
+        }
     }
 
     #[test]
@@ -192,7 +300,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
-        let derivs = Gaussian.derivatives(&y, &p).unwrap();
+        let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         let (_, w_sigma) = &derivs["sigma"];
         assert!(w_sigma.iter().all(|&v| (v - 2.0).abs() < 1e-12));
     }
@@ -235,14 +343,36 @@ mod tests {
     }
 
     #[test]
-    fn cdf_eta_derivatives_match_finite_diff_gaussian() {
+    fn cdf_theta_derivatives_match_finite_diff_gaussian() {
         let y = array![-1.5, 0.0, 0.7, 2.3];
         let owned = [
             ("mu", array![-0.5, 0.2, 1.0, 1.5]),
             ("sigma", array![1.0, 1.3, 0.8, 1.1]),
         ];
-        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
-        check_cdf_eta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
+    }
+
+    #[test]
+    fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
+        // Un-folding σ put a `1/σ` in `∂F/∂σ` and a `1/σ²` in `∂²F/∂σ²` where the
+        // η-scale forms had none, so the saturated tail became reachable
+        // arithmetic. Span both ends of what the log link can produce inside its
+        // own η clamp, plus σ underflowed to exactly zero.
+        let y = array![0.0, 1.0, 2.0, -1.0];
+        let owned = [
+            ("mu", array![0.0, 0.0, 0.0, 0.0]),
+            ("sigma", array![0.0, 1e-320, 1e-8, 1e13]),
+        ];
+        let p = params_view(&owned);
+        let d = Gaussian.cdf_theta_derivatives(&y, &p).unwrap();
+        for name in ["mu", "sigma"] {
+            let (d1, d2) = &d[name];
+            assert!(
+                finite_array(d1) && finite_array(d2),
+                "{name}: {d1:?} {d2:?}"
+            );
+        }
     }
 
     #[test]

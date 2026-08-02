@@ -4,12 +4,17 @@
 //!
 //! The wrappers all rewrite a base family's likelihood around its CDF, so they
 //! share one routine: evaluate `(∂F/∂η, ∂²F/∂η²)` per base parameter, taking the
-//! family's analytic value where it supplies one
-//! ([`Distribution::cdf_eta_derivatives`]) and otherwise central-differencing
-//! `base.cdf` on that parameter's η. Location/scale parameters land on the
-//! analytic path; non-elementary shape parameters fall back to the numeric one.
+//! family's analytic natural-scale value where it supplies one
+//! ([`Distribution::cdf_theta_derivatives`], chained to η here) and otherwise
+//! central-differencing `base.cdf` on that parameter's live η. Location/scale
+//! parameters land on the analytic path; non-elementary shape parameters fall
+//! back to the numeric one. Both paths take their link from the
+//! [`LinkContext`](super::LinkContext) the fit resolved, never from
+//! [`Distribution::default_link`].
 
-use super::{CdfEtaResult, DerivativesResult, Distribution, GamlssError, Link};
+use super::{
+    chain_cdf_to_eta, CdfEtaResult, DerivativesResult, Distribution, GamlssError, LinkContext,
+};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -47,6 +52,11 @@ macro_rules! delegate_to_base {
     (@method default_link) => {
         fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
             self.base.default_link(param)
+        }
+    };
+    (@method allows_link_override) => {
+        fn allows_link_override(&self, param: &str) -> bool {
+            self.base.allows_link_override(param)
         }
     };
     (@method initial_value) => {
@@ -102,54 +112,94 @@ pub(crate) use delegate_to_base;
 
 /// `(∂F/∂η, ∂²F/∂η²)` at the points `at`, for every parameter of `base`.
 ///
-/// Analytic for the parameters `base.cdf_eta_derivatives` supplies; a central
-/// difference of `base.cdf` (perturbing the parameter on its default-link η) for
-/// the rest. Derivatives are taken w.r.t. the family's *default* link, matching
-/// the convention the families' own [`Distribution::derivatives`] use.
+/// Two paths, both landing on the η scale of the link the *fit* resolved, which
+/// `ctx` carries, not the family's default link (Altitude #1):
+///
+/// - Analytic, for the parameters [`Distribution::cdf_theta_derivatives`]
+///   supplies. Those come back on the natural scale θ and are chained here by
+///   [`chain_cdf_to_eta`], which is the second-order rule
+///   `∂²F/∂η² = mu_eta²·∂²F/∂θ² + mu_eta2·∂F/∂θ`.
+/// - A central difference of `base.cdf`, perturbing the parameter's live η
+///   directly, for the rest. Perturbing η rather than θ is deliberate; see
+///   [`numeric_cdf_grad`].
 pub(crate) fn cdf_eta_grads(
     base: &dyn Distribution,
     at: &Array1<f64>,
     f0: &Array1<f64>,
     params: &HashMap<&str, &Array1<f64>>,
+    ctx: &LinkContext,
 ) -> CdfEtaResult {
-    let analytic = base.cdf_eta_derivatives(at, params)?;
+    // `remove`, not `get`: the map is freshly built here and dropped on return, so
+    // taking each entry out lets the chain rule work in place. Cloning instead cost
+    // two n-length allocations per analytic parameter, and `Censored` and `Truncated`
+    // each call this twice per scoring step.
+    let mut analytic = base.cdf_theta_derivatives(at, params)?;
     let mut out = HashMap::new();
     for &p in base.parameters() {
-        if let Some(v) = analytic.get(p) {
-            out.insert(p.to_string(), v.clone());
+        if let Some((mut d1, mut d2)) = analytic.remove(p) {
+            chain_cdf_to_eta(&mut d1, &mut d2, ctx.mu_eta(p)?, ctx.mu_eta2(p)?, p)?;
+            out.insert(p.to_string(), (d1, d2));
         } else {
-            let link = base.default_link(p)?;
-            let grads = numeric_cdf_grad(base, at, f0, params, p, link.as_ref())?;
+            let grads = numeric_cdf_grad(base, at, f0, params, p, ctx)?;
             out.insert(p.to_string(), grads);
         }
     }
     Ok(out)
 }
 
-/// Central-difference `(∂F/∂η, ∂²F/∂η²)` for a single parameter, perturbing it on
-/// the η-scale through `link` and re-evaluating `base.cdf` at `at`. `f0` is
-/// `base.cdf(at, params)` — every caller already has it, so it's passed in
+/// Central-difference `(∂F/∂η, ∂²F/∂η²)` for a single parameter, perturbing the
+/// live linear predictor `ctx` holds for it and re-evaluating `base.cdf` at `at`.
+/// `f0` is `base.cdf(at, params)`; every caller already has it, so it's passed in
 /// rather than recomputed here.
+///
+/// **Both the link and η come from `ctx`, and the perturbation stays on η.**
+///
+/// Reading the link from `ctx` rather than `base.default_link` is what makes this
+/// path honor a link override (Altitude #1). Taking η from `ctx` too, rather than
+/// recovering it as `link.link(θ)`, matters wherever that round trip is not the
+/// identity: [`SqrtLink`](super::links::SqrtLink) maps η < 0 to a positive μ and
+/// recovers `|η|`, and [`InverseSquareLink`](super::links::InverseSquareLink) is
+/// undefined for η ≤ 0.
+///
+/// Differencing η rather than θ is also deliberate, and is *not* an oversight left
+/// from the natural-scale conversion of the analytic path. `FD_EPS` on η through a
+/// log link is a *relative* step (`σ·e^{±FD_EPS}`), where ±`FD_EPS` on θ is an
+/// absolute one: for σ ≈ 1e-3 that is a 1% perturbation, a completely different
+/// truncation-error regime, and for σ ≲ `FD_EPS` the minus side lands at or below
+/// zero and feeds an invalid parameter into `base.cdf`.
 fn numeric_cdf_grad(
     base: &dyn Distribution,
     at: &Array1<f64>,
     f0: &Array1<f64>,
     params: &HashMap<&str, &Array1<f64>>,
     param: &str,
-    link: &dyn Link,
+    ctx: &LinkContext,
 ) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
     let orig = params
         .get(param)
         .copied()
         .ok_or_else(|| base.unknown_param(param))?;
+    let (link, eta) = ctx.link_and_eta(param).ok_or_else(|| {
+        GamlssError::Internal(format!(
+            "LinkContext has no entry for parameter '{}'",
+            param
+        ))
+    })?;
     let n = at.len();
+    if eta.len() != orig.len() {
+        return Err(GamlssError::Internal(format!(
+            "numeric_cdf_grad length mismatch for '{}': eta {}, params {}",
+            param,
+            eta.len(),
+            orig.len()
+        )));
+    }
 
     let mut plus = orig.clone();
     let mut minus = orig.clone();
     for i in 0..n {
-        let eta = link.link(orig[i]);
-        plus[i] = link.inv_link(eta + FD_EPS);
-        minus[i] = link.inv_link(eta - FD_EPS);
+        plus[i] = link.inv_link(eta[i] + FD_EPS);
+        minus[i] = link.inv_link(eta[i] - FD_EPS);
     }
 
     let mut p_plus = params.clone();
@@ -165,11 +215,11 @@ fn numeric_cdf_grad(
 }
 
 /// Rewrite each base parameter's `(score, weight)` in place. Shared by the three
-/// structural wrappers' `derivatives`: each already has `base_derivs` (the base
+/// structural wrappers' `theta_derivatives`: each already has `base_derivs` (the base
 /// family's own `(u, w)` per parameter) and a per-row rule for overwriting some
 /// or all of it; this factors out only the "loop over `base.parameters()`, take
 /// that parameter's `(u, w)` out of `base_derivs`, hand it to the caller, put the
-/// result back into a fresh map" bookkeeping — not the per-row logic itself.
+/// result back into a fresh map" bookkeeping, not the per-row logic itself.
 ///
 /// `rewrite(param, u, w)` is called once per parameter in `base.parameters()`
 /// order with `u`/`w` (the base family's score/weight for that parameter, moved
@@ -180,7 +230,7 @@ fn numeric_cdf_grad(
 /// than an indirect call per row.
 ///
 /// Returns `Err` (via `base.unknown_param`) if `base_derivs` is missing an entry
-/// for one of `base.parameters()` — mirrors each wrapper's previous inline check.
+/// for one of `base.parameters()`; mirrors each wrapper's previous inline check.
 pub(crate) fn rewrite_base_derivatives(
     base: &dyn Distribution,
     mut base_derivs: HashMap<String, (Array1<f64>, Array1<f64>)>,

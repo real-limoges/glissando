@@ -1,0 +1,16 @@
+---
+source: tests/regression_families.rs
+expression: "fit_and_snapshot(&Gamma::new(), &y, &x)"
+---
+converged: true
+coefficients:
+  mu:
+    - "1.2702e-1"
+    - "1.0438e0"
+  sigma:
+    - "-2.4837e0"
+edf:
+  mu: "2.0000e0"
+  sigma: "1.0000e0"
+log_likelihood: "2.5615e1"
+aic: "-4.5229e1"
