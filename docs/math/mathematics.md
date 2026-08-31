@@ -1,6 +1,6 @@
 # Mathematical Foundations of GAMLSS
 
-This document provides detailed mathematical derivations for the GAMLSS implementation in `glissando`. It covers distribution-specific derivatives, special functions, numerical algorithms, and convergence theory.
+This document works through the mathematics behind the GAMLSS implementation in `glissando`: the distribution-specific derivatives, the special functions, the numerical algorithms, and the convergence theory that holds all of it together.
 
 > Generated PDF: run `bash docs/math/build-math-pdf.sh` to produce `docs/math/mathematics.pdf` (a numbered, hyperlinked, table-of-contents'd PDF). The PDF build uses pandoc + xelatex; see the script header for details.
 
@@ -17,7 +17,7 @@ This section provides detailed derivations of score functions (first derivatives
 - **Fisher information** $w = I_\eta$: Expected curvature (used as weight in IRLS)
 - **Working response** $z = \eta + u/w$: Adjusted target for the weighted least squares problem
 
-For each distribution, we derive these quantities accounting for the link function via the chain rule.
+For each distribution we derive these quantities, then carry them through the link function with the chain rule.
 
 > **Which scale the code returns.** Each subsection below derives the natural-scale
 > pair $(\partial\ell/\partial\theta,\; i_\theta)$ and then folds in the family's
@@ -1701,7 +1701,7 @@ before the multiply gives $\max(10^{-18}, 10^{-6}) \cdot 10^{12} = 10^6$ against
 true $10^{-6}$: twelve orders of magnitude, freezing a block that should drift.
 
 **Guard each denominator at the power it is actually used at.** Un-folding
-reintroduces divisions that the folded forms cancelled algebraically. Raising an
+reintroduces divisions that the folded forms canceled algebraically. Raising an
 already-guarded reciprocal to a power overflows for a parameter the log link can
 still underflow to, and $\infty \cdot 0$ is NaN. Guards go on the denominator
 (a $\mathrm{DENOM\_FLOOR}$ of $10^{-300}$, far below anything a built-in link
@@ -1779,7 +1779,8 @@ $$
 
 ## 8. GCV Gradient for Smoothing Parameter Optimization
 
-The GCV score is minimized using L-BFGS optimization. The gradient with respect to $\log(\lambda_j)$ requires careful derivation.
+We minimize the GCV score with L-BFGS.
+The gradient with respect to $\log(\lambda_j)$ takes some care to get right, so the rest of this section derives it in full.
 
 ### Setup
 
@@ -2012,7 +2013,8 @@ Source: `src/fitting/scoring.rs` (`step`), `src/fitting/solver.rs` (`restart_see
 
 ## 9. Mean-Variance Relationships
 
-A key feature distinguishing different distributions is how variance relates to the mean. This determines which distribution is appropriate for different data structures.
+What really separates one distribution from another is how the variance tracks the mean.
+That relationship is what decides which family belongs on which kind of data.
 
 | Distribution | Mean | Variance | Relationship |
 |--------------|------|----------|--------------|
@@ -2067,7 +2069,8 @@ For continuous data:
 
 ### Initialization Strategy
 
-The RS algorithm requires starting values for all parameters. Default initialization:
+The RS algorithm needs a starting value for every parameter.
+Here is how each one is seeded by default:
 
 1. **$\mu$**:
    - Gaussian: $\bar{y}$ (sample mean)
@@ -2217,7 +2220,7 @@ Test $H_0: \gamma = 0$ using likelihood ratio test.
 
 ## 12. Code Map
 
-A reverse index from mathematical concept to the canonical implementation, for contributors jumping between formula and source.
+A reverse index from each mathematical concept to the code that implements it, for anyone jumping between a formula here and its source.
 
 | Concept (this doc) | Source location |
 | --- | --- |

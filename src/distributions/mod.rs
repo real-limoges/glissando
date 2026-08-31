@@ -14,9 +14,9 @@ pub use links::{
     link_from_name, CauchitLink, CloglogLink, FlooredLogLink, IdentityLink, InverseLink,
     InverseSquareLink, Link, LinkContext, LogLink, LogitLink, ProbitLink, SqrtLink,
 };
-// Re-export at crate-internal scope so submodules can `use super::MIN_POSITIVE`
-// after the move without breaking. MAX_ETA/MIN_ETA are link-internal today and
-// only re-exported here so any future submodule can opt in without a separate edit.
+// Re-exported at crate-internal scope so submodules can `use super::MIN_POSITIVE`
+// after the move without breaking. MAX_ETA/MIN_ETA are link-internal today. I
+// re-export them here anyway so a future submodule can opt in without a separate edit.
 #[allow(unused_imports)]
 pub(crate) use links::{MAX_ETA, MIN_ETA, MIN_POSITIVE};
 
@@ -26,12 +26,12 @@ pub(crate) const MIN_WEIGHT: f64 = 1e-6;
 /// Floor for a denominator that the η-scale chain rule multiplies straight back out.
 ///
 /// Natural-scale [`Distribution::theta_derivatives`] bodies divide by quantities the old
-/// folded η-scale forms cancelled algebraically (`1/μ`, `1/σ`, `1/(μ(1−μ))`). Those
-/// divisions have to stay finite, but the guard must never *bind* for any θ a link
-/// can actually produce: if it did, it would disagree with the `mu_eta` that
-/// [`chain_to_eta`] multiplies back in, and the product would no longer telescope.
-/// That is why this is a floor on the *denominator* and not a clamp on θ, and why
-/// it is so much smaller than [`MIN_POSITIVE`].
+/// folded η-scale forms canceled algebraically (`1/μ`, `1/σ`, `1/(μ(1−μ))`). Those
+/// divisions have to stay finite, but here is the catch: the guard must never *bind*
+/// for any θ a link can actually produce. If it did, it would disagree with the
+/// `mu_eta` that [`chain_to_eta`] multiplies back in, and the product would no longer
+/// telescope. That is why this is a floor on the *denominator* and not a clamp on θ,
+/// and why it is so much smaller than [`MIN_POSITIVE`].
 ///
 /// `1e-300` leaves both margins comfortable. It sits roughly 290 orders of
 /// magnitude below anything a built-in link yields inside its own η clamp
@@ -73,7 +73,7 @@ pub(crate) const TRIGAMMA_FLOOR: f64 = 1e-150;
 ///
 /// NaN is deliberately passed through. [`chain_to_eta`] removes the one way a
 /// well-formed family body produces one (`inf · 0`, below), so a NaN arriving here
-/// is a bug in that body and should surface rather than be papered over.
+/// is a bug in that body. I want it to surface, not get papered over.
 fn saturate(v: f64) -> f64 {
     if v.is_infinite() {
         f64::MAX.copysign(v)
@@ -151,17 +151,16 @@ pub fn chain_to_eta(
                 .and(mu_eta)
                 .for_each(|u_out, i_out, &me| {
                     if me == 0.0 {
-                        // `dμ/dη = 0` freezes the observation: no move in η changes
+                        // `dμ/dη = 0` freezes the observation. No move in η changes
                         // its μ, so its score and information are exactly zero
-                        // however large the natural-scale pair is. Taking the
-                        // product literally would be `inf · 0` = NaN for a family
-                        // whose natural-scale derivative diverges at a saturated θ,
-                        // and one NaN row poisons the entire PWLS solve:
-                        // `scoring::step`'s `w < MIN_WEIGHT` and `step > MAX_STEP`
-                        // tests are both false for NaN, so nothing downstream
-                        // catches it. A hard zero is reachable, not hypothetical:
-                        // `SqrtLink::mu_eta(0.0)` and `LogLink::mu_eta(η ≤ −745)`
-                        // are both exactly 0.
+                        // however large the natural-scale pair is. Take the product
+                        // literally and you get `inf · 0` = NaN for a family whose
+                        // natural-scale derivative diverges at a saturated θ, and one
+                        // NaN row poisons the entire PWLS solve: `scoring::step`'s
+                        // `w < MIN_WEIGHT` and `step > MAX_STEP` tests are both false
+                        // for NaN, so nothing downstream catches it. And a hard zero
+                        // is reachable, not hypothetical: `SqrtLink::mu_eta(0.0)` and
+                        // `LogLink::mu_eta(η ≤ −745)` are both exactly 0.
                         *u_out = 0.0;
                         *i_out = 0.0;
                     } else {
@@ -268,7 +267,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// Only two built-ins refuse: every [`Ocat`] parameter (its `params["mu"]`
     /// holds η rather than μ, and its threshold Jacobian is `exp(η_k)` only
     /// under the log link) and [`StudentT`]'s `nu` (its ν-floor KKT projection
-    /// is written against [`FlooredLogLink`](links::FlooredLogLink), whose
+    /// is written against [`FlooredLogLink`], whose
     /// `mu_eta` is a hard zero below the floor).
     ///
     /// A `param` outside [`Self::parameters`] is not this method's problem;
@@ -339,7 +338,7 @@ pub trait Distribution: Debug + Send + Sync {
     ///
     /// Only the structural wrappers ([`Censored`] / [`Truncated`] / [`Hurdle`]) do:
     /// they chain a *CDF* rather than a likelihood, and there the `mu_eta2 · ∂F/∂θ`
-    /// term does not drop out (see [`chain_cdf_to_eta`]). Answering `false` lets the
+    /// term does not drop out (see `chain_cdf_to_eta`). Answering `false` lets the
     /// scoring loop build a [`LinkContext::first_order`] context and skip computing a
     /// `d²μ/dη²` array per parameter per step that nothing would read.
     fn needs_second_order_links(&self) -> bool {

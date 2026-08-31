@@ -1,8 +1,9 @@
-//! Model formula terms: building blocks for specifying regression terms in GAMLSS.
+//! Model formula terms: the building blocks you write a GAMLSS formula out of.
 //!
-//! A formula consists of terms that specify how each distribution parameter (μ, σ, ν, ...)
-//! depends on predictor variables. Terms can be parametric (intercept, linear) or semiparametric
-//! (smooth with penalties, random effects).
+//! A formula is a bag of terms, and each term says how one distribution parameter
+//! (μ, σ, ν, ...) leans on the predictors. Some terms are parametric and boring in
+//! the good way (intercept, linear); others are semiparametric and do the heavy
+//! lifting (a penalized smooth, a random effect).
 
 /// A single term in a model formula: intercept, linear effect, smooth, offset,
 /// factor, or interaction.
@@ -15,17 +16,18 @@ pub enum Term {
     },
     /// P-spline, tensor product, or random effect.
     Smooth(Smooth),
-    /// A known per-row term that enters the linear predictor `η` additively with
-    /// a fixed coefficient of 1 (e.g. `log(exposure)` for a rate model). It
-    /// contributes to `η`, not to `β`, so it occupies no design column.
+    /// A known per-row term that drops into the linear predictor `η` additively
+    /// with a fixed coefficient of 1 (think `log(exposure)` in a rate model). It
+    /// feeds `η` directly, never `β`, so it takes up no design column of its own.
     Offset {
         col_name: String,
     },
     /// A categorical predictor expanded into dummy columns under a contrast
-    /// coding. `levels` and `labels` start empty in a hand-built formula and are
-    /// resolved once from the training column at fit time (mirroring how
-    /// [`Smooth::CrSpline1D`] resolves its knots), then replayed verbatim at
-    /// predict time so the fit and predict design matrices agree.
+    /// coding. In a hand-built formula `levels` and `labels` start empty; they
+    /// resolve once from the training column at fit time (the same trick
+    /// [`Smooth::CrSpline1D`] uses for its knots) and then replay verbatim at
+    /// predict time, which is what keeps the fit and predict design matrices lined
+    /// up column for column.
     Factor {
         col_name: String,
         contrast: Contrast,
@@ -38,9 +40,10 @@ pub enum Term {
         #[cfg_attr(feature = "serde", serde(default))]
         labels: Vec<String>,
     },
-    /// Row-wise product of two terms' design columns (e.g. `x:z`). The
-    /// coefficient count is the product of the two operands' column counts;
-    /// factor×continuous and factor×factor both fall out of the same product.
+    /// Row-wise product of two terms' design columns (e.g. `x:z`). You get one
+    /// coefficient per pair of operand columns, so the count is just the two
+    /// column counts multiplied. factor×continuous and factor×factor are the same
+    /// operation, not special cases.
     Interaction(Box<Term>, Box<Term>),
 }
 
@@ -51,7 +54,7 @@ pub enum Term {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Contrast {
-    /// Treatment (dummy) coding against the first level as baseline — R's
+    /// Treatment (dummy) coding against the first level as baseline: R's
     /// default `contr.treatment`. Column `j` indicates level `j + 1`.
     #[default]
     Treatment,
@@ -61,26 +64,26 @@ pub enum Contrast {
 }
 
 impl Term {
-    /// A parametric linear term on `col_name` — e.g. `Term::linear("age")`.
+    /// A parametric linear term on `col_name`: e.g. `Term::linear("age")`.
     pub fn linear(col_name: impl Into<String>) -> Self {
         Term::Linear {
             col_name: col_name.into(),
         }
     }
 
-    /// Wraps a [`Smooth`] as a [`Term`] — e.g. `Term::smooth(Smooth::ps("x"))`.
+    /// Wraps a [`Smooth`] as a [`Term`]: e.g. `Term::smooth(Smooth::ps("x"))`.
     pub fn smooth(smooth: Smooth) -> Self {
         Term::Smooth(smooth)
     }
 
-    /// An offset term on `col_name` — enters `η` additively with coefficient 1.
+    /// An offset term on `col_name`: enters `η` additively with coefficient 1.
     pub fn offset(col_name: impl Into<String>) -> Self {
         Term::Offset {
             col_name: col_name.into(),
         }
     }
 
-    /// A categorical factor on `col_name` with treatment (dummy) contrasts —
+    /// A categorical factor on `col_name` with treatment (dummy) contrasts:
     /// R's default. Levels resolve from the data at fit time. Use
     /// [`Term::factor_with`] to choose a different [`Contrast`].
     pub fn factor(col_name: impl Into<String>) -> Self {
@@ -97,7 +100,7 @@ impl Term {
         }
     }
 
-    /// The row-wise interaction (product) of two terms — e.g.
+    /// The row-wise interaction (product) of two terms: e.g.
     /// `Term::interaction(Term::factor("region"), Term::linear("x"))`.
     pub fn interaction(left: Term, right: Term) -> Self {
         Term::Interaction(Box::new(left), Box::new(right))
@@ -150,9 +153,9 @@ impl std::fmt::Display for Term {
             Term::Linear { col_name } => write!(f, "{col_name}"),
             Term::Smooth(s) => write!(f, "{}", s.formula_repr()),
             Term::Offset { col_name } => write!(f, "offset({col_name})"),
-            // Rendered as `factor(..)` (not the bare name) so it round-trips: a
-            // bare name parses back as `Linear`, whereas `factor(..)` reparses as
-            // a `Factor`. Sum-to-zero coding surfaces its contrast hint.
+            // Spell it `factor(..)`, not the bare name, or it won't round-trip. A
+            // bare name parses back as `Linear`; `factor(..)` reparses as a
+            // `Factor`. Sum-to-zero coding also tacks on its contrast hint.
             Term::Factor {
                 col_name,
                 contrast: Contrast::Treatment,
@@ -170,20 +173,22 @@ impl std::fmt::Display for Term {
 
 /// Smooth term specification for nonlinear effects and random intercepts.
 ///
-/// Smooth terms enable flexible, data-driven modeling through penalized basis expansions.
+/// A smooth is where the flexibility comes from: a penalized basis expansion that
+/// lets the data pick the shape of the curve instead of you.
 ///
 /// # Smooths on scale/shape parameters
 ///
-/// A `Smooth` is valid on any distribution parameter, not just the location
-/// (`mu`) — e.g. a `PSpline1D` on `sigma` to model nonlinear heteroskedasticity.
+/// Nothing pins a `Smooth` to the location parameter. It is just as valid on any
+/// other one, e.g. a `PSpline1D` on `sigma` to model nonlinear heteroskedasticity.
 /// The default REML smoothing-parameter selection recovers these scale/shape
-/// curves (see `tests/scale_smooth_recovery.rs`). If a smooth carries little
-/// signal its penalty can drive it down to a straight line (its penalty null
-/// space); when that happens the fit records a message in
-/// [`FitDiagnostics::warnings`](crate::FitDiagnostics) and you can inspect
-/// [`FittedParameter::term_edf`](crate::fitting::FittedParameter) — a per-term
-/// effective-degrees-of-freedom near the term's null-space dimension means the
-/// curve collapsed and a `Linear` term would be the honest description.
+/// curves too (see `tests/scale_smooth_recovery.rs`). When a smooth carries almost
+/// no signal, its penalty can flatten it all the way down to a straight line (the
+/// penalty's null space); the fit notices, drops a message into
+/// [`FitDiagnostics::warnings`](crate::FitDiagnostics), and lets you check
+/// [`FittedParameter::term_edf`](crate::fitting::FittedParameter). A per-term
+/// effective-degrees-of-freedom sitting near the term's null-space dimension is the
+/// tell: the curve collapsed, and a plain `Linear` term would be the honest way to
+/// write it.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Smooth {
@@ -196,12 +201,12 @@ pub enum Smooth {
         degree: usize,
         /// 1 = linear trends, 2 = constant second differences.
         penalty_order: usize,
-        /// Training-data range `(min, max)` the uniform knot grid is anchored
-        /// to. **Leave `None` when building a formula**: it is resolved once
-        /// from training data at fit time and stored here so prediction reuses
-        /// the identical basis (previously the knots were silently re-derived
-        /// from the *prediction* data's range, corrupting out-of-range or
-        /// subset predictions).
+        /// Training-data range `(min, max)` the uniform knot grid is anchored to.
+        /// **Leave `None` when building a formula.** It gets resolved once from the
+        /// training data at fit time and stored right here, so prediction reuses the
+        /// exact same basis. This used to be a bug: the knots were silently
+        /// re-derived from the *prediction* data's range, which quietly corrupted
+        /// any out-of-range or subset prediction. Pinning the range is the fix.
         #[cfg_attr(feature = "serde", serde(default))]
         range: Option<(f64, f64)>,
     },
@@ -227,10 +232,10 @@ pub enum Smooth {
     },
     /// 1D natural cubic regression spline (mgcv `bs = "cr"`).
     ///
-    /// Knots are placed at quantiles of the training data (matching mgcv's default).
-    /// Natural boundary conditions (`f'' = 0` at the outer knots) ensure linear
-    /// extrapolation beyond the data range — preventing the edge curl that
-    /// unconstrained B-splines produce.
+    /// Knots sit at quantiles of the training data, matching mgcv's default. The
+    /// natural boundary conditions (`f'' = 0` at the outer knots) force linear
+    /// extrapolation past the data range, which kills the edge curl that
+    /// unconstrained B-splines love to produce out where you have no data.
     ///
     /// The penalty is the exact integrated squared second derivative `∫ [f'']²`,
     /// whose null space is spanned by constants and linear functions (rank k-2).
@@ -243,21 +248,22 @@ pub enum Smooth {
         /// used for identifiability when an intercept is also present.
         #[cfg_attr(feature = "serde", serde(default))]
         pc: Option<f64>,
-        /// Quantile knot positions, length `k`.  **Leave empty when building a
-        /// formula** — they are resolved once from training data at fit time and
-        /// then stored here so prediction reuses the identical basis.
+        /// Quantile knot positions, length `k`. **Leave empty when building a
+        /// formula.** They resolve once from the training data at fit time and get
+        /// stored here, so prediction reuses the identical basis.
         #[cfg_attr(feature = "serde", serde(default))]
         knots: Vec<f64>,
     },
     /// Random intercept term indexed by a grouping variable.
-    /// Assumes each group has its own random intercept ~ N(0, σ²_u).
+    /// Each group gets its own random intercept ~ N(0, σ²_u).
     RandomEffect {
         col_name: String,
-        /// Group levels in column order, resolved once from training data at
-        /// fit time (sorted for determinism) and stored so prediction maps
-        /// groups to the same coefficient columns. **Leave empty when building
-        /// a formula.** Prediction rows with a level not seen in training are
-        /// an error, matching mgcv's factor semantics.
+        /// Group levels in column order, resolved once from the training data at
+        /// fit time (sorted so it's deterministic) and stored so prediction maps
+        /// groups back to the same coefficient columns. **Leave empty when building
+        /// a formula.** A prediction row carrying a level that never showed up in
+        /// training is an error, same as mgcv's factor semantics; we don't invent a
+        /// coefficient for a group we never saw.
         #[cfg_attr(feature = "serde", serde(default))]
         levels: Vec<String>,
     },
@@ -288,7 +294,7 @@ impl Smooth {
     }
 
     /// 1D natural cubic regression spline on `col_name` with the mgcv-default knot
-    /// count. Knots resolve from training data at fit time, so they start empty —
+    /// count. Knots resolve from training data at fit time, so they start empty:
     /// override the count with [`Smooth::k`] and pin a point constraint with
     /// [`Smooth::pc`].
     pub fn cr(col_name: impl Into<String>) -> Self {
@@ -530,7 +536,7 @@ mod tests {
 
     #[test]
     fn builders_are_noops_on_wrong_variant() {
-        // `.n_splines` only affects P-splines; a CR spline passes through unchanged.
+        // `.n_splines` only bites on P-splines. A CR spline shrugs and passes through untouched.
         assert!(matches!(
             Smooth::cr("x").n_splines(99),
             Smooth::CrSpline1D { k, .. } if k == Smooth::DEFAULT_CR_K
@@ -538,8 +544,8 @@ mod tests {
     }
 }
 
-/// Parsing utilities for the Python FFI: lifts term parsing out of `python.rs`
-/// so the FFI surface stays a thin marshalling layer.
+/// Term-parsing utilities for the Python FFI. This lives here so `python.rs`
+/// stays a thin marshaling layer instead of growing a parser.
 #[cfg(feature = "python")]
 pub(crate) mod py_parse {
     use super::{Smooth, Term};
@@ -613,7 +619,7 @@ pub(crate) mod py_parse {
         }
         let col_name: String = tuple.get_item(1)?.extract()?;
 
-        // Hoist the kwargs item binding so it outlives the borrow taken by `kwargs`.
+        // Bind the kwargs item up here so it outlives the borrow `kwargs` takes from it.
         let kwargs_item = if tuple.len() >= 3 {
             Some(tuple.get_item(2)?)
         } else {
@@ -622,7 +628,7 @@ pub(crate) mod py_parse {
         let kwargs: Option<&Bound<PyDict>> =
             kwargs_item.as_ref().map(|item| item.cast()).transpose()?;
 
-        // Dispatch on the `bs` basis type kwarg (default: "ps" = P-spline).
+        // The `bs` basis-type kwarg decides which smooth we build (default "ps" = P-spline).
         let bs = if let Some(kw) = kwargs {
             kwarg_str_or(kw, "bs", "ps")?
         } else {

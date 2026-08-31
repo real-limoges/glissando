@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>glissando · fitting algorithms — CG &amp; grid-λ implementation guide</title>
+<title>glissando · fitting algorithms: CG &amp; grid-λ implementation guide</title>
 <style>
   :root {
     --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#787c99;
@@ -79,16 +79,16 @@
 <body>
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>F · Fitting engine robustness</b></p>
-  <h1>glissando <span class="sub">· fitting algorithms — CG &amp; grid λ</span></h1>
-  <p class="lede">Implements <span class="id">FIT-3</span> (the <b style="color:#fff">CG / Cole-Green</b> algorithm — gamlss's second fitter, for cross-parameter derivative coupling when RS mixes slowly) and <span class="id">FIT-4</span> (<b style="color:#fff">grid / "magic"-style</b> smoothing-parameter selection as an alternative to the L-BFGS criteria). Both are <em>alternatives</em> bolted alongside the current machinery, selected by config — neither rewrites the working RS path.</p>
-  <p class="lede"><b style="color:#fff">Current state.</b> <code>fit_gamlss</code> (<code>src/fitting/mod.rs:332</code>) is RS-only: its outer loop (<code>mod.rs:415+</code>) cycles, and the inner loop (<code>mod.rs:432</code>) walks <code>for param_name in family.parameters()</code> — fitting each distribution parameter's predictor <b>one at a time</b>, treating the others as fixed. The smoothing parameters λ are chosen inside the scoring step by <code>SmoothingCriterion</code> (<code>mod.rs:58</code>) dispatching (<code>scoring.rs:220–226</code>) into the L-BFGS optimizers (<code>solver.rs:278</code>/<code>:337</code>) or the Fellner-Schall fixed point (<code>solver.rs:400</code>). FIT-3 changes the <em>first</em> loop; FIT-4 adds a <em>fourth</em> criterion.</p>
+  <h1>glissando <span class="sub">· fitting algorithms: CG &amp; grid λ</span></h1>
+  <p class="lede">Implements <span class="id">FIT-3</span> (the <b style="color:#fff">CG / Cole-Green</b> algorithm, gamlss's second fitter, for cross-parameter derivative coupling when RS mixes slowly) and <span class="id">FIT-4</span> (<b style="color:#fff">grid / "magic"-style</b> smoothing-parameter selection as an alternative to the L-BFGS criteria). Both are <em>alternatives</em> bolted alongside the current machinery and selected by config; neither rewrites the working RS path.</p>
+  <p class="lede"><b style="color:#fff">Current state.</b> <code>fit_gamlss</code> (<code>src/fitting/mod.rs:332</code>) is RS-only: its outer loop (<code>mod.rs:415+</code>) cycles, and the inner loop (<code>mod.rs:432</code>) walks <code>for param_name in family.parameters()</code>, fitting each distribution parameter's predictor <b>one at a time</b>, treating the others as fixed. The smoothing parameters λ are chosen inside the scoring step by <code>SmoothingCriterion</code> (<code>mod.rs:58</code>) dispatching (<code>scoring.rs:220–226</code>) into the L-BFGS optimizers (<code>solver.rs:278</code>/<code>:337</code>) or the Fellner-Schall fixed point (<code>solver.rs:400</code>). FIT-3 changes the <em>first</em> loop; FIT-4 adds a <em>fourth</em> criterion.</p>
 
   <h2 class="part">FIT-3 · CG (Cole-Green) algorithm</h2>
   <div class="ns">
-    <p>RS is block-coordinate ascent: it updates <code>μ</code>'s predictor holding <code>σ</code>, <code>ν</code> fixed, then <code>σ</code> holding the rest fixed, and so on. That is fast and stable when the parameters are near-orthogonal, but mixes slowly when they are <b>strongly correlated</b> (the heavy-tailed / skew families). CG instead forms the <b>full cross-parameter</b> expected-information system — the off-diagonal <code>∂²ℓ/∂η_p∂η_q</code> blocks RS discards — and updates all predictors jointly each cycle.</p>
+    <p>RS is block-coordinate ascent: it updates <code>μ</code>'s predictor holding <code>σ</code>, <code>ν</code> fixed, then <code>σ</code> holding the rest fixed, and so on. That is fast and stable when the parameters are near-orthogonal, but mixes slowly when they are <b>strongly correlated</b> (the heavy-tailed / skew families). CG instead forms the <b>full cross-parameter</b> expected-information system (the off-diagonal <code>∂²ℓ/∂η_p∂η_q</code> blocks RS throws away) and updates all predictors jointly each cycle.</p>
     <p>There is no algorithm enum today; RS is hardcoded. Introduce one and dispatch on it.</p>
     <ol class="steps">
-      <li><b>The algorithm enum</b> — <code>src/fitting/mod.rs</code> (near the <code>SmoothingCriterion</code> definition, ~<code>mod.rs:70</code>):
+      <li><b>The algorithm enum</b>, in <code>src/fitting/mod.rs</code> (near the <code>SmoothingCriterion</code> definition, ~<code>mod.rs:70</code>):
         <pre><code>#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -100,13 +100,13 @@ pub enum FittingAlgorithm {
     CG,
 }</code></pre>
       </li>
-      <li><b>The config field</b> — add to <code>FitConfig</code> (<code>mod.rs:89–123</code>), mirroring how <code>criterion</code> is declared so it round-trips through serde:
+      <li><b>The config field</b>: add to <code>FitConfig</code> (<code>mod.rs:89–123</code>), mirroring how <code>criterion</code> is declared so it round-trips through serde:
         <pre><code>/// Fitting algorithm: RS (default) or CG for coupled parameters (FIT-3).
 #[cfg_attr(feature = "serde", serde(default))]
 pub algorithm: FittingAlgorithm,</code></pre>
         Add a <code>with_algorithm</code> builder next to <code>with_na_action</code> (<code>mod.rs:128</code>) and seed the field in <code>Default for FitConfig</code>.
       </li>
-      <li><b>The dispatch</b> — branch once in <code>fit_gamlss</code>'s outer loop body (~<code>mod.rs:428</code>), before the per-parameter walk:
+      <li><b>The dispatch</b>: branch once in <code>fit_gamlss</code>'s outer loop body (~<code>mod.rs:428</code>), before the per-parameter walk:
         <pre><code>match config.algorithm {
     FittingAlgorithm::RS =&gt; {
         for param_name in family.parameters() {
@@ -116,7 +116,7 @@ pub algorithm: FittingAlgorithm,</code></pre>
     FittingAlgorithm::CG =&gt; step_cg(&amp;mut state, family, data, config)?,
 }</code></pre>
       </li>
-      <li><b>The coupled step</b> — a new <code>step_cg</code> beside <code>scoring.rs::step</code> (<code>scoring.rs:126</code>). Where <code>step</code> builds the working response and weight for one parameter from its diagonal Fisher block, <code>step_cg</code> assembles the <b>stacked</b> system across all parameters and solves it once:
+      <li><b>The coupled step</b>: a new <code>step_cg</code> beside <code>scoring.rs::step</code> (<code>scoring.rs:126</code>). Where <code>step</code> builds the working response and weight for one parameter from its diagonal Fisher block, <code>step_cg</code> assembles the <b>stacked</b> system across all parameters and solves it once:
         <pre><code>// Per cycle, for parameters p = 1..P with predictors η_p = X_p β_p:
 //   • working response z_p and diagonal weight W_pp as in RS (scoring.rs::step)
 //   • PLUS the off-diagonal weights W_pq = −E[∂²ℓ / ∂η_p ∂η_q]   (RS sets these 0)
@@ -128,14 +128,14 @@ pub algorithm: FittingAlgorithm,</code></pre>
         The off-diagonal weights need the family to expose its mixed second derivatives; most two-parameter families have a closed form (e.g. Gaussian's <code>∂²ℓ/∂η_μ∂η_σ</code>), and where it is awkward the numeric cross-derivative is a fallback.
       </li>
     </ol>
-    <p><b>Validate:</b> on well-conditioned data RS and CG must converge to the <em>same</em> coefficients (to tolerance) — the regression test. The win shows on a deliberately correlated fit (e.g. a heavy-tailed family where RS needs many cycles): CG reaches the same deviance in markedly fewer. Oracle: R <code>gamlss(..., method = CG())</code>.</p>
+    <p><b>Validate:</b> on well-conditioned data RS and CG must converge to the <em>same</em> coefficients (to tolerance); that is the regression test. The win shows on a deliberately correlated fit (e.g. a heavy-tailed family where RS needs many cycles): CG reaches the same deviance in markedly fewer. Oracle: R <code>gamlss(..., method = CG())</code>.</p>
   </div>
 
   <h2 class="part">FIT-4 · Grid / "magic" λ selection</h2>
   <div class="ns">
-    <p>The L-BFGS optimizers minimize REML/GCV by gradient descent in <code>log λ</code> — fast but able to stall in a local minimum or on a flat ridge. A <b>grid</b> search over <code>log λ</code> is the robust fallback (mgcv's "magic"/"performance iteration" lineage): evaluate the same criterion the L-BFGS path uses on a coarse log-spaced grid, take the minimizer, optionally golden-section-refine around it. It is a new <code>SmoothingCriterion</code> value, so it slots into the existing dispatch with no change to the RS loop.</p>
+    <p>The L-BFGS optimizers minimize REML/GCV by gradient descent in <code>log λ</code>: fast, but able to stall in a local minimum or on a flat ridge. A <b>grid</b> search over <code>log λ</code> is the robust fallback (mgcv's "magic"/"performance iteration" lineage): evaluate the same criterion the L-BFGS path uses on a coarse log-spaced grid, take the minimizer, optionally golden-section-refine around it. It is a new <code>SmoothingCriterion</code> value, so it slots into the existing dispatch with no change to the RS loop.</p>
     <ol class="steps">
-      <li><b>The variant</b> — extend <code>SmoothingCriterion</code> (<code>mod.rs:58–66</code>):
+      <li><b>The variant</b>: extend <code>SmoothingCriterion</code> (<code>mod.rs:58–66</code>):
         <pre><code>pub enum SmoothingCriterion {
     Gcv,
     #[default]
@@ -149,7 +149,7 @@ pub algorithm: FittingAlgorithm,</code></pre>
 #[cfg_attr(feature = "serde", serde(default = "default_lambda_grid"))]
 pub lambda_grid: (f64, f64, usize),   // (log10_lo, log10_hi, n_points)</code></pre>
       </li>
-      <li><b>The dispatch arm</b> — in the criterion match (<code>scoring.rs:220–226</code>), route <code>Grid</code> to a new optimizer:
+      <li><b>The dispatch arm</b>: in the criterion match (<code>scoring.rs:220–226</code>), route <code>Grid</code> to a new optimizer:
         <pre><code>match config.criterion {
     SmoothingCriterion::Gcv =&gt; run_optimization(/* GCV target */ …),
     SmoothingCriterion::Reml =&gt; run_optimization_reml(…),
@@ -157,7 +157,7 @@ pub lambda_grid: (f64, f64, usize),   // (log10_lo, log10_hi, n_points)</code></
     SmoothingCriterion::Grid =&gt; run_optimization_grid(…, config.lambda_grid),
 }</code></pre>
       </li>
-      <li><b>The optimizer</b> — <code>run_optimization_grid</code> beside <code>run_optimization</code> (<code>solver.rs:278</code>). It reuses the <em>same</em> score closure the L-BFGS path already builds (the GCV/REML objective as a function of <code>log λ</code>), so this is pure search, no new statistics:
+      <li><b>The optimizer</b>: <code>run_optimization_grid</code> beside <code>run_optimization</code> (<code>solver.rs:278</code>). It reuses the <em>same</em> score closure the L-BFGS path already builds (the GCV/REML objective as a function of <code>log λ</code>), so this is pure search, no new statistics:
         <pre><code>/// Evaluate the GCV/REML score on a log10(λ) grid; return the minimizer.
 /// Optionally golden-section refine the best bracket.
 pub(crate) fn run_optimization_grid(
@@ -175,12 +175,12 @@ pub(crate) fn run_optimization_grid(
 }</code></pre>
       </li>
     </ol>
-    <p><b>Validate:</b> on a smooth where the L-BFGS criterion has a clean unimodal score, <code>Grid</code> and <code>Reml</code>/<code>Gcv</code> pick the same λ (to grid resolution) and the same EDF. The value case is a pathological score surface where L-BFGS undersmooths — grid finds the global minimum the gradient method walked past. Surface the chosen criterion on every binding so callers can opt in.</p>
+    <p><b>Validate:</b> on a smooth where the L-BFGS criterion has a clean unimodal score, <code>Grid</code> and <code>Reml</code>/<code>Gcv</code> pick the same λ (to grid resolution) and the same EDF. The value case is a pathological score surface where L-BFGS undersmooths; grid finds the global minimum the gradient method walked past. Surface the chosen criterion on every binding so callers can opt in.</p>
   </div>
 
   <h2 class="part">Surfacing &amp; diagnostics</h2>
   <div class="ns">
-    <p>Both items are config-only from the caller's view, so the cross-surface work is small: thread <code>algorithm</code> / <code>criterion: "grid"</code> through the JSON <code>FitConfig</code> shape (<code>src/json.rs</code>) — serde already covers it once the enums derive <code>Serialize</code>/<code>Deserialize</code> — and through the Python <code>FitConfig</code> wrapper (<code>src/python.rs</code>). Record which algorithm/criterion actually ran in <code>FitDiagnostics</code> (<code>mod.rs:188–217</code>) so a fit is reproducible from its own report; the existing <code>final_deviance</code> field already lets a test assert RS-vs-CG agreement.</p>
+    <p>Both items are config-only from the caller's view, so the cross-surface work is small: thread <code>algorithm</code> / <code>criterion: "grid"</code> through the JSON <code>FitConfig</code> shape (<code>src/json.rs</code>), which serde already covers once the enums derive <code>Serialize</code>/<code>Deserialize</code>, and through the Python <code>FitConfig</code> wrapper (<code>src/python.rs</code>). Record which algorithm/criterion actually ran in <code>FitDiagnostics</code> (<code>mod.rs:188–217</code>) so a fit is reproducible from its own report; the existing <code>final_deviance</code> field already lets a test assert RS-vs-CG agreement.</p>
   </div>
 
   <h2 class="part">Done when</h2>

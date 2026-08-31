@@ -3,10 +3,10 @@
 // The `.snap` files lock fitted-model output (rounded to 4 significant figures)
 // for fixed-seed inputs.  Two distinct purposes share the same fixtures:
 //
-// 1. REGRESSION — running `cargo test --test regression` after a refactor must
-//    reproduce the snapshot byte-for-byte; any drift in coefficients, EDF, or
+// 1. REGRESSION: running `cargo test --test regression` after a refactor has to
+//    reproduce the snapshot byte-for-byte. Any drift in coefficients, EDF, or
 //    information criteria larger than ~1e-4 trips the test.
-// 2. BACKEND EQUIVALENCE — the same `.snap` files are honoured under both
+// 2. BACKEND EQUIVALENCE: the same `.snap` files are honored under both
 //    `openblas` (default) and `pure-rust`.  CI runs:
 //
 //        cargo test --test regression
@@ -29,11 +29,11 @@ use glissando::{
     FitConfig, Formula, GamlssModel, SmoothingCriterion, Term,
 };
 
-/// Snapshot tests are pinned to GCV so that both linalg backends (openblas and
+/// I pin the snapshot tests to GCV so both linalg backends (openblas and
 /// pure-rust) land on the same minimum at 4-sig-fig precision. REML on a
 /// near-flat objective surface (e.g. linear-trend data living in the order-2
 /// penalty's null space) can converge to numerically distinct λ across backends;
-/// that behavior is exercised by `tests/reml.rs` instead.
+/// I exercise that behavior in `tests/reml.rs` instead.
 fn gcv_config() -> FitConfig {
     FitConfig {
         criterion: SmoothingCriterion::Gcv,
@@ -186,9 +186,9 @@ fn intercept_plus_pspline_converges_for_poisson() {
 }
 
 /// Closed-form OLS reference: for a Gaussian linear model with identity link on μ
-/// and intercept-only σ, the μ coefficients must agree with the analytic OLS
-/// solution `(X'X)⁻¹·X'y`.  Catches subtle solver / link / weight issues that the
-/// snapshot test would only flag indirectly.
+/// and intercept-only σ, the μ coefficients have to agree with the analytic OLS
+/// solution `(X'X)⁻¹·X'y`. This catches subtle solver / link / weight issues that
+/// the snapshot test would only flag indirectly.
 #[test]
 fn gaussian_linear_matches_ols_closed_form() {
     let mut rng = Generator::new(42);

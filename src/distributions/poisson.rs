@@ -78,8 +78,8 @@ impl Distribution for Poisson {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        // F(⌊y⌋ | μ) = Q(⌊y⌋+1, μ) = gamma_ur(⌊y⌋+1, μ) — the upper-incomplete-gamma
-        // identity for the Poisson CDF (no summation loop).
+        // F(⌊y⌋ | μ) = Q(⌊y⌋+1, μ) = gamma_ur(⌊y⌋+1, μ), the upper-incomplete-gamma
+        // identity for the Poisson CDF. No summation loop.
         let mu = require(self, params, "mu")?;
         Ok(par_zip_map(y, mu, |yi, mui| {
             if yi < 0.0 {
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_mu() {
-        // Un-folding introduces a `1/μ` the old `u = y − μ` cancelled, so the
+        // Un-folding introduces a `1/μ` the old `u = y − μ` canceled, so the
         // saturated tail is newly reachable arithmetic. `DENOM_FLOOR` has to keep
         // both the natural score and the chained η-score finite there, including
         // where μ has underflowed to exactly zero.

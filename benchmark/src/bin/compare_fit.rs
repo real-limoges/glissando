@@ -1,7 +1,7 @@
-//! GAMLSS Comparison Framework: Rust Fitting Binary
+//! GAMLSS comparison framework: the Rust fitting binary.
 //!
-//! Reads parquet data, fits models using glissando,
-//! and outputs standardized JSON results for comparison with R/mgcv.
+//! I read parquet data, fit the models with glissando, and write standardized
+//! JSON so the results line up against R/mgcv.
 //!
 //! Usage:
 //!   cargo run -p glissando_benchmark --bin compare_fit -- \
@@ -35,8 +35,8 @@ struct FitResult {
     log_likelihood: Option<f64>,
     aic: Option<f64>,
     /// Selected smoothing parameters per distribution parameter, one value per
-    /// penalty matrix. Informational only — not gated against mgcv `$sp`
-    /// (different basis normalisations make the raw values incommensurable).
+    /// penalty matrix. Informational only, not gated against mgcv `$sp`: the
+    /// different basis normalizations make the raw values incommensurable.
     lambdas: HashMap<String, Vec<f64>>,
     /// Link-scale standard errors per distribution parameter on the training
     /// data, matching mgcv `predict(type="link", se.fit=TRUE)`.
@@ -75,11 +75,12 @@ fn error_result(start: Instant, e: glissando::GamlssError) -> FitResult {
     }
 }
 
-/// Uniform result builder: populates all comparison fields from a fitted model.
+/// One result builder for every scenario: it fills in all the comparison fields
+/// from a fitted model.
 ///
 /// `coef_names` maps `(param_key, output_label)` for the `coefficients` JSON
-/// field.  `sigma_param` names the parameter whose `fitted_values` populate
-/// `fitted_sigma`; pass `None` for single-parameter families (Poisson, Binomial).
+/// field. `sigma_param` names the parameter whose `fitted_values` populate
+/// `fitted_sigma`; pass `None` for the single-parameter families (Poisson, Binomial).
 fn build_result<D: Distribution + ?Sized>(
     start: Instant,
     model: &GamlssModel,
@@ -91,7 +92,7 @@ fn build_result<D: Distribution + ?Sized>(
 ) -> FitResult {
     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
-    // Coefficients by requested output labels.
+    // Coefficients, under the output labels the caller asked for.
     let mut coefficients = HashMap::new();
     for (param_key, output_label) in coef_names {
         if let Some(fp) = model.models.get(*param_key) {
@@ -99,7 +100,7 @@ fn build_result<D: Distribution + ?Sized>(
         }
     }
 
-    // Response-scale fitted values.
+    // Fitted values, back on the response scale.
     let fitted_mu = model
         .models
         .get("mu")
@@ -110,7 +111,7 @@ fn build_result<D: Distribution + ?Sized>(
         .map(|fp| fp.fitted_values.to_vec())
         .unwrap_or_default();
 
-    // EDF and λ per distribution parameter.
+    // EDF and λ, one per distribution parameter.
     let mut edf = HashMap::new();
     let mut lambdas = HashMap::new();
     for (param_name, fp) in &model.models {
@@ -118,13 +119,13 @@ fn build_result<D: Distribution + ?Sized>(
         lambdas.insert(param_name.clone(), fp.lambdas.to_vec());
     }
 
-    // Log-likelihood and AIC (require `family` + `y`).
+    // Log-likelihood and AIC. Both need `family` and `y`.
     let (log_likelihood, aic) = match model.diagnostics(family, y) {
         Ok(diag) => (Some(diag.log_likelihood), Some(diag.aic)),
         Err(_) => (None, None),
     };
 
-    // Link-scale SEs on training data.
+    // Link-scale SEs on the training data.
     let se_eta = match model.predict_with_se(data, family) {
         Ok(results) => results
             .into_iter()
@@ -309,7 +310,7 @@ fn fit_gaussian_quadratic(df: &DataFrame) -> FitResult {
 }
 
 /// Smooth on the *scale* parameter: μ constant, log σ a P-spline of x. The
-/// scale-smooth analogue of `gaussian_smooth`; compared against mgcv `gaulss`.
+/// scale-smooth analog of `gaussian_smooth`; compared against mgcv `gaulss`.
 fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
     let y = extract_column(df, "y");
@@ -361,7 +362,7 @@ fn fit_gaussian_cr_smooth(df: &DataFrame) -> FitResult {
                 col_name: "x".to_string(),
                 k: 10,
                 pc: None,
-                knots: vec![], // resolved at fit time
+                knots: vec![], // filled in at fit time
             })],
         )
         .with_terms("sigma", vec![Term::Intercept]);
@@ -910,7 +911,7 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
 // ─── Prior-weighted models ────────────────────────────────────────────────────
 
 fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
-    // B1: Gaussian, 5 P-spline smooths + binary linear term, listing-level weights.
+    // B1: Gaussian, 5 P-spline smooths plus a binary linear term, listing-level weights.
     let start = Instant::now();
     let y = extract_column(df, "y");
     let weights = extract_column(df, "weights");
@@ -947,10 +948,10 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
-    // REML, matching mgcv's method="REML" on the same model. (This scenario
-    // previously used GCV as a workaround for L-BFGS stalling on the flat LAML
-    // ridges of the weak smooths; the Fellner-Schall polish fixed that, and
-    // GCV's different criterion diverged visibly from mgcv at some seeds.)
+    // REML, to match mgcv's method="REML" on the same model. This one used to
+    // run GCV as a hack around L-BFGS stalling on the flat LAML ridges of the
+    // weak smooths. The Fellner-Schall polish fixed the stall, and GCV's
+    // different criterion was visibly wandering off from mgcv at some seeds.
     let config = FitConfig::default();
     match GamlssModel::fit_with_config(&data, &y, Some(&weights), &formula, &family, config) {
         Ok(model) => build_result(
@@ -968,6 +969,7 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
 
 fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
     // B2: StudentT, 4 P-spline smooths, listing-level weights.
+    // Same shape as B1, one fewer smooth and a heavier tail.
     let start = Instant::now();
     let y = extract_column(df, "y");
     let weights = extract_column(df, "weights");

@@ -1,9 +1,9 @@
-//! Type-safe newtype wrappers around the linear-algebra primitives used by the
-//! fitter and solver — `Coefficients`, `CovarianceMatrix`, `ModelMatrix`, …
+//! Type-safe newtype wrappers around the linear-algebra primitives the fitter and
+//! solver lean on: `Coefficients`, `CovarianceMatrix`, `ModelMatrix`, …
 //!
-//! Each wrapper carries an `Array1`/`Array2` and provides `Deref` so callers can
+//! Each wrapper carries an `Array1`/`Array2` and provides `Deref`, so callers can
 //! use it as if it were the bare ndarray type. `LogLambdas` additionally
-//! implements the suite of `argmin-math` traits needed by L-BFGS for the
+//! implements the suite of `argmin-math` traits L-BFGS needs for the
 //! smoothing-parameter optimization, defined once via the
 //! `impl_argmin_math_for_vector_wrapper!` macro. `Coefficients` is never used
 //! as an argmin `Param`/`Gradient` (only `LogLambdas` is), so it only gets the
@@ -152,9 +152,9 @@ impl_argmin_math_for_vector_wrapper!(LogLambdas);
 #[derive(Debug, Clone)]
 pub(crate) struct ModelMatrix(pub Array2<f64>);
 
-/// Penalty matrix for a smooth term. Stores only its own contiguous
-/// coefficient block — never the full model width — plus the offset at
-/// which that block sits in the full coefficient vector.
+/// Penalty matrix for a smooth term. Stores only its own contiguous coefficient
+/// block (never the full model width), plus the offset at which that block sits in
+/// the full coefficient vector.
 #[derive(Debug, Clone)]
 pub(crate) struct PenaltyMatrix {
     pub(crate) offset: usize,

@@ -1,15 +1,15 @@
 //! WASM integration tests for `glissando::wasm::WasmGamlssModel`.
 //!
-//! Runs under `wasm-pack test --node --no-default-features --features wasm`.
-//! On non-wasm targets this file is empty — the dev-dep `wasm-bindgen-test` is
-//! target-scoped (see Cargo.toml) and the surface under test is wasm-only.
+//! I run these under `wasm-pack test --node --no-default-features --features wasm`.
+//! On non-wasm targets the file compiles to nothing: the dev-dep `wasm-bindgen-test`
+//! is target-scoped (see Cargo.toml) and the surface I'm testing here is wasm-only.
 
 #![cfg(target_arch = "wasm32")]
 
 use glissando::wasm::WasmGamlssModel;
 use wasm_bindgen_test::*;
 
-// Noisy Gaussian sample so the fit doesn't collapse to σ → 0 (which trips the IRLS guard).
+// Noisy Gaussian sample on purpose. A clean one collapses to σ → 0 and trips the IRLS guard. Don't feed it perfect data.
 const Y: &str = "[1.2, 2.1, 2.9, 4.2, 4.8, 5.9, 7.1, 7.9, 9.2, 9.8]";
 const DATA: &str = r#"{"x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]}"#;
 const FORMULA: &str = r#"{

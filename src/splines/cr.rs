@@ -4,9 +4,9 @@ use ndarray::{Array1, Array2, ArrayViewMut1};
 
 /// Quantile knot placement for natural cubic regression splines.
 ///
-/// Matches mgcv's default: `quantile(unique(x), seq(0, 1, length = k))` using
-/// type-7 linear interpolation over the sorted unique finite values.  The first
-/// and last knots are always the observed minimum and maximum.
+/// I match mgcv's default here: `quantile(unique(x), seq(0, 1, length = k))`,
+/// type-7 linear interpolation over the sorted unique finite values. The first
+/// and last knots always land on the observed minimum and maximum, no exceptions.
 ///
 /// # Panics
 /// Panics if `k < 2`.
@@ -18,7 +18,7 @@ pub(crate) fn cr_knots(x: &Array1<f64>, k: usize) -> Vec<f64> {
     let n = sorted.len();
 
     if n < 2 {
-        // Degenerate: constant x or no finite values — space k knots 1 unit apart.
+        // Degenerate case: constant x, or no finite values at all. Space k knots 1 unit apart.
         let v = if sorted.is_empty() { 0.0 } else { sorted[0] };
         return (0..k).map(|i| v + i as f64).collect();
     }
@@ -42,12 +42,12 @@ pub(crate) fn cr_knots(x: &Array1<f64>, k: usize) -> Vec<f64> {
 
 /// Thomas (tridiagonal) algorithm for a **symmetric** tridiagonal system `E x = rhs`.
 ///
-/// * `diag`    — main diagonal, length n (modified in place internally).
-/// * `off`     — super-diagonal (= sub-diagonal by symmetry), length n-1.
-/// * `rhs`     — right-hand side, length n (modified in place).
+/// * `diag`: main diagonal, length n (modified in place internally).
+/// * `off`: super-diagonal (= sub-diagonal by symmetry), length n-1.
+/// * `rhs`: right-hand side, length n (modified in place).
 ///
-/// Returns the solution vector.  No pivoting; numerically stable when E is
-/// symmetric positive-definite (which is always the case for our E matrix).
+/// Returns the solution vector. No pivoting, and it stays numerically stable when
+/// E is symmetric positive-definite, which is always the case for our E matrix.
 fn solve_tridiagonal_sym(diag: &[f64], off: &[f64], rhs: &mut [f64]) -> Vec<f64> {
     let n = diag.len();
     debug_assert_eq!(off.len() + 1, n);
@@ -131,14 +131,15 @@ fn compute_deriv_map(h: &[f64]) -> Array2<f64> {
 /// Evaluate the CR basis at a single point `x`.
 ///
 /// Returns a length-k row vector: entry `m` is the `m`-th cardinal natural-cubic-
-/// spline basis function evaluated at `x`.  Points outside `[knots[0], knots[k-1]]`
-/// are linearly extrapolated (zero second derivative, so the curve stays straight).
+/// spline basis function evaluated at `x`. Points outside `[knots[0], knots[k-1]]`
+/// extrapolate linearly (zero second derivative, so the curve stays straight past
+/// the ends).
 ///
 /// # Arguments
-/// * `knots` — knot locations, length k ≥ 2
-/// * `h`     : knot spacings, length k-1 (pre-computed by the caller)
-/// * `g`     — second-derivative map `E⁻¹ D`, shape `(k-2) × k`
-/// * `row`   : output row, length k, written in place
+/// * `knots`: knot locations, length k ≥ 2
+/// * `h`: knot spacings, length k-1 (pre-computed by the caller)
+/// * `g`: second-derivative map `E⁻¹ D`, shape `(k-2) × k`
+/// * `row`: output row, length k, written in place
 pub(crate) fn eval_cr_row(
     x: f64,
     knots: &[f64],
@@ -232,8 +233,8 @@ pub(crate) fn eval_cr_row(
 /// (linear extrapolation beyond the data range).
 ///
 /// # Arguments
-/// * `x`     — covariate values, length n_obs
-/// * `knots` — knot locations pre-computed by [`cr_knots`], length k ≥ 2
+/// * `x`: covariate values, length n_obs
+/// * `knots`: knot locations pre-computed by [`cr_knots`], length k ≥ 2
 pub(crate) fn create_cr_basis_matrix(x: &Array1<f64>, knots: &[f64]) -> Array2<f64> {
     let k = knots.len();
     let n_obs = x.len();
@@ -254,7 +255,7 @@ pub(crate) fn create_cr_basis_matrix(x: &Array1<f64>, knots: &[f64]) -> Array2<f
 /// Subtracts the basis row evaluated at `pc_val` from every column of `basis`.
 /// Any linear predictor `basis · β` then satisfies `f(pc_val) = 0` identically
 /// for all `β`, making `pc_val` the reference point of the smooth.
-/// The penalty matrix is unchanged — the constraint is absorbed into the basis.
+/// The penalty matrix is untouched; the constraint lives entirely in the basis.
 pub(crate) fn apply_cr_pc_constraint(basis: &mut Array2<f64>, knots: &[f64], pc_val: f64) {
     let h: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
     let g = compute_deriv_map(&h);
@@ -280,7 +281,7 @@ pub(crate) fn apply_cr_pc_constraint(basis: &mut Array2<f64>, knots: &[f64], pc_
 /// (null space: constants and linear functions), matching mgcv's `bs="cr"` penalty.
 ///
 /// # Arguments
-/// * `knots` — knot positions pre-computed by [`cr_knots`], length k ≥ 2
+/// * `knots`: knot positions pre-computed by [`cr_knots`], length k ≥ 2
 pub(crate) fn create_cr_penalty_matrix(knots: &[f64]) -> Array2<f64> {
     let k = knots.len();
     assert!(
@@ -293,8 +294,8 @@ pub(crate) fn create_cr_penalty_matrix(knots: &[f64]) -> Array2<f64> {
     let h: Vec<f64> = knots.windows(2).map(|w| w[1] - w[0]).collect();
 
     if km2 == 0 {
-        // k = 2: natural spline is a straight line; second derivative is identically
-        // zero, so the penalty is the zero matrix.
+        // k = 2: the natural spline is just a straight line. Second derivative is
+        // identically zero, so the penalty is the zero matrix.
         return Array2::zeros((k, k));
     }
 
@@ -317,7 +318,7 @@ pub(crate) fn create_cr_penalty_matrix(knots: &[f64]) -> Array2<f64> {
         }
     }
 
-    // Symmetrize to eliminate floating-point asymmetry.
+    // Symmetrize to knock out floating-point asymmetry.
     let st = s.t().to_owned();
     (s + st) * 0.5
 }
@@ -497,11 +498,11 @@ mod tests {
         let knots = cr_knots(&x, 5);
         let s = create_cr_penalty_matrix(&knots);
 
-        // mgcv sc$S[[1]] with scale.penalty=FALSE (5×5, unscaled = ∫[f'']² dx)
-        // Note: mgcv's default smoothCon applies a data-dependent rescaling
-        // (||X||_inf² / norm(S,"1")) that depends on the basis matrix X, not just
-        // knots. Our penalty is the mathematically correct unscaled integral; the
-        // smoothing parameter λ adapts freely during REML/GCV fitting regardless.
+        // mgcv sc$S[[1]] with scale.penalty=FALSE (5×5, unscaled = ∫[f'']² dx).
+        // Heads up: mgcv's default smoothCon rescales by a data-dependent factor
+        // (||X||_inf² / norm(S,"1")) that leans on the basis matrix X, not just the
+        // knots. Ours is the mathematically correct unscaled integral. Doesn't matter
+        // for the fit: the smoothing parameter λ adapts freely under REML/GCV anyway.
         #[rustfmt::skip]
         let expected: [[f64; 5]; 5] = [
             [ 0.195252733029792, -0.309840448070508,  0.141767782990886, -0.031781984216865,  0.004601916266695],

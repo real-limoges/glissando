@@ -3,7 +3,7 @@
 
 Generates synthetic data per scenario, optionally invokes the Rust glissando
 binary and the R/mgcv script, and merges per-scenario fits into
-`comparison_summary.json` — the file `tests/mgcv_reference.rs` validates.
+`comparison_summary.json`, the file `tests/mgcv_reference.rs` validates.
 
 Two phases (controlled by `--generate-only`):
   1. data generation: writes parquet files into `output_dir` from a fixed seed.
@@ -59,8 +59,8 @@ def gen_gaussian_smooth(rng, n):
 
 
 def gen_gaussian_sigma_smooth(rng, n):
-    # Constant mean; a full sine period of structure in log σ. The scale-smooth
-    # analogue of gen_gaussian_smooth, for the gaulss comparison.
+    # Constant mean, with a full sine period of structure in log σ. This is the
+    # scale-smooth cousin of gen_gaussian_smooth, for the gaulss comparison.
     x = np.linspace(0, 1, n)
     log_sigma = -0.7 + 0.8 * np.sin(2 * np.pi * x)
     y = 2.0 + rng.normal(0.0, np.exp(log_sigma), n)
@@ -90,7 +90,7 @@ def gen_poisson_linear(rng, n):
 
 def gen_poisson_smooth(rng, n):
     x = np.linspace(0, 2 * np.pi, n)
-    # +1 keeps μ comfortably positive across the full range.
+    # the +1 keeps μ safely positive across the whole range.
     mu = np.exp(np.sin(x) + 1.0)
     y = rng.poisson(mu).astype(float)
     return {"y": y, "x": x}
@@ -113,7 +113,7 @@ def gen_binomial_smooth(rng, n):
 
 
 def _gamma_sample(rng, mu, sigma):
-    # Glissando parameterisation: shape = 1/σ², scale = μσ².
+    # Glissando parameterization: shape = 1/σ², scale = μσ².
     shape = 1.0 / (sigma * sigma)
     scale = mu * sigma * sigma
     return rng.gamma(shape, scale)
@@ -158,7 +158,7 @@ def gen_studentt_smooth(rng, n):
 
 
 def _negbin_sample(rng, mu, sigma):
-    # NB2 parameterisation: r = 1/σ, p = r/(r+μ).
+    # NB2 parameterization: r = 1/σ, p = r/(r+μ).
     r = 1.0 / sigma
     p = r / (r + mu)
     return rng.negative_binomial(r, p).astype(float)
@@ -210,7 +210,7 @@ def gen_tensor_smooth(rng, n):
 
 
 def gen_random_effect(rng, n):
-    # 10 groups with random intercepts; also a linear covariate x.
+    # 10 groups, each with a random intercept, plus a linear covariate x.
     n_groups = 10
     group_effects = rng.normal(0.0, 1.0, n_groups)
     g = rng.integers(0, n_groups, n).astype(float)
@@ -272,9 +272,9 @@ def gen_b2_weighted(rng, n):
 
 
 # ─── Scenario registry ────────────────────────────────────────────────────────
-# IMPORTANT: Append new scenarios to the END only. Per-scenario seeds are
-# spawned in iteration order (XOR with hash(name)), so inserting in the middle
-# would change seeds for every subsequent scenario and invalidate stored results.
+# IMPORTANT: append new scenarios to the END, nowhere else. Per-scenario seeds
+# get spawned in iteration order (XOR with hash(name)), so a middle insert
+# reshuffles the seed for every scenario after it and invalidates stored results.
 
 SCENARIOS: list[Scenario] = [
     # ── Original scenarios (seeds stable) ─────────────────────────────────
@@ -288,15 +288,15 @@ SCENARIOS: list[Scenario] = [
     Scenario("poisson_smooth",           True,  True,  None,   gen_poisson_smooth),
     Scenario("gamma_linear",             False, True,  None,   gen_gamma_linear),
     Scenario("gamma_smooth",             True,  True,  None,   gen_gamma_smooth),
-    # Student-t: primary oracle is gamlss TF() (same RS algorithm); mgcv_capable=True
-    # keeps scat() as a loose mu-only cross-method sanity check.
+    # Student-t: the real oracle is gamlss TF() (same RS algorithm). mgcv_capable=True
+    # just keeps scat() around as a loose, mu-only cross-method sanity check.
     Scenario("studentt_linear",          False, True,  None,   gen_studentt_linear),
     Scenario("studentt_smooth",          True,  True,  None,   gen_studentt_smooth),
     Scenario("negative_binomial_linear", False, True,  None,   gen_negative_binomial_linear),
     Scenario("negative_binomial_smooth", True,  True,  None,   gen_negative_binomial_smooth),
     Scenario("beta_linear",              False, True,  None,   gen_beta_linear),
     Scenario("gaussian_sigma_smooth",    True,  True,  None,   gen_gaussian_sigma_smooth),
-    # B1: Gaussian + prior weights; mgcv-capable via gam(..., weights=w).
+    # B1: Gaussian + prior weights; mgcv can do it via gam(..., weights=w).
     Scenario("b1_weighted_gaussian",     True,  True,  None,   gen_b1_weighted),
     # B2: StudentT + prior weights; mgcv uses scat() for the location mean.
     Scenario("b2_weighted_studentt",     True,  True,  None,   gen_b2_weighted),
@@ -325,9 +325,9 @@ def write_parquet(data: dict[str, np.ndarray], path: Path) -> None:
     df.write_parquet(path)
 
 
-# Per-fit wall-clock budget. A well-behaved fit finishes in seconds; a hung
-# solver (or R session) must not stall the whole comparison run: kill it and
-# record the scenario as failed instead.
+# Per-fit wall-clock budget. A well-behaved fit is done in seconds; a hung
+# solver (or R session) shouldn't get to stall the whole run. Kill it and mark
+# the scenario failed instead.
 FIT_TIMEOUT_S = 600
 
 
@@ -372,15 +372,15 @@ def main() -> None:
 
     selected = set(args.scenarios) if args.scenarios else {s.name for s in SCENARIOS}
 
-    # 1. Data generation. Per-scenario sub-RNG so adding scenarios doesn't perturb others.
+    # 1. Data generation. Each scenario gets its own sub-RNG, so adding one doesn't perturb the others.
     base = np.random.SeedSequence(args.seed)
     for scenario in SCENARIOS:
         if scenario.name not in selected:
             continue
         n = scenario.n_obs_override or args.n_obs
         sub_seed = base.spawn(1)[0].generate_state(1)[0]
-        # zlib.crc32 is deterministic across Python sessions; hash() is not
-        # (PYTHONHASHSEED randomization would give different data every run).
+        # zlib.crc32 is deterministic across Python sessions. hash() is not:
+        # PYTHONHASHSEED randomization would hand you different data every run.
         name_hash = zlib.crc32(scenario.name.encode()) & 0xFFFFFFFF
         sub_rng = np.random.default_rng(int(sub_seed) ^ name_hash)
         data = scenario.generate(sub_rng, n)
@@ -428,10 +428,10 @@ def main() -> None:
                 f"mgcv:{scenario.name}",
             )
 
-        # gamlss TF() is the correct like-for-like reference for StudentT: same RS
-        # algorithm and same (μ, σ, ν) parameterization, so it exposes σ/ν/EDF/SE
-        # that mgcv's scat() cannot. mgcv scat() is retained above as a loose,
-        # mu-only cross-method (independent-algorithm) sanity check.
+        # gamlss TF() is the real like-for-like reference for StudentT: same RS
+        # algorithm, same (μ, σ, ν) parameterization, so it exposes the σ/ν/EDF/SE
+        # that mgcv's scat() can't. scat() stays above only as a loose, mu-only
+        # cross-method (independent-algorithm) sanity check.
         if (
             args.gamlss_script
             and args.gamlss_script.exists()

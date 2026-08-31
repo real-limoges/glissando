@@ -1,10 +1,10 @@
-//! BCT and BCPE families — public-API integration tests (DIST-1 fast-follows).
+//! BCT and BCPE families, public-API integration tests (DIST-1 fast-follows).
 //!
-//! Covers coefficient recovery from simulated data and JSON round-trips. The
-//! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) are
-//! checked at the unit level alongside the family impls.
+//! I cover coefficient recovery from simulated data and JSON round-trips here. The
+//! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) I check at
+//! the unit level, over alongside the family impls, not in this file.
 
-// Integration tests cannot run with the `python` feature (PyO3 extension-module linking).
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -13,7 +13,7 @@ use common::{linear, Generator};
 use glissando::distributions::{BCPE, BCT};
 use glissando::{Formula, GamlssModel, Term};
 
-/// μ ~ intercept + x (log link); σ, ν, τ intercept-only. Purely parametric → MLE.
+/// μ ~ intercept + x (log link); σ, ν, τ intercept-only. Purely parametric, so this is straight MLE.
 fn recovery_formula() -> Formula {
     Formula::new()
         .with_terms("mu", vec![Term::Intercept, linear("x")])
@@ -24,14 +24,14 @@ fn recovery_formula() -> Formula {
 
 #[test]
 fn bct_recovers_known_parameters() {
-    // True: log(μ) = 1.0 + 0.7·x, σ = 0.15, ν = 0.6, τ = 6 (heavy tail).
+    // True: log(μ) = 1.0 + 0.7·x, σ = 0.15, ν = 0.6, τ = 6. Heavy tail.
     let (intercept, slope, sigma, nu, tau) = (1.0, 0.7, 0.15, 0.6, 6.0);
     let mut rng = Generator::new(42);
     let (y, data) = rng.bct_data(900, intercept, slope, sigma, nu, tau);
 
-    // Recovery accuracy is the correctness signal here: near the normal limit τ is
-    // weakly identified, so the deviance can wiggle above tolerance without the
-    // `converged` flag tripping even though every estimate lands on target.
+    // Recovery accuracy is the correctness signal here, not the flag. Near the normal
+    // limit τ is weakly identified, so the deviance can wiggle above tolerance and leave
+    // `converged` unset even when every estimate has landed on target.
     let model = GamlssModel::fit(&data, &y, &recovery_formula(), &BCT::new()).unwrap();
 
     let mu_beta = &model.models["mu"].coefficients.0;
@@ -49,14 +49,14 @@ fn bct_recovers_known_parameters() {
     assert!((sigma_hat - sigma).abs() < 0.05, "σ̂ {sigma_hat} vs {sigma}");
     let nu_hat = model.models["nu"].coefficients.0[0];
     assert!((nu_hat - nu).abs() < 0.4, "ν̂ {nu_hat} vs {nu}");
-    // τ̂ within a factor of ~2 of the truth (df is the noisiest parameter).
+    // τ̂ within a factor of ~2 of the truth. df is the noisiest parameter, always is.
     let tau_hat = model.models["tau"].coefficients.0[0].exp();
     assert!(tau_hat > 3.0 && tau_hat < 15.0, "τ̂ {tau_hat} vs {tau}");
 }
 
 #[test]
 fn bcpe_recovers_known_mu_structure() {
-    // True: log(μ) = 1.0 + 0.7·x, σ = 0.15, ν = 0.6, τ = 1.6 (leptokurtic).
+    // True: log(μ) = 1.0 + 0.7·x, σ = 0.15, ν = 0.6, τ = 1.6. Leptokurtic.
     let (intercept, slope) = (1.0, 0.7);
     let mut rng = Generator::new(7);
     let (y, data) = rng.bcpe_data(900, intercept, slope, 0.15, 0.6, 1.6);

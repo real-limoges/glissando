@@ -80,16 +80,16 @@
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>E · Smooth terms &amp; splines</b></p>
   <h1>glissando <span class="sub">· smooth terms &amp; splines</span></h1>
-  <p class="lede">Implements <span class="id">SMOOTH-1</span> (cyclic splines, mgcv <code>bs="cc"</code>), <span class="id">SMOOTH-2</span> (thin-plate, <code>bs="tp"</code>), and <span class="id">SMOOTH-4</span> (random slopes). These are grouped because they all plug into the <b style="color:#fff">same three-touchpoint contract</b> the existing P-spline / CR-spline / tensor / random-intercept smooths already follow — no change to the RS fitting loop, only new basis-and-penalty blocks.</p>
-  <p class="lede"><b style="color:#fff">Read the <code>PSpline1D</code> path first</b> — its enum variant (<code>src/terms.rs:189</code>), its basis (<code>src/splines/pspline.rs</code>), and its assembler arm (<code>src/fitting/assembler.rs:277</code>) are the worked example every new smooth copies. This guide is the delta: what each new variant changes at each touchpoint.</p>
+  <p class="lede">Implements <span class="id">SMOOTH-1</span> (cyclic splines, mgcv <code>bs="cc"</code>), <span class="id">SMOOTH-2</span> (thin-plate, <code>bs="tp"</code>), and <span class="id">SMOOTH-4</span> (random slopes). These are grouped because they all plug into the <b style="color:#fff">same three-touchpoint contract</b> the existing P-spline / CR-spline / tensor / random-intercept smooths already follow: no change to the RS fitting loop, only new basis-and-penalty blocks.</p>
+  <p class="lede"><b style="color:#fff">Read the <code>PSpline1D</code> path first.</b> Its enum variant (<code>src/terms.rs:189</code>), its basis (<code>src/splines/pspline.rs</code>), and its assembler arm (<code>src/fitting/assembler.rs:277</code>) are the worked example every new smooth copies. This guide is the delta: what each new variant changes at each touchpoint.</p>
 
   <h2 class="part">The three-touchpoint contract</h2>
   <div class="ns">
-    <p>A smooth term is a <code>Smooth</code> enum variant that the assembler turns into a design-matrix block <code>X_j</code> plus one or more penalty matrices <code>S_j</code>. Adding a variant touches exactly three places — and because the assembler's <code>match smooth { … }</code> has <b>no wildcard arm</b>, the compiler will refuse to build until you have handled the new variant in all three:</p>
+    <p>A smooth term is a <code>Smooth</code> enum variant that the assembler turns into a design-matrix block <code>X_j</code> plus one or more penalty matrices <code>S_j</code>. Adding a variant touches exactly three places, and because the assembler's <code>match smooth { … }</code> has <b>no wildcard arm</b>, the compiler refuses to build until you have handled the new variant in all three:</p>
     <ol class="steps">
-      <li><b>The enum</b> — add a variant to <code>Smooth</code> (<code>src/terms.rs:189–240</code>) carrying its column name(s) and hyper-parameters, plus a constructor in <code>impl Smooth</code> (alongside <code>ps</code>/<code>cr</code>/<code>re</code>/<code>tensor</code> at <code>terms.rs:256–287</code>).</li>
-      <li><b>The basis</b> — add a <code>pub(crate) fn</code> in <code>src/splines/</code> that returns the basis <code>Array2&lt;f64&gt;</code> and its penalty, mirroring <code>pspline.rs::create_basis_matrix</code> (<code>:15</code>) + <code>penalty.rs::create_penalty_matrix</code> (<code>:7</code>).</li>
-      <li><b>The assembler</b> — add a match arm to each of three functions in <code>src/fitting/assembler.rs</code>: <code>assemble_basis_and_penalty</code> (<code>:276–395</code>, builds <code>(X_j, vec![S_j])</code>), <code>null_space_dim</code> (<code>:58–99</code>, the penalty's unpenalized rank), and — only if a field resolves from data — <code>resolve_term</code> (<code>:119–135</code>).</li>
+      <li><b>The enum</b>: add a variant to <code>Smooth</code> (<code>src/terms.rs:189–240</code>) carrying its column name(s) and hyper-parameters, plus a constructor in <code>impl Smooth</code> (alongside <code>ps</code>/<code>cr</code>/<code>re</code>/<code>tensor</code> at <code>terms.rs:256–287</code>).</li>
+      <li><b>The basis</b>: add a <code>pub(crate) fn</code> in <code>src/splines/</code> that returns the basis <code>Array2&lt;f64&gt;</code> and its penalty, mirroring <code>pspline.rs::create_basis_matrix</code> (<code>:15</code>) + <code>penalty.rs::create_penalty_matrix</code> (<code>:7</code>).</li>
+      <li><b>The assembler</b>: add a match arm to each of three functions in <code>src/fitting/assembler.rs</code>: <code>assemble_basis_and_penalty</code> (<code>:276–395</code>, builds <code>(X_j, vec![S_j])</code>), <code>null_space_dim</code> (<code>:58–99</code>, the penalty's unpenalized rank), and (only if a field resolves from data) <code>resolve_term</code> (<code>:119–135</code>).</li>
     </ol>
     <p>The reference arm to copy, verbatim from <code>assembler.rs:277</code>. The sum-to-zero reparameterization (<code>reparam.rs::sum_to_zero_basis</code>, <code>:18</code>) is applied whenever an intercept is present, so the smooth is identifiable:</p>
     <pre><code>Smooth::PSpline1D { col_name, n_splines, degree, penalty_order } =&gt; {
@@ -110,8 +110,8 @@
 
   <h2 class="part">SMOOTH-1 · Cyclic spline (mgcv <code>bs="cc"</code>)</h2>
   <div class="ns">
-    <p>A cyclic spline forces the fitted curve and its derivatives to <b>match at the two ends of the range</b> — for seasonal / periodic covariates (day-of-year, hour-of-day) where January and December are neighbours. Mechanically it is a P-spline whose basis columns <em>wrap around</em> and whose difference penalty is <b>circulant</b>.</p>
-    <p><b>Touchpoint 1 — the variant.</b> Carries the data range like <code>CrSpline1D</code> carries its knots: resolved once at fit, replayed at predict.</p>
+    <p>A cyclic spline forces the fitted curve and its derivatives to <b>match at the two ends of the range</b>, for seasonal / periodic covariates (day-of-year, hour-of-day) where January and December are neighbors. Mechanically it is a P-spline whose basis columns <em>wrap around</em> and whose difference penalty is <b>circulant</b>.</p>
+    <p><b>Touchpoint 1, the variant.</b> It carries the data range the way <code>CrSpline1D</code> carries its knots: resolved once at fit, replayed at predict.</p>
     <pre><code>/// 1D cyclic P-spline (mgcv `bs = "cc"`): curve wraps over the period.
 CyclicPSpline1D {
     col_name: String,
@@ -121,7 +121,7 @@ CyclicPSpline1D {
     /// (min, max) of the period; empty `None` until `resolve_term` fills it.
     range: Option&lt;(f64, f64)&gt;,
 },</code></pre>
-    <p><b>Touchpoint 2 — the basis</b>, a new <code>src/splines/cyclic.rs</code>. Build the ordinary equally-spaced B-spline basis, then fold the trailing <code>degree</code> columns onto the leading ones so the basis is periodic; the penalty is the order-<code>d</code> difference operator made circulant (its rows wrap):</p>
+    <p><b>Touchpoint 2, the basis</b>, a new <code>src/splines/cyclic.rs</code>. Build the ordinary equally-spaced B-spline basis, then fold the trailing <code>degree</code> columns onto the leading ones so the basis is periodic; the penalty is the order-<code>d</code> difference operator made circulant (its rows wrap):</p>
     <pre><code>use ndarray::{Array2, Array1};
 
 /// Periodic B-spline basis on `[lo, hi]`: the last `degree` columns are wrapped
@@ -146,7 +146,7 @@ pub(crate) fn create_cyclic_basis_matrix(
 pub(crate) fn create_cyclic_penalty_matrix(n_splines: usize, order: usize) -&gt; Array2&lt;f64&gt; {
     todo!("build wrapped difference matrix; see penalty.rs::create_penalty_matrix")
 }</code></pre>
-    <p><b>Touchpoint 3 — the assembler.</b> The arm is the <code>PSpline1D</code> arm with the cyclic basis/penalty and a resolved range; <code>null_space_dim</code> returns <code>0</code> (after centering, the circulant penalty's lone constant null vector is removed by sum-to-zero). Resolve the range in <code>resolve_term</code> exactly as <code>CrSpline1D</code> resolves its knots:</p>
+    <p><b>Touchpoint 3, the assembler.</b> The arm is the <code>PSpline1D</code> arm with the cyclic basis/penalty and a resolved range; <code>null_space_dim</code> returns <code>0</code> (after centering, the circulant penalty's lone constant null vector is removed by sum-to-zero). Resolve the range in <code>resolve_term</code> exactly as <code>CrSpline1D</code> resolves its knots:</p>
     <pre><code>// assemble_basis_and_penalty:
 Smooth::CyclicPSpline1D { col_name, n_splines, degree, penalty_order, range } =&gt; {
     let (lo, hi) = range.ok_or_else(|| GamlssError::Internal(
@@ -177,8 +177,8 @@ Term::Smooth(Smooth::CyclicPSpline1D { col_name, range, .. }) if range.is_none()
 
   <h2 class="part">SMOOTH-2 · Thin-plate regression spline (mgcv <code>bs="tp"</code>)</h2>
   <div class="ns">
-    <p>The default mgcv 2D smoother: an isotropic surface <code>f(x₁, x₂)</code> that needs <b>no knot placement</b> — the basis is built from radial functions centred at the data, then truncated to <code>k</code> columns by an eigen-decomposition that keeps the <code>k</code> most wiggly directions. It is the heaviest item here because of that eigen step (routed through the <code>linalg</code> backend), and unlike the tensor product it is genuinely rotation-invariant.</p>
-    <p><b>Touchpoint 1 — the variant:</b></p>
+    <p>The default mgcv 2D smoother: an isotropic surface <code>f(x₁, x₂)</code> that needs <b>no knot placement</b>. The basis is built from radial functions centered at the data, then truncated to <code>k</code> columns by an eigen-decomposition that keeps the <code>k</code> most wiggly directions. It is the heaviest item here because of that eigen step (routed through the <code>linalg</code> backend), and unlike the tensor product it is genuinely rotation-invariant.</p>
+    <p><b>Touchpoint 1, the variant:</b></p>
     <pre><code>/// 2D thin-plate regression spline (mgcv `bs = "tp"`): isotropic f(x₁, x₂),
 /// truncated to `k` basis functions via eigen-reduction.
 ThinPlate2D {
@@ -186,7 +186,7 @@ ThinPlate2D {
     col_name_2: String,
     k: usize,
 },</code></pre>
-    <p><b>Touchpoint 2 — the basis</b>, a new <code>src/splines/tp.rs</code>. The thin-plate radial kernel in 2D is <code>η(r) = r²·ln r</code>. Form the <code>n×n</code> kernel matrix <code>E</code> over the observations and the polynomial null-space block <code>T = [1, x₁, x₂]</code> (dimension 3); the wiggliness penalty is <code>E</code> itself in the radial block. Reduce to rank <code>k</code> by truncating the eigen-decomposition of <code>E</code> (Wood 2003) — this is the one place that calls the backend:</p>
+    <p><b>Touchpoint 2, the basis</b>, a new <code>src/splines/tp.rs</code>. The thin-plate radial kernel in 2D is <code>η(r) = r²·ln r</code>. Form the <code>n×n</code> kernel matrix <code>E</code> over the observations and the polynomial null-space block <code>T = [1, x₁, x₂]</code> (dimension 3); the wiggliness penalty is <code>E</code> itself in the radial block. Reduce to rank <code>k</code> by truncating the eigen-decomposition of <code>E</code> (Wood 2003); this is the one place that calls the backend:</p>
     <pre><code>use ndarray::{Array1, Array2};
 use crate::linalg::symmetric_eigh;   // backend abstraction (openblas / nalgebra)
 
@@ -205,7 +205,7 @@ pub(crate) fn create_thinplate_basis(
     //    on the wiggly block and 0 on the 3 null columns.
     todo!("Wood (2003) low-rank thin-plate; eigen-truncate E")
 }</code></pre>
-    <p><b>Touchpoint 3 — the assembler.</b> The wiggly block is penalized, the 3 polynomial columns are not, so <code>null_space_dim</code> = <code>3</code>. Sum-to-zero centering still applies to remove the constant when an intercept is present:</p>
+    <p><b>Touchpoint 3, the assembler.</b> The wiggly block is penalized, the 3 polynomial columns are not, so <code>null_space_dim</code> = <code>3</code>. Sum-to-zero centering still applies to remove the constant when an intercept is present:</p>
     <pre><code>// assemble_basis_and_penalty:
 Smooth::ThinPlate2D { col_name_1, col_name_2, k } =&gt; {
     let x1 = get_col(data, col_name_1)?;
@@ -223,14 +223,14 @@ Smooth::ThinPlate2D { .. } =&gt; 3,</code></pre>
 
   <h2 class="part">SMOOTH-4 · Random slopes</h2>
   <div class="ns">
-    <p>Today only random <em>intercepts</em> exist (<code>RandomEffect</code>). A random slope lets a continuous covariate's effect vary by group — <code>x</code> with a per-group coefficient <code>b_g ~ N(0, 1/λ)</code> — which is the random-intercept basis with every indicator column <b>scaled by <code>x</code></b>. It reuses the ridge-penalty machinery wholesale.</p>
-    <p><b>Touchpoint 1 — the variant:</b></p>
+    <p>Today only random <em>intercepts</em> exist (<code>RandomEffect</code>). A random slope lets a continuous covariate's effect vary by group (<code>x</code> with a per-group coefficient <code>b_g ~ N(0, 1/λ)</code>), which is the random-intercept basis with every indicator column <b>scaled by <code>x</code></b>. It reuses the ridge-penalty machinery wholesale.</p>
+    <p><b>Touchpoint 1, the variant:</b></p>
     <pre><code>/// Random slope: covariate `x_col` with a per-group coefficient, b_g ~ N(0, 1/λ).
 RandomSlope {
     group_col: String,
     x_col: String,
 },</code></pre>
-    <p><b>Touchpoints 2 &amp; 3 — basis + assembler in one.</b> No new <code>splines/</code> function is needed: the existing <code>RandomEffect</code> arm (<code>assembler.rs:387</code>) builds the group-indicator matrix; multiply each row by its <code>x</code> value and keep the identity (ridge) penalty. <code>null_space_dim</code> = <code>0</code>:</p>
+    <p><b>Touchpoints 2 &amp; 3, basis + assembler in one.</b> No new <code>splines/</code> function is needed: the existing <code>RandomEffect</code> arm (<code>assembler.rs:387</code>) builds the group-indicator matrix; multiply each row by its <code>x</code> value and keep the identity (ridge) penalty. <code>null_space_dim</code> = <code>0</code>:</p>
     <pre><code>// assemble_basis_and_penalty — the RandomEffect arm with one extra line:
 Smooth::RandomSlope { group_col, x_col } =&gt; {
     let group_var = get_col(data, group_col)?;
@@ -255,18 +255,18 @@ Smooth::RandomSlope { group_col, x_col } =&gt; {
 
 // null_space_dim:
 Smooth::RandomSlope { .. } =&gt; 0,</code></pre>
-    <p><b>Oracle:</b> R <code>gamlss</code> <code>re()</code> / <code>lme4</code> <code>(x | g)</code>; recover known per-group slopes from simulated data. A correlated random intercept-and-slope is the natural follow-on — two penalty blocks instead of one — but ship the diagonal version first.</p>
+    <p><b>Oracle:</b> R <code>gamlss</code> <code>re()</code> / <code>lme4</code> <code>(x | g)</code>; recover known per-group slopes from simulated data. A correlated random intercept-and-slope is the natural follow-on (two penalty blocks instead of one), but ship the diagonal version first.</p>
   </div>
 
   <h2 class="part">Tests &amp; reference oracle</h2>
   <div class="ns">
     <p>Each new basis is independently testable before any fit:</p>
     <ul>
-      <li><b>Basis shape &amp; rank</b> — <code>create_*</code> returns the documented <code>n × width</code>; numerical rank equals width minus <code>null_space_dim</code>.</li>
-      <li><b>Penalty symmetry &amp; null space</b> — <code>S = Sᵀ</code>, positive semi-definite, with exactly <code>null_space_dim</code> zero eigenvalues (cyclic: 1 before centering, 0 after; thin-plate: 3; random slope: 0).</li>
-      <li><b>Cyclic continuity</b> — fitted curve and first derivative agree at the two ends of the range.</li>
-      <li><b>Recovery</b> — simulate a known smooth (a sinusoid for cyclic, a Gaussian bump for thin-plate, known slopes for random slopes), fit, assert the fitted values track the truth.</li>
-      <li><b>mgcv parity</b> (<code>tests/mgcv_reference.rs</code> style, <code>#[ignore]</code>) — add <code>bs="cc"</code> / <code>bs="tp"</code> / <code>re()</code> scenarios to <code>benchmark/run_comparison.sh</code>; compare fitted curves and EDF.</li>
+      <li><b>Basis shape &amp; rank</b>: <code>create_*</code> returns the documented <code>n × width</code>; numerical rank equals width minus <code>null_space_dim</code>.</li>
+      <li><b>Penalty symmetry &amp; null space</b>: <code>S = Sᵀ</code>, positive semi-definite, with exactly <code>null_space_dim</code> zero eigenvalues (cyclic: 1 before centering, 0 after; thin-plate: 3; random slope: 0).</li>
+      <li><b>Cyclic continuity</b>: fitted curve and first derivative agree at the two ends of the range.</li>
+      <li><b>Recovery</b>: simulate a known smooth (a sinusoid for cyclic, a Gaussian bump for thin-plate, known slopes for random slopes), fit, assert the fitted values track the truth.</li>
+      <li><b>mgcv parity</b> (<code>tests/mgcv_reference.rs</code> style, <code>#[ignore]</code>): add <code>bs="cc"</code> / <code>bs="tp"</code> / <code>re()</code> scenarios to <code>benchmark/run_comparison.sh</code>; compare fitted curves and EDF.</li>
     </ul>
   </div>
 

@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_a_saturated_sigma() {
         // Un-folding introduces `1/σ` and `1/σ²` that the previous η-scale forms
-        // cancelled.
+        // canceled.
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
             ("mu", array![0.0, 0.5, 1.0]),

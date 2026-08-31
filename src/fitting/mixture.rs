@@ -1,17 +1,17 @@
-//! Finite mixture models (STRUCT-4): the EM capstone over the weighted RS fit.
+//! Finite mixture models (STRUCT-4): the EM capstone sitting on top of the weighted RS fit.
 //!
-//! A `K`-component mixture `f(y) = Σ_k w_k · g_k(y)` couples the observations
-//! through the components' responsibilities, so — unlike the per-row likelihood
-//! wrappers — it cannot be expressed as a single [`Distribution`]. Instead it
-//! wraps the existing fit in an EM outer loop:
+//! A `K`-component mixture `f(y) = Σ_k w_k · g_k(y)` ties the observations together
+//! through the components' responsibilities, so (unlike the per-row likelihood
+//! wrappers) there is no way to write it as a single [`Distribution`]. So instead of
+//! fighting that, it wraps the fit we already have in an EM outer loop:
 //!
 //! - **E-step**: posterior responsibilities `r_ik = w_k g_k(y_i) / Σ_j w_j g_j(y_i)`.
 //! - **M-step**: refit each component via the prior-weighted RS fit
 //!   ([`GamlssModel::fit_with_config`] with `weights = r[:,k]`), then set
 //!   `w_k = mean_i r_ik`.
 //!
-//! Iteration stops when the mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)`
-//! stops improving. Oracle: R `gamlss.mx` (`gamlssMX`).
+//! It stops once the mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` quits
+//! improving. Oracle: R `gamlss.mx` (`gamlssMX`).
 
 use super::diagnostics;
 use crate::distributions::{Distribution, FamilyDescriptor};
@@ -52,7 +52,7 @@ pub struct MixtureModel {
     /// Number of observations the mixture was fit on.
     pub n_obs: usize,
     /// Description of the shared component family, so the mixture round-trips
-    /// through [`to_json`](MixtureModel::to_json) / [`from_json`](MixtureModel::from_json).
+    /// through `to_json` / `from_json`.
     pub family: FamilyDescriptor,
 }
 
@@ -169,8 +169,8 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
 
         // M-step: refit each component with its responsibility column as weights.
         // The k component fits are independent (only the responsibility column
-        // varies), so run them in parallel; row-count validation and the weight
-        // bookkeeping stay serial since they're cheap and need `n`/`k`.
+        // changes between them), so run them in parallel. The row-count check and
+        // the weight bookkeeping stay serial; they're cheap and want `n`/`k` anyway.
         let wj_cols: Vec<Array1<f64>> = (0..k).map(|j| resp.column(j).to_owned()).collect();
         let fit_results: Vec<Result<GamlssModel, GamlssError>> = {
             #[cfg(feature = "parallel")]
@@ -211,7 +211,8 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         let mut raw_weights = Vec::with_capacity(k);
         for (wj, fit) in wj_cols.iter().zip(fit_results) {
             let comp = fit?;
-            // Mixture math indexes fitted values against y; a row-drop would break that.
+            // The mixture math indexes fitted values against y, so a dropped row
+            // would quietly break the alignment. Refuse it.
             let fitted_len = comp
                 .models
                 .values()
@@ -269,17 +270,17 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
     })
 }
 
-/// Separating initialization: draw `k` distinct observations as seeds and assign
-/// each row hard to its nearest seed in `y` (a 1-D k-means seeding). Unlike a
-/// purely random per-row assignment — which hands every component a
-/// representative sample of the *whole* response and leaves EM stuck at the
-/// symmetric "all components identical" fixed point — this gives the components
-/// genuinely different starting regions. The later floor + renormalize keeps
-/// every component non-empty.
+/// Separating initialization: draw `k` distinct observations as seeds and hard-assign
+/// each row to its nearest seed in `y` (a 1-D k-means seeding). A purely random
+/// per-row assignment does the opposite of what you want here: it hands every
+/// component a representative sample of the *whole* response and parks EM at the
+/// symmetric "all components identical" fixed point. This instead gives the
+/// components genuinely different starting regions. The later floor + renormalize is
+/// what keeps every component non-empty.
 fn init_responsibilities(y: &Array1<f64>, k: usize, rng: &mut StdRng) -> Array2<f64> {
     let n = y.len();
-    // Distinct random seed rows where possible (n ≥ k on any real fit); bounded
-    // attempts then top up with repeats so we always return k seeds.
+    // Distinct random seed rows where we can (n ≥ k on any real fit). Bounded
+    // attempts, then top up with repeats so we always hand back k seeds.
     let mut seeds: Vec<usize> = Vec::with_capacity(k);
     let mut attempts = 0;
     while seeds.len() < k && attempts < 20 * k {

@@ -18,7 +18,7 @@ def test_gaic_matches_aic_and_is_monotone(synthetic_gaussian, gaussian_formula):
     aic = model.gaic(y, 2.0)
     bic = model.gaic(y, np.log(n))
     assert np.isfinite(aic) and np.isfinite(bic)
-    # Larger penalty (BIC) ⇒ larger GAIC for the same fit.
+    # bigger penalty (BIC) ⇒ bigger GAIC for the same fit.
     assert bic > aic
 
 
@@ -32,10 +32,10 @@ def test_lr_test_detects_genuine_term(synthetic_gaussian, gaussian_formula):
     result = small.lr_test(big, y)
     assert result["df"] > 0.0
     assert result["lr_stat"] > 0.0
-    # y is strongly linear in x → significant.
+    # y is strongly linear in x, so this should come out significant.
     assert result["p_value"] < 0.01
 
-    # Mis-ordered pair raises.
+    # and a mis-ordered pair should raise.
     with pytest.raises(ValueError):
         big.lr_test(small, y)
 
@@ -49,7 +49,7 @@ def test_ic_table_ranks_models(synthetic_gaussian, gaussian_formula):
 
     rows = glissando.GamlssModel.ic_table([("null", m_null), ("with_x", m_x)], y, 2.0)
     assert [r["label"] for r in rows] == ["null", "with_x"]
-    # The model with x fits the linear signal better → lower deviance and GAIC.
+    # the model with x fits the linear signal better, so lower deviance and GAIC.
     assert rows[1]["global_deviance"] < rows[0]["global_deviance"]
     assert rows[1]["gaic"] < rows[0]["gaic"]
 
@@ -72,10 +72,10 @@ def test_step_gaic_forward_selects_signal(synthetic_gaussian):
     model = out["model"]
     trace = out["trace"]
     assert model.converged()
-    # The genuine linear term should have been added.
+    # the genuine linear term should have been added.
     assert len(trace) >= 1
     assert any("x" in step["move"] for step in trace)
-    # The selected model predicts an increasing mean in x.
+    # and the selected model should predict a mean that rises in x.
     preds = model.predict({"x": np.array([0.0, 5.0])})
     assert preds["mu"][1] > preds["mu"][0]
 

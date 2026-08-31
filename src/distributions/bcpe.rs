@@ -7,10 +7,10 @@
 //! `τ = 2` is the normal (so BCPE reduces to BCCG), `τ < 2` is leptokurtic
 //! (heavier-than-normal peak/tails), `τ > 2` is platykurtic.
 //!
-//! The power-exponential is variance-standardized so `σ` keeps its CV meaning:
+//! I variance-standardize the power-exponential so `σ` keeps its CV meaning:
 //! with `c² = 2^{-2/τ}\,Γ(1/τ)/Γ(3/τ)`,
 //! `log h(z) = N(τ) − ½|z/c|^τ`, `N(τ) = log τ − log 2 − \tfrac{3}{2}\logΓ(1/τ) + \tfrac{1}{2}\logΓ(3/τ)`.
-//! Shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCT.
+//! It shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCT.
 
 use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
@@ -90,11 +90,11 @@ impl Distribution for BCPE {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Box-Cox spine (z, ∂z/∂ν) shared with BCCG; the PE score replaces the
+        // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The PE score swaps out the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
         // (= z at τ=2), full derivation in docs/math/mathematics.md [BCCG]. Natural
-        // scale (Altitude #1); `chain_to_eta` reapplies the default links (log, log,
-        // identity, log) to recover the previous η-scale values exactly:
+        // scale (Altitude #1); chain_to_eta reapplies the default links (log, log,
+        // identity, log) and recovers the old η-scale values exactly:
         //   dl/dμ = [D·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [(τ/2)gₜ − 1] / σ   (numerator = z·D − 1)
         //   dl/dν = −D·∂z/∂ν + log(y/μ)
@@ -134,9 +134,10 @@ impl Distribution for BCPE {
                 (t / (2.0 * c)) * abs_a.powf(t - 1.0) * z.signum()
             };
 
-            // Guard each reciprocal at the power it is used at: raising an
-            // already-guarded reciprocal to a power would overflow to infinity for a
-            // parameter the log link can still underflow to, and `inf · 0` is NaN.
+            // Guard each reciprocal at the power it's actually used at. Take an
+            // already-guarded reciprocal and raise it to a power and it overflows to
+            // infinity for a parameter the log link can still underflow to. And inf · 0
+            // is NaN.
             let inv_m = 1.0 / m.max(DENOM_FLOOR);
             let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
             let inv_s = 1.0 / s.max(DENOM_FLOOR);
@@ -153,7 +154,7 @@ impl Distribution for BCPE {
             let n_prime = 1.0 / t + (3.0 / (2.0 * t * t)) * (psi_a - psi_3a);
             let b_coef = LN_2 / t - psi_a / (2.0 * t) + 3.0 * psi_3a / (2.0 * t);
             let gt_ln_gt = if z == 0.0 { 0.0 } else { gt * gt.ln() };
-            // Already separable; the conversion is the deletion of a trailing `t *`.
+            // This was already separable, so converting it was just deleting a trailing `t *`.
             u_tau[i] = n_prime - gt_ln_gt / (2.0 * t) + 0.5 * gt * b_coef;
 
             // Expected Fisher information. I_loc(τ) = E[D²] is the location info
@@ -218,8 +219,8 @@ impl Distribution for BCPE {
         Ok(out)
     }
 
-    /// `Var(Y) ≈ (σμ)²` — `σ` is (approximately) the CV by the variance-1
-    /// standardization of the PE. Used only for Pearson residuals.
+    /// `Var(Y) ≈ (σμ)²`; `σ` is (approximately) the CV, thanks to the variance-1
+    /// standardization of the PE. I use this only for Pearson residuals.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
@@ -374,7 +375,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
         // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms cancelled.
+        // η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             ("mu", array![0.0, 1e-320, 1e-8]),

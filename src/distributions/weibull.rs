@@ -13,7 +13,7 @@ use std::collections::HashMap;
 ///
 /// Parameters: `μ` (scale, log link) and `σ` (shape, log link). Support `y > 0`.
 /// With `z = (y/μ)^σ`, `Var(Y) = μ²·[Γ(1+2/σ) − Γ(1+1/σ)²]` and the mean is
-/// `μ·Γ(1+1/σ)` — neither equals `μ`, so both moment methods are overridden.
+/// `μ·Γ(1+1/σ)`. Neither equals `μ`, so I override both moment methods.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Weibull;
 
@@ -35,8 +35,8 @@ impl Distribution for Weibull {
         }
     }
 
-    /// σ is the Weibull shape; the default `y.std()` seed is meaningless for it.
-    /// Seed σ = 1 (Exponential), where the scale μ ≈ mean(y); RS refines both.
+    /// σ is the Weibull shape, and the default `y.std()` seed is meaningless for it.
+    /// I seed σ = 1 (Exponential), where the scale μ ≈ mean(y), and let RS refine both.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => y.mean().expect("validate_inputs rejects empty y"),
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/μ` and `1/σ` the old η-scale forms cancelled.
+        // Un-folding introduces `1/μ` and `1/σ` the old η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             ("mu", array![0.0, 1e-320, 1e-8]),

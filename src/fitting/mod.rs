@@ -1,7 +1,9 @@
-//! GAMLSS fitting implementation via the Rigby-Stasinopoulos (RS) algorithm.
+//! GAMLSS fitting via the Rigby-Stasinopoulos (RS) algorithm.
 //!
-//! The RS algorithm iteratively cycles through distribution parameters, fitting each as a
-//! penalized additive model while holding others fixed. For each parameter:
+//! The idea I keep coming back to: RS cycles through the distribution parameters one at a
+//! time, fitting each as a penalized additive model while the others sit frozen. So no single
+//! step is doing anything exotic; it is a plain penalized GLM update, just wrapped in an outer
+//! loop that rotates which parameter is "live". For each parameter:
 //!
 //! 1. Compute score (u) and Fisher information (w) from the distribution
 //! 2. Form working response: z = η + u/w
@@ -9,7 +11,8 @@
 //! 4. Solve penalized weighted least squares: (X'WX + Σλ·S)·β = X'W·z
 //! 5. Update linear predictor: η = X·β
 //!
-//! The module also handles posterior inference (sampling from the approximate posterior of coefficients).
+//! Posterior inference lives here too: sampling from the approximate posterior of the
+//! coefficients.
 
 pub(crate) mod assembler;
 pub mod diagnostics;
@@ -37,10 +40,10 @@ const DEFAULT_TOLERANCE: f64 = 1e-3;
 /// Default absolute tolerance on the global-deviance change (FIT-2).
 const DEFAULT_GD_TOLERANCE: f64 = 1e-3;
 
-/// How close a smooth term's EDF must sit to its penalty null-space dimension
-/// before the fit flags it as collapsed. Half an effective degree of freedom of
-/// slack keeps a genuinely (near-)linear fit from tripping the warning while
-/// still catching a smooth that has been fully penalized away.
+/// How close a smooth term's EDF has to sit to its penalty null-space dimension
+/// before I call it collapsed. Half an effective degree of freedom of slack is
+/// the compromise: enough that a genuinely (near-)linear fit doesn't trip the
+/// warning, tight enough that a smooth penalized all the way down still gets caught.
 const EDF_COLLAPSE_SLACK: f64 = 0.5;
 
 /// Smoothing-parameter selection criterion.
@@ -48,10 +51,10 @@ const EDF_COLLAPSE_SLACK: f64 = 0.5;
 /// `Reml` (the default) minimizes the Laplace-approximate marginal likelihood
 /// (Wood 2011) via L-BFGS, applied per distributional parameter to its converged
 /// PWLS subproblem. `Gcv` uses Generalized Cross-Validation (Craven & Wahba 1979).
-/// `FellnerSchall` optimizes the same target as `Reml` via the multiplicative
+/// `FellnerSchall` chases the same target as `Reml` but through the multiplicative
 /// fixed-point update of Wood & Fasiolo (2017): deterministic, no line search.
-/// REML tends to be less prone to local minima and undersmoothing than GCV at
-/// moderate sample sizes.
+/// I default to REML because at moderate sample sizes it is the one least likely to
+/// wander into a local minimum or undersmooth on me; GCV is more willing to do both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -67,9 +70,9 @@ pub enum SmoothingCriterion {
 
 impl SmoothingCriterion {
     /// Parse a `SmoothingCriterion` from its wire name (`"gcv"`, `"reml"`,
-    /// `"fellner_schall"`, case-insensitive). `json.rs` gets this for free via
-    /// serde's `rename_all = "snake_case"`; this gives `python.rs` the same
-    /// mapping without hand-rolling it.
+    /// `"fellner_schall"`, case-insensitive). `json.rs` already gets this for free
+    /// from serde's `rename_all = "snake_case"`; this exists so `python.rs` shares
+    /// the exact same mapping instead of hand-rolling its own copy that drifts.
     pub fn from_name(name: &str) -> Result<SmoothingCriterion, GamlssError> {
         match name.to_ascii_lowercase().as_str() {
             "gcv" => Ok(SmoothingCriterion::Gcv),
@@ -83,21 +86,21 @@ impl SmoothingCriterion {
     }
 }
 
-/// How the fitter treats rows carrying a missing (non-finite) value in the
-/// response or any formula-referenced column (DATA-4).
+/// What the fitter does with a row that carries a missing (non-finite) value in
+/// the response or any formula-referenced column (DATA-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum NaAction {
     /// Drop any row with a missing value in `y` or a referenced column before
     /// fitting (R's `na.omit`), and the default. Weights and every model column
-    /// are masked together so the design, working response, and weights stay
-    /// aligned.
+    /// get masked together, so the design, working response, and weights all stay
+    /// aligned; nothing goes out of step underneath you.
     #[default]
     DropRows,
-    /// Reject the fit with [`GamlssError`](crate::GamlssError) if any model
-    /// variable is non-finite (the historical behaviour). Use when a missing
-    /// value should be a hard error rather than silently dropped.
+    /// Reject the fit with [`GamlssError`] the moment any model
+    /// variable is non-finite (the historical behavior). Reach for this when a
+    /// missing value ought to be a hard error, not something quietly dropped.
     Fail,
 }
 
@@ -116,8 +119,8 @@ pub struct FitConfig {
     pub criterion: SmoothingCriterion,
     /// Whether to step-halve (line-search on the global deviance) each accepted
     /// Fisher-scoring update so every cycle is a monotone descent (FIT-1).
-    /// On by default; matches R `gamlss`'s RS loop. Disabling it recovers the
-    /// raw (unguarded) full-step behaviour.
+    /// On by default, matching R `gamlss`'s RS loop. Turn it off and you get the
+    /// raw, unguarded full step back, which is faster right up until it isn't.
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub step_halving: bool,
     /// Absolute tolerance on the global-deviance change between cycles (FIT-2),
@@ -138,14 +141,13 @@ pub struct FitConfig {
     /// must accept an override there (see
     /// [`allows_link_override`](crate::distributions::Distribution::allows_link_override)),
     /// and the value must be a link
-    /// [`link_from_name`](crate::distributions::link_from_name) recognizes.
+    /// [`link_from_name`] recognizes.
     ///
     /// **No domain checking is done.** A link whose range does not contain the
-    /// parameter's support is accepted and produces nonsense rather than an
-    /// error: a logit link on a Poisson μ confines the mean to `(0, 1)`, and a
-    /// `sqrt` or `inverse_square` link on a Gaussian μ cannot represent a
-    /// negative mean at all. Choosing a link that suits the parameter is the
-    /// caller's job.
+    /// parameter's support is accepted and quietly produces nonsense instead of an
+    /// error: a logit link on a Poisson μ pins the mean into `(0, 1)`, and a
+    /// `sqrt` or `inverse_square` link on a Gaussian μ cannot represent a negative
+    /// mean at all. Picking a link that actually suits the parameter is on you.
     #[cfg_attr(feature = "serde", serde(default))]
     pub links: IndexMap<String, String>,
     /// How to treat rows with a missing (non-finite) value in `y` or a referenced
@@ -323,11 +325,12 @@ pub(super) struct FittingParameter {
 /// (Prior-weighted) global deviance of the current fit:
 /// `GD(θ) = −2·Σᵢ wᵢ·log f(yᵢ | θᵢ)`.
 ///
-/// This is the objective the Rigby–Stasinopoulos loop implicitly minimizes. It
-/// is the shared substrate for step-halving (FIT-1) and the global-deviance
-/// convergence test (FIT-2): each `FittingParameter.mu` already holds the
-/// response-scale parameter, so the helper just assembles the params view and
-/// calls the family's pointwise log-density.
+/// This is the objective the Rigby–Stasinopoulos loop is quietly minimizing the
+/// whole time, and it does double duty: step-halving (FIT-1) and the
+/// global-deviance convergence test (FIT-2) both read it. Each
+/// `FittingParameter.mu` already carries the response-scale parameter, so there
+/// is nothing clever to do here; assemble the params view and hand it to the
+/// family's pointwise log-density.
 pub(super) fn global_deviance<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
@@ -386,21 +389,22 @@ fn deviance<'a, D: Distribution + ?Sized>(
 
 /// Check every `config.links` key against the family before any fitting starts.
 ///
-/// Both failures used to be silent. An unknown key simply never matched inside
-/// the per-parameter loop below, so `with_link("sigma", "log")` on `Beta` (whose
-/// second parameter is `phi`) did nothing at all. And a parameter whose family
-/// hardcodes its own link in `eta_derivatives` accepted the override for
-/// `η → μ` while computing the score and weight for the original link, which is
-/// the bug class the generic-chain-rule work exists to remove.
+/// Both of these failures used to be silent, which is exactly why they earned a
+/// guard. An unknown key just never matched inside the per-parameter loop below,
+/// so `with_link("sigma", "log")` on `Beta` (whose second parameter is `phi`) did
+/// precisely nothing. And a parameter whose family hardcodes its own link in
+/// `eta_derivatives` would accept the override for `η → μ` while still computing
+/// the score and weight against the original link: the very bug class the
+/// generic-chain-rule work exists to kill.
 ///
-/// Runs before `assemble_model_matrices`, so a typo costs nothing.
+/// Runs before `assemble_model_matrices`, so a typo costs you nothing.
 fn validate_link_overrides<D: Distribution + ?Sized>(
     family: &D,
     config: &FitConfig,
 ) -> Result<(), GamlssError> {
     for key in config.links.keys() {
-        // Membership first: on a family that refuses every parameter, a
-        // misspelled key should report the misspelling, not the refusal.
+        // Membership first. On a family that refuses every parameter, a
+        // misspelled key should complain about the misspelling, not the refusal.
         if !family.parameters().contains(&key.as_str()) {
             return Err(GamlssError::Input(format!(
                 "link override for unknown parameter '{key}': {} has parameters [{}]",
@@ -432,8 +436,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     validate_link_overrides(family, config)?;
 
     let n_obs = y.len();
-    // `IndexMap` keeps insertion order = `family.parameters()` order so the
-    // resulting `GamlssModel.models` iterates deterministically downstream.
+    // `IndexMap` keeps insertion order = `family.parameters()` order, so
+    // `GamlssModel.models` iterates deterministically everywhere downstream.
     let mut models: IndexMap<String, FittingParameter> = IndexMap::new();
 
     for param_name in family.parameters() {
@@ -441,12 +445,13 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let formula_terms = formula.get(&param_name_str).ok_or_else(|| {
             GamlssError::Input(format!("Formula missing for parameter {}", param_name))
         })?;
-        // Resolve CrSpline1D knots once from training data so they are stored in
-        // FittedParameter::terms and replayed verbatim at predict time.
+        // Resolve CrSpline1D knots once from the training data. They get stored in
+        // FittedParameter::terms and replayed verbatim at predict time; fit and
+        // predict have to see the identical basis or the whole thing is a lie.
         let terms = resolve_terms(formula_terms, data)?;
-        // Honor a per-parameter link override from the config; otherwise the
-        // family's canonical default. The chosen link name is persisted into the
-        // FittedParameter so predict reconstructs the *same* link.
+        // Honor a per-parameter link override from the config, else fall back to
+        // the family's canonical default. Whichever wins, its name is persisted
+        // into the FittedParameter so predict rebuilds the *same* link.
         let link = match config.links.get(&param_name_str) {
             Some(name) => link_from_name(name)?,
             None => family.default_link(param_name)?,
@@ -464,10 +469,10 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let eta_start = link.link(response_scale_start);
 
         // Seed the intercept coefficient so the first IRLS step starts near
-        // η = link(initial μ). `beta[0]` is only the intercept when the leading
+        // η = link(initial μ). `beta[0]` is the intercept only when the leading
         // term is `Term::Intercept`; for a smooth-only or leading-Linear formula
-        // we leave β = 0 and η = X·β, which IRLS will move from there. The fixed
-        // `offset` is always added: η = X·β + offset (DATA-3).
+        // we just leave β = 0 and η = X·β and let IRLS walk it from there. The
+        // fixed `offset` is always added on top: η = X·β + offset (DATA-3).
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
         let intercept_leads = matches!(terms.first(), Some(Term::Intercept));
         let eta = if intercept_leads && total_coeffs > 0 {
@@ -481,9 +486,10 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             Array1::zeros(0)
         } else {
             // Seed from the trace-ratio heuristic so the first REML/F-S step
-            // starts with a well-conditioned X'WX + S_lambda. lambda=1 can be
-            // too small for high-cardinality bases (e.g. k=20) or models with
-            // prior weights, leaving the system near-singular on the first call.
+            // opens with a well-conditioned X'WX + S_lambda. lambda=1 sounds
+            // innocent but is often too small for a high-cardinality basis (say
+            // k=20) or a model with prior weights, and leaves the system
+            // near-singular on the very first call.
             solver::initial_log_lambda(&x_model, &penalty_matrices).mapv(f64::exp)
         };
 
@@ -512,8 +518,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut final_change = f64::MAX;
     let mut param_diagnostics: IndexMap<String, ParamDiagnostic> = IndexMap::new();
 
-    // FIT-2: track the global deviance across cycles so convergence can be judged
-    // on objective improvement, not just coefficient movement.
+    // FIT-2: track the global deviance across cycles so I can judge convergence on
+    // actual objective improvement, not just coefficients wiggling around.
     let mut gd_prev = f64::INFINITY;
     let mut final_deviance: Option<f64> = None;
     let mut final_deviance_change: Option<f64> = None;
@@ -537,8 +543,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
 
             // FIT-1: backtrack the proposed block update on the global deviance so
-            // the accepted step never increases it (monotone descent). The full
-            // step is the α = 1 case, so a well-behaved fit pays no halvings.
+            // the accepted step can never raise it (monotone descent). The full
+            // step is just the α = 1 case, so a well-behaved fit pays no halvings
+            // at all; you only pay when the step was going to overshoot.
             let accepted = if config.step_halving {
                 scoring::step_halving(
                     family,
@@ -550,17 +557,17 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                     scoring::MIN_STEP_ALPHA,
                 )?
             } else {
-                // No step-halving: nothing else bounds the accepted step, so
+                // No step-halving means nothing else bounds the accepted step, so
                 // scale the raw Fisher step back to at most `MAX_STEP_NO_HALVING`
-                // per element in η (see that constant's doc comment) instead of
-                // relying on scoring::step's internal MAX_STEP clamp, which is
-                // now far too loose (1e6) to serve alone. Scaling β (not η
-                // directly) keeps η = X·β + offset exact.
+                // per element in η (see that constant's doc comment). scoring::step
+                // has its own internal MAX_STEP clamp, but it is now far too loose
+                // (1e6) to be the only guard. Scale β, not η directly, so that
+                // η = X·β + offset stays exact.
                 let pre_model = &models[*param_name];
                 let raw_max_change = update.eta_max_change;
-                // scale == 1.0 reproduces the full-step proposal exactly, so a
-                // single unconditional construction covers both the clamped
-                // and unclamped cases.
+                // scale == 1.0 reproduces the full-step proposal exactly, so one
+                // unconditional construction handles both the clamped and the
+                // unclamped case without a branch.
                 let scale = if raw_max_change > scoring::MAX_STEP_NO_HALVING {
                     scoring::MAX_STEP_NO_HALVING / raw_max_change
                 } else {
@@ -581,31 +588,31 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 }
             };
 
-            // Per-parameter relative convergence check, in FIT SPACE (η = X·β).
+            // Per-parameter relative convergence check, done in FIT SPACE (η = X·β).
             //
-            // A coefficient-space (Δβ) test is vulnerable to false negatives on
-            // penalized models: when the smoothing objective has a flat valley,
-            // the per-cycle λ re-optimization can jitter between fit-equivalent
-            // (λ, β) pairs whose linear predictors are identical: β moves along
-            // a fit-irrelevant ridge forever and Δβ never passes, even though
-            // the model (η, μ, deviance) is fully stationary. Measuring the
-            // change of η instead is invariant to such ridges; combined with the
-            // global-deviance test below this is strictly stronger than gamlss's
+            // A coefficient-space (Δβ) test gives false negatives on penalized
+            // models, and here is why. When the smoothing objective has a flat
+            // valley, the per-cycle λ re-optimization jitters between
+            // fit-equivalent (λ, β) pairs whose linear predictors are identical:
+            // β wanders along a fit-irrelevant ridge forever and Δβ never passes,
+            // even though the model (η, μ, deviance) has stopped moving. Watching
+            // Δη instead is blind to those ridges, and paired with the
+            // global-deviance test below it is strictly stronger than gamlss's
             // deviance-only criterion.
             //
-            // Each parameter is checked against its own |η| scale, with a floor
-            // of 1.0 so the test is equivalent to an absolute threshold when the
-            // linear predictor is O(1). The test uses `accepted.eta_max_change`
-            // (what step-halving actually applied), not the full-step proposal:
-            // as the fit approaches the optimum the score → 0, so the full step
-            // → 0 and step-halving accepts α = 1, at which point the two
-            // coincide. They diverge only when the whole block update was
-            // rejected (α = 0, model frozen); using the proposal there would
-            // keep re-flagging "still moving" for a state that hasn't changed
-            // since the first rejection, burning the iteration budget on an
-            // identical re-derived-and-rejected step every cycle. Far from the
-            // optimum a large accepted step keeps this test conservative, which
-            // is exactly when the GD test below is the one that should decide.
+            // Each parameter is checked against its own |η| scale, floored at 1.0
+            // so the test degrades to a plain absolute threshold when the linear
+            // predictor is O(1). It reads `accepted.eta_max_change` (what
+            // step-halving actually applied), not the full-step proposal, and the
+            // two agree where it matters: near the optimum the score → 0, so the
+            // full step → 0, step-halving takes α = 1, and they coincide. They part
+            // ways only when the whole block update was rejected (α = 0, model
+            // frozen). Use the proposal there and you keep flagging "still moving"
+            // for a state that has not budged since the first rejection, burning
+            // the iteration budget re-deriving and re-rejecting the same step every
+            // cycle. Far from the optimum a large accepted step keeps this test
+            // conservative, which is precisely when the GD test below should be the
+            // one calling it.
             let param_eta_scale = update
                 .eta
                 .iter()
@@ -629,20 +636,20 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             );
 
             // Infallible: `models` was populated from this same `family.parameters()`
-            // list above and nothing removes entries (see `&models[*param_name]`).
+            // list above and nothing ever removes entries (see `&models[*param_name]`).
             let model = &mut models[*param_name];
             // β/η/μ come from the accepted (possibly damped) step; covariance /
             // EDF / λ keep the values `scoring::step` computed at the full step.
-            // Near convergence α → 1 so those are evaluated at the right point,
-            // matching how gamlss reports them at the converged step.
+            // Near convergence α → 1, so those are evaluated at the right point
+            // anyway, matching what gamlss reports at the converged step.
             //
-            // When the whole block update was REJECTED (uphill at every α), the
-            // previous λ/covariance/EDF are kept too: the proposal's values
-            // describe a state that was never entered, and installing them
-            // would pair the old β with a covariance/EDF evaluated elsewhere,
-            // corrupting SEs, GAIC, and the collapse warnings. The only
-            // exception is the very first cycle, where there is no previous
-            // covariance yet; the proposal's is then the best available.
+            // When the whole block update got REJECTED (uphill at every α), keep
+            // the previous λ/covariance/EDF too. The proposal's values describe a
+            // state we never actually entered; install them and you pair the old β
+            // with a covariance/EDF measured somewhere else entirely, which quietly
+            // corrupts SEs, GAIC, and the collapse warnings. One exception: the very
+            // first cycle, where there is no previous covariance yet, so the
+            // proposal's is simply the best we have.
             model.beta = accepted.beta;
             model.eta = accepted.eta;
             model.mu = accepted.mu;
@@ -653,15 +660,15 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
         }
 
-        // FIT-2: global-deviance change after the full sweep. Require *both* the
-        // Δβ test and the GD test to agree before declaring convergence.
+        // FIT-2: global-deviance change after the full sweep. I want *both* the Δβ
+        // test and the GD test to agree before I call it converged.
         //
-        // The change is measured in ABSOLUTE deviance units, matching R gamlss's
-        // `c.crit` (default 0.001). A relative test (|ΔGD|/|GD|) was used
-        // previously, but its slack scales with the deviance magnitude: at
-        // GD ≈ 4000 it declared convergence while the fit was still improving
-        // by ~4 deviance units per cycle, far short of the optimum that gamlss
-        // (absolute criterion) reaches on the same data.
+        // Measured in ABSOLUTE deviance units, matching R gamlss's `c.crit`
+        // (default 0.001). A relative test (|ΔGD|/|GD|) was here before, and the
+        // trouble with it is that its slack scales with the deviance magnitude: at
+        // GD ≈ 4000 it happily declared convergence while the fit was still
+        // improving ~4 deviance units per cycle, well short of the optimum gamlss
+        // reaches on the same data with its absolute criterion.
         let gd = global_deviance(family, y, prior_weights, &models)?;
         let gd_abs_change = (gd_prev - gd).abs();
         let gd_converged = cycle > 0 && gd_abs_change < config.gd_tolerance;
@@ -690,10 +697,10 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             ))
         })?;
 
-        // Flag any smooth term whose EDF has decayed to its penalty null-space
-        // dimension: the penalty has driven the smooth down to its unpenalized
-        // polynomial remainder (e.g. a straight line for an order-2 P-spline),
-        // so the curve it was meant to capture is effectively gone.
+        // Flag any smooth term whose EDF has decayed down to its penalty
+        // null-space dimension. The penalty has ground the smooth down to its
+        // unpenalized polynomial remainder (a straight line, for an order-2
+        // P-spline), so the curve it was supposed to capture is gone.
         for (layout, &t_edf) in model.term_layouts.iter().zip(model.term_edf.iter()) {
             if layout.is_smooth && t_edf <= layout.null_dim as f64 + EDF_COLLAPSE_SLACK {
                 warnings.push(format!(
@@ -706,9 +713,9 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
         }
 
-        // Build the term→column-block map from term_layouts (same offset walk as
-        // the EDF attribution in scoring.rs). Must be done before `model.terms`
-        // is moved into the FittedParameter literal below.
+        // Build the term→column-block map from term_layouts (the same offset walk
+        // the EDF attribution in scoring.rs does). Has to happen before
+        // `model.terms` is moved into the FittedParameter literal below.
         let mut offset = 0usize;
         let term_blocks: Vec<(String, usize, usize)> = model
             .terms
@@ -721,8 +728,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             })
             .collect();
 
-        // Persist the link name only when the user overrode it; a default-link
-        // parameter stays `None` so predict re-derives via `default_link`.
+        // Persist the link name only when the user overrode it. A default-link
+        // parameter stays `None` and predict re-derives it via `default_link`.
         let link = config.links.get(&name).cloned();
 
         let fitted_param = FittedParameter {

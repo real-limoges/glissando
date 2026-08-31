@@ -36,8 +36,8 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn is_psd(m: &Array2<f64>) -> bool {
-        // A matrix M = D'D is automatically PSD; verify by checking x'Mx >= 0 for random x.
-        // Cheap stand-in for an eigenvalue computation that doesn't need a linalg backend.
+        // M = D'D is PSD by construction; I just check x'Mx >= 0 for a batch of random x.
+        // Cheap stand-in for a real eigenvalue computation, and it needs no linalg backend.
         use ndarray::{Array, Array1};
         let n = m.dim().0;
         let mut rng = StdRngStub::new(42);

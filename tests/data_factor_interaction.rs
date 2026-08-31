@@ -1,12 +1,12 @@
-//! DATA-1 factors and DATA-2 interactions — public-API integration tests.
+//! DATA-1 factors and DATA-2 interactions, tested through the public API.
 //!
 //! Contrast coding is locked at the unit level against R's `contr.treatment` /
-//! `contr.sum` (see `assembler::tests`). Here we check the end-to-end story:
-//! a factor's per-level effects are recovered from a fit, an interaction term
+//! `contr.sum` (see `assembler::tests`). Here I check the end-to-end story:
+//! a factor's per-level effects come back out of a fit, an interaction term
 //! recovers a level-specific slope, and resolved factor levels replay verbatim
 //! through a JSON round-trip and at predict time.
 
-// Integration tests cannot run with the `python` feature (PyO3 linking).
+// Can't run under the `python` feature (PyO3 linking).
 #![cfg(not(feature = "python"))]
 
 use glissando::distributions::Gaussian;
@@ -14,14 +14,14 @@ use glissando::{Contrast, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
 /// Build a 3-level factor column cycling 0,1,2 and a Gaussian response whose mean
-/// is `base + effect[level]` (treatment-coded: effect[0] is folded into `base`).
+/// is `base + effect[level]` (treatment-coded, so effect[0] folds into `base`).
 fn factor_dataset(n: usize, base: f64, effects: [f64; 3]) -> (Array1<f64>, DataSet) {
     let g: Vec<f64> = (0..n).map(|i| (i % 3) as f64).collect();
     let y: Vec<f64> = g
         .iter()
         .enumerate()
         .map(|(i, &gi)| {
-            // Deterministic tiny wiggle keeps the fit well-posed without RNG.
+            // Tiny deterministic wiggle keeps the fit well-posed, no RNG needed.
             base + effects[gi as usize] + 0.02 * ((i % 5) as f64 - 2.0)
         })
         .collect();
@@ -30,7 +30,7 @@ fn factor_dataset(n: usize, base: f64, effects: [f64; 3]) -> (Array1<f64>, DataS
     (Array1::from_vec(y), data)
 }
 
-/// Treatment-coded factor: intercept ≈ base + effect[0]; the two dummy
+/// Treatment-coded factor: intercept ≈ base + effect[0], and the two dummy
 /// coefficients ≈ effect[1] − effect[0] and effect[2] − effect[0].
 #[test]
 fn factor_recovers_treatment_level_effects() {
@@ -64,8 +64,8 @@ fn factor_recovers_treatment_level_effects() {
     );
 }
 
-/// Sum-to-zero coding produces the same fitted values as treatment coding — the
-/// contrast is a reparameterization, the fit is identical up to it.
+/// Sum-to-zero coding produces the same fitted values as treatment coding. The
+/// contrast is just a reparameterization; the fit underneath is identical.
 #[test]
 fn factor_sum_to_zero_fits_same_values_as_treatment() {
     let (y, data) = factor_dataset(300, 5.0, [0.0, 2.0, -1.5]);
@@ -92,11 +92,11 @@ fn factor_sum_to_zero_fits_same_values_as_treatment() {
     }
 }
 
-/// A factor×continuous interaction recovers a level-specific slope: with a slope
-/// that differs by factor level, the interaction column carries the difference.
+/// A factor×continuous interaction recovers a level-specific slope: when the
+/// slope differs by factor level, the interaction column carries the difference.
 #[test]
 fn interaction_recovers_level_specific_slope() {
-    // Two groups; slope is 1.0 in group 0 and 1.0 + 0.8 in group 1.
+    // Two groups. Slope is 1.0 in group 0, 1.0 + 0.8 in group 1.
     let n = 400;
     let g: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
     let x: Vec<f64> = (0..n).map(|i| (i as f64 / n as f64) * 4.0).collect();
@@ -129,7 +129,7 @@ fn interaction_recovers_level_specific_slope() {
     for (p, yi) in pred["mu"].iter().zip(y.iter()) {
         assert!((p - yi).abs() < 0.05, "interaction fit off: {p} vs {yi}");
     }
-    // The interaction coefficient (last column) recovers the slope difference 0.8.
+    // The interaction coefficient (last column) recovers the 0.8 slope difference.
     let beta = &model.models["mu"].coefficients.0;
     let interaction_coef = beta[beta.len() - 1];
     assert!(
@@ -139,7 +139,7 @@ fn interaction_recovers_level_specific_slope() {
 }
 
 /// A factor's levels resolve at fit time and replay through a JSON round-trip,
-/// so a reloaded model predicts identically even on data missing a level.
+/// so a reloaded model predicts identically even when the data is missing a level.
 #[cfg(feature = "serialization")]
 #[test]
 fn factor_levels_survive_json_roundtrip() {
@@ -153,8 +153,8 @@ fn factor_levels_survive_json_roundtrip() {
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
     assert_eq!(desc.build().unwrap().name(), "Gaussian");
 
-    // Predict on data containing only levels {0, 2} — the stored levels keep the
-    // column mapping stable (level 2 still lands in the second dummy column).
+    // Predict on data with only levels {0, 2}. The stored levels keep the column
+    // mapping stable, so level 2 still lands in the second dummy column.
     let mut subset = DataSet::new();
     subset.insert_column("g", Array1::from_vec(vec![0.0, 2.0, 2.0, 0.0]));
     let p1 = model.predict(&subset, &Gaussian).unwrap();

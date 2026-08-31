@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature, courtesy of PyO3's extension-module linking
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -14,7 +14,7 @@ use rand::RngExt;
 #[test]
 fn test_missing_variable_in_data() {
     let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
-    let data = DataSet::new(); // empty data, no "x" column
+    let data = DataSet::new(); // empty data, so there's no "x" column to find
 
     let mut formulas = Formula::new();
     formulas.add_terms(
@@ -46,7 +46,7 @@ fn test_missing_formula_for_parameter() {
 
     let mut formulas = Formula::new();
     formulas.add_terms("mu", vec![Term::Intercept]);
-    // Missing "sigma" formula for Gaussian
+    // No "sigma" formula, which Gaussian needs
 
     let result = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new());
 
@@ -80,7 +80,7 @@ fn test_small_dataset() {
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
-    // Should recover approximately y = 2x (intercept ~0, slope ~2)
+    // Should land near y = 2x: intercept ~0, slope ~2
     assert!(
         mu_coeffs[1] > 1.5 && mu_coeffs[1] < 2.5,
         "Slope should be ~2, got {}",
@@ -91,7 +91,7 @@ fn test_small_dataset() {
 #[test]
 fn test_intercept_only_model() {
     let mut rand_gen = Generator::new(999);
-    let (y, data) = rand_gen.linear_gaussian(200, 0.0, 10.0, 1.0); // slope=0, intercept=10
+    let (y, data) = rand_gen.linear_gaussian(200, 0.0, 10.0, 1.0); // slope=0, intercept=10, flat line
 
     let mut formulas = Formula::new();
     formulas.add_terms("mu".to_string(), vec![Term::Intercept]);
@@ -109,7 +109,7 @@ fn test_intercept_only_model() {
 
 #[test]
 fn test_large_coefficients() {
-    // Test that the model can handle data with large scale
+    // Make sure the model copes with data on a large scale
     let y = Array1::from_vec(vec![
         1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0, 1700.0, 1800.0, 1900.0,
     ]);
@@ -134,7 +134,7 @@ fn test_large_coefficients() {
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
-    // Should recover y = 1000 + 100*x
+    // Should recover y = 1000 + 100*x.
     assert!(
         (mu_coeffs[0] - 1000.0).abs() < 10.0,
         "Intercept should be ~1000, got {}",
@@ -171,7 +171,7 @@ fn test_negative_response_gaussian() {
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
-    // Should recover y = -12 + 2*x
+    // Should recover y = -12 + 2*x, negatives and all.
     assert!(
         (mu_coeffs[1] - 2.0).abs() < 0.5,
         "Slope should be ~2, got {}",
@@ -184,7 +184,7 @@ fn test_multiple_linear_terms() {
     let mut rand_gen = Generator::new(42);
 
     let n = 500;
-    // Use independent random predictors to avoid collinearity
+    // Independent random predictors, so no collinearity to trip us up
     let x1: Vec<f64> = (0..n).map(|_| rand_gen.rng.random::<f64>()).collect();
     let x2: Vec<f64> = (0..n).map(|_| rand_gen.rng.random::<f64>()).collect();
     let y: Vec<f64> = x1
@@ -219,7 +219,7 @@ fn test_multiple_linear_terms() {
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
     let mu_coeffs = &model.models["mu"].coefficients;
-    // Should recover intercept ~1, x1 coef ~2, x2 coef ~3
+    // Should recover intercept ~1, x1 coef ~2, x2 coef ~3.
     assert!(
         (mu_coeffs[0] - 1.0).abs() < 0.3,
         "Intercept should be ~1, got {}",
@@ -272,7 +272,7 @@ fn test_spline_smooth_recovery() {
 
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
-    // Check that fitted values roughly follow sin(x)
+    // Fitted values should roughly trace sin(x)
     let fitted = &model.models["mu"].fitted_values;
     let mut mse = 0.0;
     for (i, &xi) in x.iter().enumerate() {
@@ -307,7 +307,7 @@ fn test_edf_reasonable() {
 
     let model = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
-    // For intercept + linear, EDF should be ~2
+    // Intercept + linear, so EDF should sit near 2
     let mu_edf = model.models["mu"].edf;
     assert!(
         mu_edf > 1.5 && mu_edf < 2.5,
@@ -315,7 +315,7 @@ fn test_edf_reasonable() {
         mu_edf
     );
 
-    // For intercept only, EDF should be ~1
+    // Intercept only, so EDF should sit near 1
     let sigma_edf = model.models["sigma"].edf;
     assert!(
         sigma_edf > 0.5 && sigma_edf < 1.5,

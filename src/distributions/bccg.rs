@@ -1,12 +1,12 @@
 //! Box-Cox–Cole-Green (BCCG) distribution for skew positive continuous data.
 //!
 //! BCCG (Cole & Green 1992) models a positive response `y > 0` by a Box-Cox power
-//! transform to a standard normal. It is parameterized by the **median** `μ`, the
+//! transform onto a standard normal. I parameterize it by the **median** `μ`, the
 //! approximate coefficient of variation `σ`, and the skewness `ν`. It is the engine
-//! behind LMS centile curves (growth charts) — see `model.centiles`.
+//! behind LMS centile curves (growth charts); see `model.centiles`.
 //!
-//! This file is the worked-example template for the Box-Cox family (DIST-1); BCT
-//! (Student-t tail) and BCPE (power-exponential kurtosis) extend the same spine,
+//! I treat this file as the worked-example template for the Box-Cox family (DIST-1).
+//! BCT (Student-t tail) and BCPE (power-exponential kurtosis) extend the same spine,
 //! changing only the distribution `z` follows and the extra parameter column.
 
 use super::boxcox::{
@@ -26,9 +26,9 @@ use std::collections::HashMap;
 /// `ν` (skewness / Box-Cox power, identity link). `ν = 1` is symmetric about the
 /// median; `ν = 0` is the log-normal limit.
 ///
-/// The lower tail is left un-truncated (the exact gamlss density renormalizes by
-/// `Φ(1/(σ|ν|))`, which is ≈ 1 in the usual regime where `1/(σ|ν|)` is large); the
-/// approximation matches `dBCCG`/`pBCCG` to ~1e-6 for typical fits.
+/// I leave the lower tail un-truncated. The exact gamlss density renormalizes by
+/// `Φ(1/(σ|ν|))`, which is ≈ 1 in the usual regime where `1/(σ|ν|)` is large, so the
+/// approximation still matches `dBCCG`/`pBCCG` to ~1e-6 for typical fits.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BCCG;
 
@@ -53,9 +53,9 @@ impl Distribution for BCCG {
     }
 
     /// Robust seeds: `μ₀ = median(y)` (μ is the median), `σ₀` = a robust coefficient
-    /// of variation `1.4826·MAD(y)/median(y)`, and `ν₀ = 1` (start symmetric — the
-    /// identity of the Box-Cox power). Mirrors `StudentT`'s median/MAD seeding so the
-    /// first RS iteration is not dragged by skew/outliers.
+    /// of variation `1.4826·MAD(y)/median(y)`, and `ν₀ = 1` (start symmetric, the
+    /// identity of the Box-Cox power). I mirror `StudentT`'s median/MAD seeding so the
+    /// first RS iteration isn't dragged around by skew or outliers.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         boxcox_seed(param, y).unwrap_or_else(|| {
             debug_assert!(false, "BCCG has no parameter '{param}'");
@@ -70,16 +70,16 @@ impl Distribution for BCCG {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Box-Cox z-score and natural-scale score/Fisher pairs. Full derivation in
-        // docs/math/mathematics.md [BCCG]. By the definition of z, T = (y/μ)^ν = 1+νσz,
+        // Box-Cox z-score plus the natural-scale score/Fisher pairs. Full derivation
+        // in docs/math/mathematics.md [BCCG]. By the definition of z, T = (y/μ)^ν = 1+νσz,
         // so the bracketed numerators collapse to the clean forms below.
         //   dl/dμ = [z/σ + ν(z²−1)] / μ
         //   dl/dσ = (z²−1) / σ
         //   dl/dν = −z·∂z/∂ν + log(y/μ)          (ν is identity-linked)
         // Expected Fisher information (matches gamlss BCCG once chained):
         //   I_μμ = (1/σ² + 2ν²)/μ²,   I_σσ = 2/σ²,   I_νν = 7σ²/4.
-        // Under the default links (log, log, identity) `chain_to_eta` reproduces the
-        // previous η-scale pairs exactly. Weights are returned unfloored.
+        // Default links are log, log, identity. chain_to_eta reproduces the old η-scale
+        // pairs exactly off these. Weights come back unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
@@ -99,9 +99,10 @@ impl Distribution for BCCG {
             let yi = y[i].max(MIN_POSITIVE);
             let (z, dz_dnu, l) = boxcox_z_dz_dnu(yi, m, s, nu_i); // l = log(y/μ)
 
-            // Guard each reciprocal at the power it is used at: raising an
-            // already-guarded reciprocal to a power would overflow to infinity for a
-            // parameter the log link can still underflow to, and `inf · 0` is NaN.
+            // Guard each reciprocal at the power it's actually used at. Take an
+            // already-guarded reciprocal and raise it to a power and it overflows to
+            // infinity for a parameter the log link can still underflow to. And inf · 0
+            // is NaN.
             let inv_m = 1.0 / m.max(DENOM_FLOOR);
             let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
             let inv_s = 1.0 / s.max(DENOM_FLOOR);
@@ -145,17 +146,17 @@ impl Distribution for BCCG {
         Ok(out)
     }
 
-    /// First-order coefficient-of-variation approximation `Var(Y) ≈ (σ·μ)²` — `σ` is
-    /// (approximately) the CV in the BCCG parameterization. Used only for Pearson
-    /// residuals; the preferred randomized-quantile residuals go through `cdf`.
+    /// First-order coefficient-of-variation approximation `Var(Y) ≈ (σ·μ)²`; `σ` is
+    /// (approximately) the CV in the BCCG parameterization. I use this only for Pearson
+    /// residuals; the randomized-quantile residuals I actually prefer go through `cdf`.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         Ok(boxcox_cv_variance(mu, sigma))
     }
 
-    /// `μ` is the **median**, not the mean. The exact mean has no closed form; this
-    /// is the second-order expansion `E[Y] ≈ μ·(1 + ½σ²(1−ν))`, exact at `ν = 1`
+    /// `μ` is the **median**, not the mean. The exact mean has no closed form, so I
+    /// use the second-order expansion `E[Y] ≈ μ·(1 + ½σ²(1−ν))`, exact at `ν = 1`
     /// (symmetric, mean = μ) and at `ν = 0` (log-normal, `μ·e^{σ²/2}` to O(σ²)).
     fn expected_value(
         &self,
@@ -304,7 +305,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
         // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms cancelled.
+        // η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             ("mu", array![0.0, 1e-320, 1e-8]),

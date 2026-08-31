@@ -4,8 +4,8 @@ use ndarray::{s, Array2, ArrayView1, ArrayViewMut1, Zip};
 
 /// Compute the Kronecker product of two matrices: C = A ⊗ B.
 ///
-/// If A is (m × n) and B is (p × q), the result is (mp × nq).
-/// Used for constructing tensor product basis matrices.
+/// If A is (m × n) and B is (p × q), the result is (mp × nq). I use it to build
+/// tensor product basis matrices.
 pub(crate) fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     let (m, n) = a.dim();
     let (p, q) = b.dim();
@@ -27,7 +27,7 @@ pub(crate) fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64>
 /// Compute row-wise Kronecker product into a pre-allocated output buffer.
 ///
 /// Given vectors a (length m) and b (length n), computes their Kronecker product
-/// (length m*n) in-place. Used for efficient tensor product basis evaluation.
+/// (length m*n) in place. This is the hot path for tensor product basis evaluation.
 #[inline]
 pub(crate) fn row_kronecker_into(
     a: ArrayView1<f64>,

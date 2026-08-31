@@ -81,14 +81,14 @@
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>B · Link functions</b> (follow-on)</p>
   <h1>glissando <span class="sub">· bounded / shifted links</span></h1>
-  <p class="lede">Implements <span class="id">LINK-7</span> — the shifted / bounded <em>"own"</em>-logit link: a logit on the rescaled <code>(μ−a)/(b−a)</code> that maps an arbitrary open interval <code>(a, b)</code> onto the real line. This is the one piece of workstream B left open after the six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span> — probit, cloglog, inverse, inverse-square, sqrt, cauchit) shipped. The carved-out reason it was deferred: it is <b style="color:#fff">the only link that is not a zero-field unit struct</b> — it carries its bounds as state, which ripples through name-based selection and serialization.</p>
+  <p class="lede">Implements <span class="id">LINK-7</span>, the shifted / bounded <em>"own"</em>-logit link: a logit on the rescaled <code>(μ−a)/(b−a)</code> that maps an arbitrary open interval <code>(a, b)</code> onto the real line. It's the one piece of workstream B I left open after the six canonical links (<span class="id done">LINK-1</span>…<span class="id done">LINK-6</span>: probit, cloglog, inverse, inverse-square, sqrt, cauchit) shipped. I deferred it for exactly one reason: it is <b style="color:#fff">the only link that is not a zero-field unit struct</b>. It carries its bounds as state, and that state ripples through name-based selection and serialization.</p>
   <p class="lede"><b style="color:#fff">Touches:</b> <code>src/distributions/links.rs</code> (the struct + analytic <code>mu_eta</code>), the by-name link lookup (<code>link_from_name</code>) and the JSON link parser (both of which assume stateless links today), and the link documentation on each binding surface.</p>
 
   <h2 class="part">Why it is not a unit struct</h2>
   <div class="ns">
-    <p>Every link shipped so far is a <code>struct XLink;</code> — zero fields, fully described by its type name, selectable by a single string (<code>"probit"</code>, <code>"logit"</code>, …). The bounded-logit link is different: <code>(a, b)</code> are <em>parameters of the link itself</em>, supplied by the analyst (the known physical bounds of a response that lives strictly inside <code>(a, b)</code> — a proportion on a non-<code>[0,1]</code> scale, a measurement with hard physical limits). The struct must therefore hold them:</p>
+    <p>Every link shipped so far is a <code>struct XLink;</code>: zero fields, fully described by its type name, selectable by a single string (<code>"probit"</code>, <code>"logit"</code>, …). The bounded-logit link is the odd one out. Here <code>(a, b)</code> are <em>parameters of the link itself</em>, supplied by the analyst as the known physical bounds of a response that lives strictly inside <code>(a, b)</code>: a proportion on a non-<code>[0,1]</code> scale, a measurement with hard physical limits. So the struct has to hold them:</p>
     <pre><code>pub struct ShiftedLogitLink { pub lower: f64, pub upper: f64 }</code></pre>
-    <p>This is the same state problem the <em>stateful distributions</em> already have — <code>Binomial</code> carries <code>n_trials</code>, <code>Ocat</code> carries <code>n_categories</code>, and the structural wrappers carry response-side vectors. The pattern to copy is theirs, not the unit-struct links'.</p>
+    <p>This is the same state problem the <em>stateful distributions</em> already solved: <code>Binomial</code> carries <code>n_trials</code>, <code>Ocat</code> carries <code>n_categories</code>, and the structural wrappers carry response-side vectors. Copy their pattern, not the unit-struct links'.</p>
   </div>
 
   <h2 class="part">The math</h2>
@@ -97,8 +97,8 @@
     <pre><code>link    g(μ)   = ln( (μ−a) / (b−μ) )            // logit(p)
 inv_link g⁻¹(η) = a + w / (1 + e^(−η))           // a + w·σ(η)
 mu_eta   dμ/dη  = w · σ(η)·(1 − σ(η))            // w · σ'(η)</code></pre>
-    <p>where <code>σ</code> is the logistic sigmoid. With <code>a = 0, b = 1</code> it collapses exactly to <code>LogitLink</code> — so <code>LogitLink</code> (<code>links.rs:128</code>) is the literal template; add the affine rescale around it.</p>
-    <p>The full impl — copy <code>LogitLink</code>'s clamping verbatim and wrap the affine rescale around it:</p>
+    <p>where <code>σ</code> is the logistic sigmoid. With <code>a = 0, b = 1</code> it collapses exactly to <code>LogitLink</code>, so <code>LogitLink</code> (<code>links.rs:128</code>) is the literal template; wrap the affine rescale around it.</p>
+    <p>The full impl. Copy <code>LogitLink</code>'s clamping verbatim, then wrap the affine rescale around it:</p>
     <pre><code>pub struct ShiftedLogitLink { pub lower: f64, pub upper: f64 }
 
 impl ShiftedLogitLink {
@@ -132,16 +132,16 @@ impl Link for ShiftedLogitLink {
   <h2 class="part">Build order</h2>
   <ol class="steps">
     <li><b>Add the struct in <code>links.rs</code>.</b> <code>ShiftedLogitLink { lower, upper }</code> + <code>impl Link</code> with the closed-form <code>mu_eta</code> above. Construct via <code>ShiftedLogitLink::new(a, b)</code> that asserts <code>a &lt; b</code>. Re-export from <code>src/distributions/mod.rs</code> alongside the other link structs.</li>
-    <li><b>Decide the name-selection story.</b> <code>link_from_name</code> and the JSON link parser map a bare string to a unit struct — they <em>cannot</em> carry <code>(a, b)</code>. Two options, pick and document one: (a) exclude it from <code>link_from_name</code> the way stateful distributions are excluded from <code>from_name</code>, constructed only through the typed API; or (b) extend the link-selection surface to a small struct/enum that carries the bounds (a <code>{ "link": "shifted_logit", "lower": a, "upper": b }</code> JSON shape). Option (b) is the one that makes the link usable from the JSON / WASM / Python surfaces — it is the real scope of this item.</li>
-    <li><b>Serialization.</b> If you take option (b), the saved model must round-trip the bounds, not just a name — mirror how the <code>FamilyDescriptor</code> work serializes stateful families' parameters rather than their name. A bare-name round-trip silently loses <code>(a, b)</code>.</li>
+    <li><b>Decide the name-selection story.</b> <code>link_from_name</code> and the JSON link parser map a bare string to a unit struct, so they <em>cannot</em> carry <code>(a, b)</code>. Two options; pick and document one. (a) Exclude it from <code>link_from_name</code> the way stateful distributions are excluded from <code>from_name</code>, constructed only through the typed API. (b) Extend the link-selection surface to a small struct/enum that carries the bounds (a <code>{ "link": "shifted_logit", "lower": a, "upper": b }</code> JSON shape). Option (b) is the one that makes the link usable from the JSON / WASM / Python surfaces, and that is the real scope of this item.</li>
+    <li><b>Serialization.</b> If you take option (b), the saved model has to round-trip the bounds, not just a name; mirror how the <code>FamilyDescriptor</code> work serializes stateful families' parameters rather than their name. A bare-name round-trip silently loses <code>(a, b)</code>.</li>
   </ol>
 
   <h2 class="part">Tests &amp; reference oracle</h2>
   <div class="ns">
-    <p>Extend the existing <code>mod tests</code> in <code>links.rs</code> — it already has the scaffolding:</p>
+    <p>Extend the existing <code>mod tests</code> in <code>links.rs</code>; it already has the scaffolding:</p>
     <ul>
       <li><b>Analytic vs finite-difference <code>mu_eta</code>.</b> Add a <code>ShiftedLogitLink::new(a, b)</code> instance to the analytic-vs-FD check (<code>links.rs:483</code> uses an <code>[&amp;dyn Link]</code> array; this link needs a concrete instance with chosen bounds). Closed form must match the finite difference to <code>1e-5</code> across the η grid.</li>
-      <li><b>Collapse to logit.</b> Assert <code>ShiftedLogitLink::new(0.0, 1.0)</code> matches <code>LogitLink</code> on <code>link</code>, <code>inv_link</code>, and <code>mu_eta</code> across a grid — the cleanest correctness check.</li>
+      <li><b>Collapse to logit.</b> Assert <code>ShiftedLogitLink::new(0.0, 1.0)</code> matches <code>LogitLink</code> on <code>link</code>, <code>inv_link</code>, and <code>mu_eta</code> across a grid; the cleanest correctness check there is.</li>
       <li><b>Round-trip + range.</b> Mirror <code>log_link_round_trip_in_safe_range</code> (<code>links.rs:544</code>): <code>link(inv_link(η)) ≈ η</code> in the safe range, and <code>inv_link(η) ∈ (a, b)</code> for all η including <code>±1e6</code>.</li>
     </ul>
     <p><b>External oracle:</b> no base-R <code>make.link</code> equivalent, but R <code>gamlss</code> exposes the <code>"own"</code> link mechanism and bounded-response families; an affine-rescaled <code>binomial()$linkfun</code> / <code>linkinv</code> tabulated at a grid of η serves as the numeric oracle.</p>

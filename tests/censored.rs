@@ -1,6 +1,6 @@
-//! STRUCT-1 integration tests: a `Censored` wrapper fits end-to-end through the
-//! standard RS loop, recovers known parameters under right-censoring, and
-//! reduces to the base family when every row is an event.
+//! STRUCT-1 integration tests. Here I want a `Censored` wrapper to fit end-to-end
+//! through the standard RS loop, recover known parameters under right-censoring, and
+//! collapse back to the base family when every row is an event.
 
 #![cfg(not(feature = "python"))]
 
@@ -8,8 +8,8 @@ use glissando::distributions::{CensorStatus, Censored, Distribution, Gaussian};
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
-/// Ideal latent Gaussian order statistics for `N(mu, sigma)` of length `n`
-/// (deterministic, so recovery tests are reproducible).
+/// Ideal latent Gaussian order statistics for `N(mu, sigma)` of length `n`.
+/// Deterministic, so the recovery tests reproduce exactly every run.
 fn latent_gaussian(mu: f64, sigma: f64, n: usize) -> Array1<f64> {
     let p = Array1::from_iter((0..n).map(|i| (i as f64 + 0.5) / n as f64));
     let owned = [
@@ -45,7 +45,7 @@ fn all_event_matches_plain_gaussian_fit() {
     let cens = Censored::new(Box::new(Gaussian::new()), status);
     let censored_fit = GamlssModel::fit(&data, &y, &formula, &cens).unwrap();
 
-    // All-event censoring is exactly the base likelihood ⇒ identical coefficients.
+    // All-event censoring is exactly the base likelihood, so the coefficients have to come out identical.
     let plain_mu = plain.models["mu"].coefficients.0[0];
     let cens_mu = censored_fit.models["mu"].coefficients.0[0];
     assert!(
@@ -56,7 +56,7 @@ fn all_event_matches_plain_gaussian_fit() {
 
 #[test]
 fn right_censored_recovers_mean() {
-    // True N(5, 2); right-censor everything above 6 (a substantial censored mass).
+    // True N(5, 2). Right-censor everything above 6, which is a substantial censored mass.
     let n = 200;
     let true_mu = 5.0;
     let true_sigma = 2.0;
@@ -71,7 +71,7 @@ fn right_censored_recovers_mean() {
             status[i] = CensorStatus::Right;
         }
     }
-    // Sanity: censoring actually binds on a meaningful fraction.
+    // Sanity check. Censoring has to actually bind on a meaningful fraction, or the test proves nothing.
     let n_cens = status.iter().filter(|s| **s == CensorStatus::Right).count();
     assert!(
         n_cens > 20 && n_cens < n - 20,
@@ -84,15 +84,15 @@ fn right_censored_recovers_mean() {
     let fit = GamlssModel::fit(&data, &y, &formula, &cens).unwrap();
 
     let mu_hat = fit.models["mu"].coefficients.0[0];
-    // A naive fit treating censored values as observed would be biased low (≈ the
-    // censored sample mean, well under 5); the censored MLE recovers ≈ 5.
+    // A naive fit treating censored values as observed comes out biased low (≈ the
+    // censored sample mean, well under 5). The censored MLE is what recovers ≈ 5.
     assert!(
         (mu_hat - true_mu).abs() < 0.4,
         "censored MLE mu {mu_hat} should recover ≈ {true_mu}"
     );
 
-    // The naive (ignore-censoring) mean is materially lower — confirms the wrapper
-    // is doing real work, not just echoing the data mean.
+    // The naive (ignore-censoring) mean sits materially lower. That's the proof the wrapper
+    // is doing real work, not just echoing back the data mean.
     let naive_mean = y.mean().unwrap();
     assert!(
         naive_mean < true_mu - 0.3,
