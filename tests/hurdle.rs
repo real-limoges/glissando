@@ -1,5 +1,6 @@
-//! STRUCT-3 integration tests: a `Hurdle` wrapper fits end-to-end, recovering
-//! both the zero-atom probability and the positive-part parameters.
+//! STRUCT-3 integration tests. What I want here is for a `Hurdle` wrapper to fit
+//! end-to-end and recover both the zero-atom probability and the positive-part
+//! parameters. If either half drifts, the wrapper isn't doing its job.
 
 #![cfg(not(feature = "python"))]
 
@@ -13,7 +14,9 @@ fn dummy_data(n: usize) -> DataSet {
     data
 }
 
-/// Ideal Gamma order statistics for `(mu, sigma)` of length `m`.
+/// Ideal Gamma order statistics for `(mu, sigma)` of length `m`. I use no
+/// sampling noise here, just the evenly-spaced quantiles, so the recovery target
+/// is exact rather than something I have to leave slack for.
 fn gamma_latent(mu: f64, sigma: f64, m: usize) -> Array1<f64> {
     let p = Array1::from_iter((0..m).map(|i| (i as f64 + 0.5) / m as f64));
     let owned = [
@@ -26,7 +29,7 @@ fn gamma_latent(mu: f64, sigma: f64, m: usize) -> Array1<f64> {
 
 #[test]
 fn hurdle_recovers_zero_fraction_and_positive_mean() {
-    // 40% structural zeros, 60% positive Gamma(mu=3, sigma=0.5).
+    // 40% structural zeros, the other 60% positive Gamma(mu=3, sigma=0.5). Two populations crammed into one column.
     let n_zero = 120;
     let n_pos = 180;
     let n = n_zero + n_pos;
@@ -46,14 +49,14 @@ fn hurdle_recovers_zero_fraction_and_positive_mean() {
     let hurdle = Hurdle::new(Box::new(Gamma::new()));
     let fit = GamlssModel::fit(&data, &y, &formula, &hurdle).unwrap();
 
-    // Fitted xi (logit link) ⇒ inverse-link the intercept.
+    // Fitted xi rides a logit link. Inverse-link the intercept to read it back on the probability scale.
     let xi_hat = fit.models["xi"].fitted_values[0];
     assert!(
         (xi_hat - true_xi).abs() < 0.05,
         "hurdle xi {xi_hat} should recover the zero fraction ≈ {true_xi}"
     );
 
-    // Positive-part mean recovered near 3 (zeros excluded from the μ fit).
+    // Positive-part mean lands near 3. The zeros never touch the μ fit. That's the whole point of a hurdle.
     let mu_hat = fit.models["mu"].fitted_values[0];
     assert!(
         (mu_hat - 3.0).abs() < 0.5,

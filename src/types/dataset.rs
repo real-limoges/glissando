@@ -1,6 +1,6 @@
-//! `DataSet` — a named collection of equal-length numeric columns. The
-//! length-invariant is enforced at insertion time so downstream code can rely
-//! on `n_obs()` reflecting every column uniformly.
+//! `DataSet`: a named collection of equal-length numeric columns. The length
+//! invariant is enforced at insertion time, so downstream code can trust
+//! `n_obs()` to reflect every column uniformly.
 
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -8,8 +8,8 @@ use std::ops::Deref;
 
 use crate::error::GamlssError;
 
-/// A dataset of named columns. All columns are guaranteed to have the same length;
-/// this invariant is enforced by [`DataSet::insert_column`] and the [`TryFrom`] impl.
+/// A dataset of named columns. Every column is guaranteed the same length; that
+/// invariant is enforced by [`DataSet::insert_column`] and the [`TryFrom`] impl.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -46,9 +46,9 @@ impl DataSet {
     ///
     /// # Panics
     ///
-    /// Panics if `values` has a different length than existing columns. Mismatched
-    /// column lengths are a programmer error; use [`DataSet::try_insert_column`] for
-    /// fallible insertion of runtime-unsafe data.
+    /// Panics if `values` has a different length than the existing columns. A length
+    /// mismatch here is a programmer error; reach for [`DataSet::try_insert_column`]
+    /// when you are inserting runtime-unsafe data and want a fallible path.
     ///
     /// # Examples
     ///

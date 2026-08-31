@@ -69,18 +69,18 @@ impl Distribution for Binomial {
         // the classic `u_η = y − n·μ` and `w_η = n·μ(1−μ)`. Returned unfloored.
         //
         // **The guard is on the denominator, not on μ.** This family used to clamp
-        // `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]` with `MIN_POSITIVE = 1e-10`, which the
-        // folded form could afford because the division cancelled. It cannot survive
-        // the un-fold: `chain_to_eta` multiplies by a `mu_eta` computed from η
+        // `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]` with `MIN_POSITIVE = 1e-10`. The folded
+        // form could afford that because the division canceled. The un-fold can't
+        // survive it. `chain_to_eta` multiplies by a `mu_eta` computed from η
         // independently of anything clamped here, so a clamp that binds breaks the
         // telescoping. Under a probit link at η = −30 (the link's own clamp)
         // μ = Φ(η) ≈ 5e-198, and clamping the denominator up to 1e-10 would collapse
-        // the score by ~190 orders of magnitude, which is exactly the regime the
+        // the score by ~190 orders of magnitude. That's exactly the regime the
         // probit and cloglog acceptance gates exercise. `DENOM_FLOOR` sits far below
-        // anything any link produces, so it only prevents a division by exactly zero.
+        // anything any link produces, so all it does is stop a division by exactly zero.
         //
-        // Note also that `1.0 - MIN_POSITIVE` was never the upper clamp its name
-        // suggests once μ approached 1.
+        // And `1.0 - MIN_POSITIVE` was never the upper clamp its name suggests once μ
+        // got close to 1.
         let mu = require(self, params, "mu")?;
         let n = self.trials(y.len());
 
@@ -183,9 +183,9 @@ impl Distribution for Binomial {
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => {
-                // y is counts; pool across observations as Σy/Σn so heterogeneous
-                // per-observation trial counts don't bias the seed (`n_trials[0]`
-                // alone is wrong when trials vary by row).
+                // y is counts. Pool across observations as Σy/Σn so heterogeneous
+                // per-observation trial counts don't bias the seed. `n_trials[0]`
+                // alone is wrong when trials vary by row.
                 let total_y: f64 = y.sum();
                 let total_n: f64 = if self.n_trials.len() == 1 {
                     self.n_trials[0] * y.len() as f64
@@ -304,8 +304,8 @@ mod tests {
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
         // The Altitude #1 gate. μ folded the *logit* chain rule into `u = y − n·μ`,
-        // so under probit the score was wrong by a factor of `φ(η)/(μ(1−μ))`. These
-        // are the links behind two of the four `link_mle_oracle` shortfalls.
+        // so under probit the score came out wrong by a factor of `φ(η)/(μ(1−μ))`.
+        // These are the links behind two of the four `link_mle_oracle` shortfalls.
         //
         // This replaces `binomial_score_is_wrong_under_a_probit_link_today`, the
         // Phase 0 characterization test that asserted the opposite.
@@ -319,8 +319,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_mu() {
-        // Un-folding introduces the `1/(μ(1−μ))` that `u = y − n·μ` cancelled. The
-        // fixture spans both boundaries, including μ exactly 0 and exactly 1, which
+        // Un-folding brings back the `1/(μ(1−μ))` that `u = y − n·μ` canceled. The
+        // fixture spans both boundaries, μ exactly 0 and exactly 1 included, which
         // the old `MIN_POSITIVE` clamp used to mask.
         let bin = Binomial::new(10);
         let y = array![0.0, 10.0, 5.0, 3.0];
@@ -338,14 +338,14 @@ mod tests {
 
     #[test]
     fn probit_score_telescopes_in_the_tail() {
-        // The reason the guard is on the denominator rather than on μ. Deep in the
+        // This is why the guard is on the denominator rather than on μ. Deep in the
         // probit tail the natural score `(y − nμ)/(μ(1−μ))` is enormous and
-        // `mu_eta = φ(η)` is minuscule; the product has to telescope back to
+        // `mu_eta = φ(η)` is minuscule, and the product has to telescope back to
         // `y·φ(η)/Φ(η)`, the inverse Mills ratio times y. The old `MIN_POSITIVE`
         // clamp on μ would floor the denominator at 1e-10 and collapse the result by
-        // orders of magnitude, which is what kept the probit acceptance gate red.
+        // orders of magnitude. That's what kept the probit acceptance gate red.
         //
-        // η stops at −6 because of the *test helper*, not the fitter:
+        // η stops at −6 because of the *test helper*, not the fitter.
         // `ParamLinks` reconstructs η as `link(μ)`, and `ProbitLink::link` clamps μ
         // at `MIN_POSITIVE = 1e-10` (so η saturates around −6.36). In production η is
         // the primary quantity and μ is `inv_link(η)`, so no such round trip happens
@@ -373,7 +373,7 @@ mod tests {
                 expected
             );
             // The folded (buggy) value was `y − n·μ ≈ 4`. The correct one is the
-            // inverse Mills ratio times y, which grows without bound down the tail.
+            // inverse Mills ratio times y, and it grows without bound down the tail.
             assert!(
                 u[0] > 4.0 * 1.5,
                 "η={eta}: score {} is suspiciously close to the folded `y − nμ`",

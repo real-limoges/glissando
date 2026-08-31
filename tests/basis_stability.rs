@@ -1,11 +1,11 @@
-// Regression tests for fit-time basis resolution: the P-spline knot grid, the
-// tensor-product marginal ranges, and random-effect level maps are resolved
+// Regression tests for fit-time basis resolution. The P-spline knot grid, the
+// tensor-product marginal ranges, and random-effect level maps all get resolved
 // once from TRAINING data, stored on the term, and replayed at predict time.
 //
-// Before this was fixed, `assemble_model_matrices` silently re-derived the
-// knot grid / level map from whatever data was passed to `predict`, so a
-// prediction on a grid, a subset, or reordered groups was evaluated on a
-// DIFFERENT basis than the one the coefficients were fitted on.
+// Before the fix, `assemble_model_matrices` quietly re-derived the knot grid /
+// level map from whatever data got passed to `predict`. So a prediction on a
+// grid, a subset, or reordered groups was evaluated on a DIFFERENT basis than
+// the one the coefficients were fitted on. Nasty.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -56,7 +56,7 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     let full_pred = model.predict(&data, &family).unwrap();
 
     // Interior subset: x in the middle third only. Same rows, so the fitted
-    // values must agree exactly with the corresponding full-data entries.
+    // values have to agree exactly with the matching full-data entries.
     let idx: Vec<usize> = (n / 3..2 * n / 3).collect();
     let mut sub = DataSet::new();
     sub.insert_column("x", Array1::from_vec(idx.iter().map(|&i| x[i]).collect()));
@@ -73,9 +73,9 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     }
 }
 
-/// Random-effect predictions must map groups by the level list resolved at fit
-/// time, not by first-occurrence order in the prediction data. Present the
-/// groups in reverse order at predict time and check per-row equality.
+/// Random-effect predictions have to map groups by the level list resolved at
+/// fit time, not by first-occurrence order in the prediction data. So I present
+/// the groups in reverse order at predict time and check per-row equality.
 #[test]
 fn random_effect_levels_are_stable_under_reordering() {
     let mut rng = Generator::new(99);
@@ -174,8 +174,8 @@ fn tensor_with_intercept_recovers_main_effects() {
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
     let pred = model.predict(&data, &family).unwrap();
 
-    // R² of the fit against the noiseless truth must be high; the interaction-
-    // only construction achieved essentially zero.
+    // R² against the noiseless truth has to be high; the interaction-only
+    // construction managed essentially zero.
     let truth: Vec<f64> = x1.iter().zip(x2.iter()).map(|(&a, &b)| f(a, b)).collect();
     let mean_t = truth.iter().sum::<f64>() / n as f64;
     let ss_tot: f64 = truth.iter().map(|t| (t - mean_t) * (t - mean_t)).sum();

@@ -4,14 +4,14 @@ use ndarray::{Array1, Array2};
 
 /// Householder-built orthonormal basis (k × (k−1)) of the null-space of `1_k`.
 ///
-/// Used as a sum-to-zero reparameterization for smooth bases that exhibit the
+/// I use this as a sum-to-zero reparameterization for smooth bases with the
 /// partition-of-unity property (P-spline: `B · 1_k = 1_n`). When an [`Intercept`]
 /// term sits alongside such a smooth on the same parameter, the design matrix
-/// `[1 | B]` is rank-deficient because `1_n ∈ col(B)`; replacing `B` with `B · Z`
-/// and the penalty `S` with `Z' · S · Z` removes the constant direction from the
-/// smooth and restores identifiability.
+/// `[1 | B]` is rank-deficient because `1_n ∈ col(B)`. Replacing `B` with `B · Z`
+/// and the penalty `S` with `Z' · S · Z` strips the constant direction out of the
+/// smooth and hands back identifiability.
 ///
-/// `Z` depends only on `k`, not on training data, so prediction reapplies the
+/// `Z` depends only on `k`, never on the training data, so prediction reapplies the
 /// same constraint deterministically.
 ///
 /// [`Intercept`]: crate::Term::Intercept
@@ -21,8 +21,8 @@ pub(crate) fn sum_to_zero_basis(k: usize) -> Array2<f64> {
     // Householder reflector that maps 1_k onto −√k · e_1:
     //   v = 1_k + √k · e_1   (sign chosen so v_0 = 1 + √k never vanishes),
     //   H = I − 2·v·v'/(v'·v).
-    // The remaining columns H[:, 1..] span the orthogonal complement of 1_k and
-    // are orthonormal because H is orthogonal.
+    // The remaining columns H[:, 1..] span the orthogonal complement of 1_k, and
+    // they come out orthonormal for free because H is orthogonal.
     let sqrt_k = (k as f64).sqrt();
     let mut v = Array1::ones(k);
     v[0] += sqrt_k;
@@ -53,7 +53,7 @@ mod tests {
 
     #[test]
     fn sum_to_zero_basis_is_orthogonal_to_ones() {
-        // Z' · 1_k = 0 — every column sums to zero.
+        // Z' · 1_k = 0: every column sums to zero.
         for k in [2usize, 3, 5, 8, 12] {
             let z = sum_to_zero_basis(k);
             for j in 0..z.ncols() {

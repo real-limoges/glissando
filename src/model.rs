@@ -12,30 +12,32 @@ use ndarray::{Array1, Array2};
 use std::collections::HashMap;
 use std::fmt;
 
-/// A fitted GAMLSS model containing per-parameter results and convergence diagnostics.
+/// A fitted GAMLSS model: the per-parameter results plus the convergence diagnostics that say how it got there.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamlssModel {
     /// Fitted results keyed by parameter name, in `family.parameters()` order.
-    /// `IndexMap` preserves insertion order so iteration over `models` and
-    /// `predict_samples` is deterministic.
+    /// It's an `IndexMap` on purpose: insertion order is preserved, so iterating
+    /// `models` (and `predict_samples`) comes out the same every run instead of in
+    /// a `HashMap`'s roll-of-the-dice order.
     pub models: IndexMap<String, fitting::FittedParameter>,
     /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
     /// The family this model was fit (or deserialized) against, captured via
-    /// `family.descriptor()`. Used by [`check_family_identity`] to reject a
-    /// `family` argument at predict time that doesn't match — `None` for
-    /// models fit/deserialized before this field existed, in which case the
-    /// check is skipped (matches the [`FittedParameter::link`] backward-compat
-    /// precedent).
+    /// `family.descriptor()`. `check_family_identity` uses it to reject a
+    /// mismatched `family` argument at predict time. It's `None` for models fit or
+    /// deserialized before this field existed; those carry nothing to check
+    /// against, so the check just skips, the same way `FittedParameter::link`
+    /// handles its own missing-field case.
     #[cfg_attr(feature = "serde", serde(default))]
     pub family: Option<distributions::FamilyDescriptor>,
 }
 
-/// Borrow an owned parameter map (as returned by [`GamlssModel::predict`]) into
-/// the `&str → &Array1` view the [`Distribution`] trait methods expect. The
-/// counterpart to [`diagnostics::fitted_params_view`](crate::diagnostics) for the
-/// post-prediction case, where the parameters are already owned arrays.
+/// Borrow an owned parameter map (the kind [`GamlssModel::predict`] hands back)
+/// down into the `&str → &Array1` view the [`Distribution`] trait methods want.
+/// This is the post-prediction twin of
+/// [`diagnostics::fitted_params_view`](crate::diagnostics), for when the
+/// parameters are already owned arrays rather than borrowed from the fit.
 fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Array1<f64>> {
     params
         .iter()
@@ -43,11 +45,11 @@ fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Ar
         .collect()
 }
 
-/// Reconstruct the link used at fit time for a parameter: a persisted override
-/// (see [`FitConfig::links`](crate::FitConfig::links)) takes precedence over the
-/// family's `default_link`, so a model fitted with a non-default link predicts
-/// through that same link. `None`-link parameters (the common case, and all
-/// pre-feature serialized models) fall back to the family default.
+/// Rebuild the link a parameter was fit with. A persisted override (see
+/// [`FitConfig::links`](crate::FitConfig::links)) wins over the family's
+/// `default_link`, so a model fit through a non-default link predicts through that
+/// very same link, no surprises. A `None` link (the common case, and every
+/// pre-feature serialized model) just falls back to the family default.
 fn resolve_link<D: Distribution + ?Sized>(
     family: &D,
     param_name: &str,
@@ -59,10 +61,11 @@ fn resolve_link<D: Distribution + ?Sized>(
     }
 }
 
-/// Guard: the rebuilt design matrix must match the stored coefficient vector.
-/// A mismatch means the model was serialized under an older basis construction
-/// (e.g. a pre-fix tensor-product or point-constrained CR smooth whose column
-/// count changed); returning a typed error beats the shape panic `dot` raises.
+/// Guard: the rebuilt design matrix has to match the stored coefficient vector.
+/// If it doesn't, the model was serialized under an older basis construction (a
+/// pre-fix tensor-product or point-constrained CR smooth whose column count has
+/// since changed). Catching that here and returning a typed error is a lot kinder
+/// than the raw shape panic `dot` would throw a line later.
 fn check_design_width(param: &str, n_cols: usize, n_coefs: usize) -> Result<(), GamlssError> {
     if n_cols != n_coefs {
         return Err(GamlssError::Shape(format!(
@@ -75,10 +78,10 @@ fn check_design_width(param: &str, n_cols: usize, n_coefs: usize) -> Result<(), 
     Ok(())
 }
 
-/// Guard: `family` must be the same family this model was fit (or
-/// deserialized) against — see [`GamlssError::FamilyMismatch`]. A no-op when
-/// `model_family` is `None` (models fit/deserialized before this field existed
-/// carry no descriptor to check against).
+/// Guard: `family` had better be the same family this model was fit (or
+/// deserialized) against; see [`GamlssError::FamilyMismatch`]. It's a no-op when
+/// `model_family` is `None`, since a model fit or deserialized before this field
+/// existed carries no descriptor to check against in the first place.
 fn check_family_identity<D: Distribution + ?Sized>(
     model_family: &Option<distributions::FamilyDescriptor>,
     family: &D,
@@ -97,11 +100,12 @@ fn check_family_identity<D: Distribution + ?Sized>(
 }
 
 /// Guard: Student-t's ν-floor boundary-freeze projection (see
-/// `distributions::student_t::theta_derivatives`) sums the score across every row
-/// pinned at `NU_FLOOR` into one scalar, which is only the exact KKT test
-/// when `eta_nu` is intercept-only (one shared ν coefficient). A covariate or
-/// smooth `nu` formula would silently bias the fitted ν coefficients instead
-/// of erroring, so reject it here rather than fit it wrong.
+/// `distributions::student_t::theta_derivatives`) collapses the score across every
+/// row pinned at `NU_FLOOR` into a single scalar. That is the exact KKT test only
+/// when `eta_nu` is intercept-only (one shared ν coefficient). Hand it a covariate
+/// or smooth `nu` formula and it wouldn't error, it would quietly bias the fitted ν
+/// coefficients, which is worse. So we reject it up front rather than fit it wrong
+/// and say nothing.
 fn check_student_t_nu_formula<D: Distribution + ?Sized>(
     formula: &Formula,
     family: &D,
@@ -132,12 +136,12 @@ impl GamlssModel {
     ///
     /// - [`GamlssError::EmptyData`] / [`GamlssError::NonFiniteValues`] /
     ///   [`GamlssError::MissingVariable`] / [`GamlssError::MissingFormula`] /
-    ///   [`GamlssError::Input`] — input validation failures
-    /// - [`GamlssError::Convergence`] — RS outer loop did not converge in
+    ///   [`GamlssError::Input`]: input validation failures
+    /// - [`GamlssError::Convergence`]: RS outer loop did not converge in
     ///   `FitConfig::max_iterations`
-    /// - [`GamlssError::Linalg`] — singular `X'WX + Σλ·S`, Cholesky failure, etc.
-    /// - [`GamlssError::Optimization`] — L-BFGS smoothing-parameter search failed
-    /// - [`GamlssError::UnknownParameter`] — formula names a parameter the family
+    /// - [`GamlssError::Linalg`]: singular `X'WX + Σλ·S`, Cholesky failure, etc.
+    /// - [`GamlssError::Optimization`]: L-BFGS smoothing-parameter search failed
+    /// - [`GamlssError::UnknownParameter`]: formula names a parameter the family
     ///   does not expose
     pub fn fit<D: Distribution + ?Sized>(
         data: &DataSet,
@@ -194,10 +198,11 @@ impl GamlssModel {
         family: &D,
         config: FitConfig,
     ) -> Result<Self, GamlssError> {
-        // DATA-4: with `NaAction::DropRows` (the default), drop rows missing a
-        // value in `y` or a referenced column upstream of validation and assembly,
-        // so the design, working response, and weights all share one row mask.
-        // `NaAction::Fail` skips the drop and lets `validate_inputs` reject.
+        // DATA-4: under `NaAction::DropRows` (the default) we drop any row missing a
+        // value in `y` or a referenced column here, before validation and assembly,
+        // so the design, working response, and weights all wind up on one shared row
+        // mask. `NaAction::Fail` skips the drop entirely and lets `validate_inputs`
+        // reject the missing values instead.
         let dropped;
         let (data, y, weights) = if config.na_action == fitting::NaAction::DropRows {
             dropped = crate::preprocessing::drop_incomplete_rows(y, data, formula, weights)?;
@@ -285,9 +290,10 @@ impl GamlssModel {
             })
     }
 
-    /// Serializes the model to JSON, bundling a [`FamilyDescriptor`] so the family
-    /// — including stateful families and structural wrappers — can be rebuilt on
-    /// load (SER-1).
+    /// Serializes the model to JSON, and tucks a [`FamilyDescriptor`] in alongside
+    /// it so the family can be rebuilt on load (SER-1). That descriptor is what lets
+    /// stateful families and the structural wrappers come back intact, not just the
+    /// simple named ones.
     ///
     /// # Errors
     ///
@@ -346,13 +352,13 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// - [`GamlssError::Input`] — `new_data` has no columns
-    /// - [`GamlssError::MissingVariable`] — formula references a column absent
+    /// - [`GamlssError::Input`]: `new_data` has no columns
+    /// - [`GamlssError::MissingVariable`]: formula references a column absent
     ///   from `new_data`
-    /// - [`GamlssError::UnknownParameter`] — fitted model contains a parameter
+    /// - [`GamlssError::UnknownParameter`]: fitted model contains a parameter
     ///   the family does not expose (should be unreachable on a model produced
     ///   by `fit`)
-    /// - [`GamlssError::Shape`] — design-matrix assembly produced an incompatible
+    /// - [`GamlssError::Shape`]: design-matrix assembly produced an incompatible
     ///   shape (also unreachable on a well-formed model)
     pub fn predict<D: Distribution + ?Sized>(
         &self,
@@ -372,8 +378,8 @@ impl GamlssModel {
                 design.x.0.ncols(),
                 fitted_param.coefficients.0.len(),
             )?;
-            // η = X·β + offset (DATA-3); offset is zeros unless the formula carries
-            // a Term::Offset, in which case `new_data` must supply its column.
+            // η = X·β + offset (DATA-3). The offset is all zeros unless the formula
+            // carries a Term::Offset; when it does, `new_data` has to supply its column.
             let eta = design.x.0.dot(&fitted_param.coefficients.0) + &design.offset;
             let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
@@ -411,8 +417,8 @@ impl GamlssModel {
                 x_matrix.0.ncols(),
                 fitted_param.coefficients.0.len(),
             )?;
-            // η = X·β + offset; the offset is a fixed shift, so SEs (which depend
-            // only on the random β) are unchanged (DATA-3).
+            // η = X·β + offset. The offset is just a fixed shift, so it leaves the
+            // SEs alone; those ride only on the random β (DATA-3).
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0) + &design.offset;
 
             let v = &fitted_param.covariance.0;
@@ -462,9 +468,9 @@ impl GamlssModel {
         let n_obs = params_map["mu"].len();
         let r = family.n_categories();
 
-        // Re-assemble the params HashMap in the form Ocat's own threshold
-        // reconstruction needs, then reuse it rather than re-deriving the
-        // cumulative-increment formula here.
+        // Put the params HashMap back into the shape Ocat's own threshold
+        // reconstruction wants, then just reuse that instead of re-deriving the
+        // cumulative-increment formula a second time here.
         let n_thresh = r - 1;
         let params_view = borrow_param_view(&params_map);
         let eta_mu = &params_map["mu"];
@@ -485,9 +491,9 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    /// - [`GamlssError::UnknownParameter`]: family requires a parameter not
     ///   present in `self.models`
-    /// - [`GamlssError::Input`] — family's variance or log-density evaluation
+    /// - [`GamlssError::Input`]: family's variance or log-density evaluation
     ///   rejects the parameter values (e.g. invalid support)
     pub fn diagnostics<D: Distribution + ?Sized>(
         &self,
@@ -506,9 +512,9 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    /// - [`GamlssError::UnknownParameter`]: family requires a parameter not
     ///   present in `self.models`
-    /// - [`GamlssError::Input`] — family's log-density evaluation rejects the
+    /// - [`GamlssError::Input`]: family's log-density evaluation rejects the
     ///   parameter values (e.g. invalid support)
     pub fn gaic<D: Distribution + ?Sized>(
         &self,
@@ -525,7 +531,7 @@ impl GamlssModel {
     /// Randomized normalized quantile residuals (gamlss's default residual).
     ///
     /// If the model is correct these are standard normal regardless of the
-    /// family — the basis for a single Q-Q/worm plot across distributions. For
+    /// family: the basis for a single Q-Q/worm plot across distributions. For
     /// discrete families the construction is randomized; pass `seed = Some(s)`
     /// for reproducible residuals (`seed` is ignored for continuous families).
     /// Evaluate against the same response `y` the model was fit on. See
@@ -533,9 +539,9 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// - [`GamlssError::UnknownParameter`] — family requires a parameter not
+    /// - [`GamlssError::UnknownParameter`]: family requires a parameter not
     ///   present in `self.models`
-    /// - [`GamlssError::Input`] — family's `cdf` rejects the parameter values
+    /// - [`GamlssError::Input`]: family's `cdf` rejects the parameter values
     pub fn quantile_residuals<D: Distribution + ?Sized>(
         &self,
         family: &D,
@@ -546,7 +552,7 @@ impl GamlssModel {
         fitting::diagnostics::quantile_residuals(family, y, &params, seed)
     }
 
-    /// Response-scale centile curves for `new_data` — the signature GAMLSS
+    /// Response-scale centile curves for `new_data`: the signature GAMLSS
     /// deliverable (growth charts, reference ranges).
     ///
     /// A centile at level `α` is `C_α(x) = Q(α | θ̂(x))`: predict every
@@ -558,7 +564,7 @@ impl GamlssModel {
     ///
     /// # Errors
     ///
-    /// - [`GamlssError::Input`] — `new_data` has no columns
+    /// - [`GamlssError::Input`]: `new_data` has no columns
     /// - any error from prediction or the family's `quantile`
     pub fn centiles<D: Distribution + ?Sized>(
         &self,
@@ -705,9 +711,10 @@ pub struct PredictionResult {
     pub se_eta: Array1<f64>,
 }
 
-/// R-style summary: convergence status, per-parameter EDF, λ values, and the
-/// head of each coefficient vector. The full coefficient/covariance state is
-/// still available on the `models` field.
+/// An R-style summary at a glance: convergence status, per-parameter EDF, λ
+/// values, and the first few entries of each coefficient vector. This is just the
+/// readable digest; the full coefficient and covariance state is always sitting on
+/// the `models` field if you need it.
 impl fmt::Display for GamlssModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(

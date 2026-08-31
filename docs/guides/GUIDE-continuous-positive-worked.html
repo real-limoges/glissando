@@ -80,7 +80,7 @@
 <div class="wrap">
   <p class="crumb"><a href="../planning/ROADMAP.html">← roadmap</a> · workstream <b>C · Distribution families</b> · <a href="GUIDE-continuous-and-count-families.html">catalog guide</a></p>
   <h1>glissando <span class="sub">· continuous-positive, worked end-to-end</span></h1>
-  <p class="lede">Implements <span class="id">DIST-2</span> by writing <b style="color:#fff">one family in full, Weibull (WEI)</b>: every <code>Distribution</code> method, the registration across all four surfaces, and the tests, as copy-paste Rust. The other DIST-2 families (Lognormal, Exponential, Inverse Gaussian, Generalized Gamma, Pareto) are then a <a href="#catalog">short delta table</a> off this template. The <a href="GUIDE-continuous-and-count-families.html">catalog guide</a> is the map of <em>what</em> to build; this is the <em>how</em>, in code.</p>
+  <p class="lede">Implements <span class="id">DIST-2</span> the honest way: by writing <b style="color:#fff">one family in full, Weibull (WEI)</b>, every <code>Distribution</code> method, the registration across all four surfaces, and the tests, as copy-paste Rust. The other DIST-2 families (Lognormal, Exponential, Inverse Gaussian, Generalized Gamma, Pareto) are then a <a href="#catalog">short delta table</a> off this template. The <a href="GUIDE-continuous-and-count-families.html">catalog guide</a> is the map of <em>what</em> to build; this is the <em>how</em>, in code.</p>
   <p class="lede">The closest in-tree template is <code>src/distributions/gamma.rs</code>, with the same two parameters (<code>μ</code>, <code>σ</code>), both log-linked, with a closed-form CDF and quantile. Read it once; this guide reuses its exact shape so a diff against it is small.</p>
 
   <h2 class="part">1 · The Weibull parameterization</h2>
@@ -156,7 +156,7 @@ impl Weibull {
       <li><b>Do not fold the link in.</b> §1 derives the η-scale columns, and it is tempting to return those; a family that does will double-chain once <code>eta_derivatives_via_chain!</code> multiplies by <code>mu_eta</code>. The η forms are what you check your work against, not what you return.</li>
       <li><b>Do not floor.</b> <code>MIN_WEIGHT</code> is applied once, downstream, after the multiply, because <code>max(mu_eta²·i_θ, F) ≠ mu_eta²·max(i_θ, F)</code>. Flooring here can be wrong by many orders of magnitude for a parameter whose <code>mu_eta</code> is large.</li>
     </ul>
-    <p>Un-folding reintroduces the <code>1/μ</code> and <code>1/σ</code> that the η forms cancelled, so guard <b>each denominator at the power it is actually used at</b>: squaring an already-guarded reciprocal overflows to infinity for a parameter the log link can still underflow to, and <code>inf · 0</code> is NaN. Guard the denominator, never the parameter, since the caller's <code>mu_eta</code> is computed from η independently of anything you clamp.</p>
+    <p>Un-folding reintroduces the <code>1/μ</code> and <code>1/σ</code> that the η forms canceled, so guard <b>each denominator at the power it is actually used at</b>: squaring an already-guarded reciprocal overflows to infinity for a parameter the log link can still underflow to, and <code>inf · 0</code> is NaN. Guard the denominator, never the parameter, since the caller's <code>mu_eta</code> is computed from η independently of anything you clamp.</p>
     <pre><code>    fn derivatives(
         &amp;self,
         y: &amp;Array1&lt;f64&gt;,
@@ -393,7 +393,7 @@ mod tests {
         check_eta_score_via_finite_diff(&amp;Weibull, &amp;y, &amp;owned, "sigma", &amp;InverseLink, 1e-5);
     }
 
-    /// Un-folding introduces `1/μ` and `1/σ` that the η forms cancelled, so the
+    /// Un-folding introduces `1/μ` and `1/σ` that the η forms canceled, so the
     /// saturated tail became reachable arithmetic no other fixture covers.
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {

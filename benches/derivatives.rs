@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::hint::black_box;
 
 fn generate_test_data(n: usize) -> (Array1<f64>, Array1<f64>, Array1<f64>, Array1<f64>) {
-    // Generate realistic parameter values
+    // Params in a realistic range, nothing exotic.
     let y: Array1<f64> = (0..n).map(|i| (i as f64 % 10.0) + 1.0).collect();
     let mu: Array1<f64> = Array1::from_elem(n, 5.0);
     let sigma: Array1<f64> = Array1::from_elem(n, 1.0);
@@ -71,7 +71,7 @@ fn bench_gamma_derivatives(c: &mut Criterion) {
 
     for n in [100, 1_000, 10_000].iter() {
         let (y, mu, sigma, _) = generate_test_data(*n);
-        // Gamma needs positive y values
+        // Gamma wants y > 0, so floor it.
         let y_positive = y.mapv(|v| v.max(0.1));
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
@@ -107,7 +107,7 @@ fn bench_beta_derivatives(c: &mut Criterion) {
     let mut group = c.benchmark_group("beta_derivatives");
 
     for n in [100, 1_000, 10_000].iter() {
-        // Beta needs y in (0, 1)
+        // Beta only lives on (0, 1), so keep y in there.
         let y: Array1<f64> = (0..*n)
             .map(|i| 0.1 + 0.8 * (i as f64 / *n as f64))
             .collect();
@@ -129,10 +129,10 @@ fn bench_special_functions(c: &mut Criterion) {
     let mut group = c.benchmark_group("special_functions");
 
     for n in [100, 1_000, 10_000].iter() {
-        // Typical values for nu (degrees of freedom) in StudentT
+        // Typical nu (degrees of freedom) for StudentT.
         let x: Array1<f64> = (0..*n).map(|i| 1.0 + (i as f64 % 50.0)).collect();
 
-        // Benchmark scalar digamma in a loop (old approach)
+        // Scalar digamma in a loop. The old way.
         group.bench_with_input(BenchmarkId::new("digamma_scalar_loop", n), n, |b, _| {
             b.iter(|| {
                 let result: Vec<f64> = x.iter().map(|&xi| statrs_digamma(xi)).collect();
@@ -140,7 +140,7 @@ fn bench_special_functions(c: &mut Criterion) {
             })
         });
 
-        // Benchmark batch digamma (new approach using mapv)
+        // Batch digamma via mapv. The new way.
         group.bench_with_input(BenchmarkId::new("digamma_batch", n), n, |b, _| {
             b.iter(|| {
                 let result = x.mapv(statrs_digamma);
@@ -155,10 +155,10 @@ fn bench_full_model_fit(c: &mut Criterion) {
     use glissando::{DataSet, Formula, GamlssModel, Term};
 
     let mut group = c.benchmark_group("full_model_fit");
-    group.sample_size(20); // Fewer samples for slower benchmarks
+    group.sample_size(20); // Fewer samples; these fits are slow.
 
     for n in [100, 500].iter() {
-        // Generate synthetic data
+        // Synthetic data.
         let x: Vec<f64> = (0..*n).map(|i| i as f64 / *n as f64).collect();
         let y_vec: Vec<f64> = x.iter().map(|&xi| 5.0 + 2.0 * xi + 0.1 * xi * xi).collect();
 
@@ -166,7 +166,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
         let mut data = DataSet::new();
         data.insert_column("x", Array1::from_vec(x));
 
-        // Poisson with linear predictor
+        // Poisson, linear predictor.
         group.bench_with_input(BenchmarkId::new("poisson_linear", n), n, |b, _| {
             b.iter(|| {
                 let formula = Formula::new().with_terms(
@@ -182,7 +182,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
             })
         });
 
-        // Gaussian with two parameters
+        // Gaussian, both parameters modeled.
         group.bench_with_input(BenchmarkId::new("gaussian_linear", n), n, |b, _| {
             b.iter(|| {
                 let formula = Formula::new()

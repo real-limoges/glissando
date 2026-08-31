@@ -1,17 +1,17 @@
-//! Phase 0 ocat spike — Candidate A: three independent Binomial(1)/logit models.
+//! Phase 0 ocat spike, Candidate A: three independent Binomial(1)/logit models.
 //!
-//! Fits three cumulative threshold models on train data:
+//! I fit three cumulative threshold models on the train data:
 //!   model k: y_k = (y <= k), Binomial(n_trials=1), logit link, formula mu ~ s(x1)+s(x2)
 //!
-//! Reconstructs the (n × 4) category-probability matrix on the held-out test set:
+//! Then I rebuild the (n × 4) category-probability matrix on the held-out test set:
 //!   P(y=1) = μ₁
-//!   P(y=2) = μ₂ - μ₁   (clipped to [0, 1] before renormalising)
+//!   P(y=2) = μ₂ - μ₁   (clipped to [0, 1] before renormalizing)
 //!   P(y=3) = μ₃ - μ₂
 //!   P(y=4) = 1 - μ₃
 //!
-//! Also counts "monotonicity violations": rows where the three independent
-//! cumulative fits are not monotone increasing (μ₁ ≤ μ₂ ≤ μ₃ is NOT guaranteed
-//! because each model is fit independently).
+//! I also count "monotonicity violations": rows where the three independent
+//! cumulative fits are not monotone increasing (μ₁ ≤ μ₂ ≤ μ₃ is NOT guaranteed,
+//! since each model is fit on its own).
 //!
 //! Usage:
 //!   cargo run -p glissando_benchmark --bin spike_ocat -- \
@@ -34,8 +34,8 @@ struct SpikeResult {
     /// (n_test × 4) category probabilities; each row sums to 1.
     probs: Vec<Vec<f64>>,
     /// Rows where the three independent cumulative fits are not monotone
-    /// (i.e., μ₁ > μ₂ or μ₂ > μ₃), producing negative raw probabilities
-    /// before the clip-and-renormalise step.
+    /// (i.e., μ₁ > μ₂ or μ₂ > μ₃), which produces negative raw probabilities
+    /// before the clip-and-renormalize step.
     n_violations: usize,
     n_obs: usize,
     models_converged: [bool; 3],
@@ -65,10 +65,10 @@ fn extract_column(df: &DataFrame, name: &str) -> Array1<f64> {
 }
 
 /// P-spline formula mu ~ intercept + s(x1) + s(x2).
-/// The explicit intercept matches mgcv's implicit global mean term and is
-/// required for correct conditioning of the penalised WLS system — without
-/// it the constant component of the two smooths goes through the origin and
-/// the 20×20 X'WX block can be singular at the last diagonal entry.
+/// The explicit intercept matches mgcv's implicit global mean term, and I need
+/// it for the penalized WLS system to condition properly: without it the
+/// constant component of the two smooths runs through the origin, and the
+/// 20×20 X'WX block can go singular at the last diagonal entry.
 fn make_formula() -> Formula {
     let mk_smooth = |col: &str| {
         Term::Smooth(Smooth::PSpline1D {
@@ -175,12 +175,12 @@ fn main() {
         .zip(cum_preds[1].iter())
         .zip(cum_preds[2].iter())
     {
-        // Monotonicity violation: the three independent fits need not be ordered.
+        // Monotonicity violation: nothing forces the three independent fits into order.
         if c1 > c2 || c2 > c3 {
             n_violations += 1;
         }
 
-        // Clip each category prob to [0,1] and renormalise to a valid distribution.
+        // Clip each category prob to [0,1], then renormalize back to a real distribution.
         let p1 = c1.clamp(0.0, 1.0);
         let p2 = (c2 - c1).clamp(0.0, 1.0);
         let p3 = (c3 - c2).clamp(0.0, 1.0);

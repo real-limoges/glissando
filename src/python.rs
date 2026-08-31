@@ -1,8 +1,9 @@
 //! Python bindings via PyO3.
 //!
-//! Exposes model fitting and prediction over NumPy arrays. Term and family parsing
-//! lives in `terms::py_parse` and `distributions` so this file stays a thin
-//! marshalling layer between Python and the core Rust API.
+//! Model fitting and prediction, over NumPy arrays, from Python. The actual term
+//! and family parsing lives in `terms::py_parse` and `distributions`, which keeps
+//! this file honest as a thin marshaling layer: it moves values across the
+//! Python/Rust line and little else.
 
 use ndarray::Array1;
 use numpy::{PyArray2, PyReadonlyArray1, ToPyArray};
@@ -18,7 +19,7 @@ use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
 use crate::{DataSet, Formula, GamlssModel};
 
-// Stateless distribution wrappers — the Python class carries no data.
+// Stateless distribution wrappers. The Python class holds no data of its own.
 macro_rules! py_distribution {
     ($py_name:ident, $name:expr) => {
         #[pyclass(name = $name, frozen)]
@@ -45,7 +46,7 @@ py_distribution!(PyBCCG, "BCCG");
 py_distribution!(PyBCT, "BCT");
 py_distribution!(PyBCPE, "BCPE");
 
-/// Binomial carries `n_trials` state, so it gets a manual `pyclass`.
+/// Binomial carries `n_trials` state, so the macro won't do; it gets a hand-written `pyclass`.
 #[pyclass(name = "Binomial", frozen)]
 struct PyBinomial {
     n_trials: Vec<f64>,
@@ -59,7 +60,7 @@ impl PyBinomial {
     }
 }
 
-/// Ocat carries `n_categories` state, so it gets a manual `pyclass`.
+/// Ocat carries `n_categories` state, so it too needs a hand-written `pyclass`.
 #[pyclass(name = "Ocat", frozen)]
 struct PyOcat {
     n_categories: usize,
@@ -76,11 +77,11 @@ impl PyOcat {
     }
 }
 
-/// Censored responses (STRUCT-1): wraps `base` with per-row censoring `status`.
+/// Censored responses (STRUCT-1): wraps `base` with a per-row censoring `status`.
 ///
-/// `status` entries are `"event"`, `"left"`, `"right"`, or `"interval"`
-/// (case-insensitive). `upper` gives interval upper bounds (only read on
-/// `"interval"` rows) and defaults to zeros when omitted.
+/// `status` entries are `"event"`, `"left"`, `"right"`, or `"interval"`, and case
+/// doesn't matter. `upper` holds the interval upper bounds; it's only looked at on
+/// `"interval"` rows, and defaults to zeros when you leave it off.
 #[pyclass(name = "Censored", frozen)]
 struct PyCensored {
     descriptor: FamilyDescriptor,
@@ -120,9 +121,9 @@ impl PyCensored {
     }
 }
 
-/// Truncated responses (STRUCT-2): restricts `base` to the per-row open
-/// interval `(lower, upper)`. Use `float("-inf")` / `float("inf")` for an
-/// unbounded side.
+/// Truncated responses (STRUCT-2): pins `base` inside the per-row open interval
+/// `(lower, upper)`. Want one side unbounded? Pass `float("-inf")` or
+/// `float("inf")` for it.
 #[pyclass(name = "Truncated", frozen)]
 struct PyTruncated {
     descriptor: FamilyDescriptor,
@@ -148,8 +149,9 @@ impl PyTruncated {
     }
 }
 
-/// Hurdle / two-part models (STRUCT-3): adds a logit-linked zero atom on top
-/// of a zero-truncated `base`.
+/// Hurdle / two-part models (STRUCT-3): bolts a logit-linked zero atom on top of
+/// a zero-truncated `base`. One part decides zero-or-not, the other models the
+/// positive side.
 #[pyclass(name = "Hurdle", frozen)]
 struct PyHurdle {
     descriptor: FamilyDescriptor,
@@ -198,9 +200,10 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
-        // DATA-5: each parameter's value may be an R/mgcv-style **formula string**
-        // (`"y ~ s(x) + factor(g)"`) for ergonomics, or the structured list of term
-        // tuples. A `str` extracts cleanly; anything else is treated as a term list.
+        // DATA-5: a parameter's value can be an R/mgcv-style **formula string**
+        // (`"y ~ s(x) + factor(g)"`), which is the nice ergonomic form, or the
+        // structured list of term tuples. If it extracts as a `str` we take that
+        // path; anything else, we treat as a term list.
         if let Ok(formula_str) = terms.extract::<String>() {
             let (_response, parsed) = crate::parse_formula_string(&formula_str)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -214,7 +217,7 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
 }
 
 /// Parse a `{param: [term, ...]}` dict into the candidate scope for stepwise
-/// selection — each value uses the same term encoding as a formula.
+/// selection: each value uses the same term encoding as a formula.
 fn py_dict_to_scope(scope: &Bound<'_, PyDict>) -> PyResult<Vec<StepScope>> {
     let mut out = Vec::with_capacity(scope.len());
     for (param, cands) in scope.iter() {
@@ -250,8 +253,8 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
         fit_config.gd_tolerance = v.extract()?;
     }
     if let Some(v) = config.get_item("links")? {
-        // {param_name: link_name}, e.g. {"mu": "probit"}. Link names are validated
-        // against the registry at fit time, mirroring the criterion handling above.
+        // {param_name: link_name}, e.g. {"mu": "probit"}. The link names get
+        // validated against the registry at fit time, same as the criterion above.
         let links: std::collections::HashMap<String, String> = v.extract().map_err(|_| {
             PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
         })?;
@@ -272,12 +275,13 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     Ok(fit_config)
 }
 
-/// Build a [`FamilyDescriptor`] from a Python family object, recursing into
-/// `base` for the structural wrappers. Routing through the same descriptor
-/// [`GamlssModel::to_json`](crate::GamlssModel::to_json) uses for
-/// serialization means every family it can describe — including
-/// `Censored`/`Truncated`/`Hurdle` — is reachable here with no separate name
-/// roster to keep in sync.
+/// Build a [`FamilyDescriptor`] from a Python family object, recursing into `base`
+/// for the structural wrappers. It deliberately routes through the very same
+/// descriptor that [`GamlssModel::to_json`](crate::GamlssModel::to_json) uses for
+/// serialization, so every family that descriptor can describe (the
+/// `Censored`/`Truncated`/`Hurdle` wrappers included) is automatically reachable
+/// here. No second name roster to keep in sync, and no way for the two to drift
+/// apart.
 fn extract_descriptor(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyDescriptor> {
     if family_obj.extract::<PyRef<PyGaussian>>().is_ok() {
         return Ok(FamilyDescriptor::Named("Gaussian".to_string()));
@@ -436,8 +440,8 @@ impl PyGamlssModel {
     ///         `max_iterations` (int)
     ///         `tolerance` (float)
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
-    ///         `step_halving` (bool; default True) — monotone-descent line search
-    ///         `gd_tolerance` (float; default 1e-3) — global-deviance convergence tol
+    ///         `step_halving` (bool; default True): monotone-descent line search
+    ///         `gd_tolerance` (float; default 1e-3): global-deviance convergence tol
     #[staticmethod]
     #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(
@@ -507,7 +511,7 @@ impl PyGamlssModel {
 
     /// Generate `n_samples` prediction samples from the approximate posterior.
     ///
-    /// Returns `{param_name: list[array]}` — each list has `n_samples` arrays
+    /// Returns `{param_name: list[array]}`: each list has `n_samples` arrays
     /// of length n_obs.
     ///
     /// Pass an integer `seed` for reproducible samples; omit or pass `None` for
@@ -757,7 +761,7 @@ impl PyGamlssModel {
             ));
         }
         let y_array = y.as_array().to_owned();
-        // Borrow every model for the duration of the call.
+        // Hold a borrow on every model for the whole call, so none can be mutated under us.
         let borrowed: Vec<(String, PyRef<PyGamlssModel>)> = models
             .iter()
             .map(|(label, m)| Ok((label.clone(), m.borrow(py))))
@@ -781,7 +785,7 @@ impl PyGamlssModel {
         Ok(list.into())
     }
 
-    /// Greedy stepwise term selection by GAIC(`k`) — the `stepGAIC` analog.
+    /// Greedy stepwise term selection by GAIC(`k`): the `stepGAIC` analog.
     ///
     /// Parameters
     /// ----------

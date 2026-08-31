@@ -2,12 +2,12 @@
 //!
 //! Models an ordinal response y ∈ {1, …, R} via a single latent linear predictor
 //! `mu` (identity link) and R−1 estimated threshold parameters θ₁ < … < θ_{R-1}.
-//! Monotonicity is enforced by parameterising as positive increments:
+//! Monotonicity is enforced by parameterizing as positive increments:
 //!   θ₁ = δ₁  (identity link, unconstrained)
 //!   θ_k = θ_{k-1} + exp(δ_k)  for k ≥ 2  (log link, increment always > 0)
 //!
-//! The fitting loop treats each threshold as an intercept-only formula; no new
-//! machinery is needed beyond what already drives the RS update for scalar parameters.
+//! The fitting loop treats each threshold as an intercept-only formula, so I need
+//! no new machinery beyond what already drives the RS update for scalar parameters.
 //!
 //! # Supported category counts
 //! R = 2, 3, 4, 5.  R = 4 is the B3 use case.
@@ -25,10 +25,10 @@ use crate::distributions::{MAX_ETA, MIN_ETA};
 use ndarray::Array1;
 use std::collections::HashMap;
 
-/// Floor for cumulative/category probabilities. Deliberately larger (and kept
+/// Floor for cumulative/category probabilities. I keep it deliberately larger (and
 /// local to this file) than the shared `distributions::PROB_EPS` (`1e-12`):
-/// probabilities here are summed and renormalized across up to 5 categories, so
-/// a `1e-12` floor would still underflow after normalization.
+/// probabilities here are summed and renormalized across up to 5 categories, so a
+/// `1e-12` floor would still underflow after normalization.
 const MIN_PROB: f64 = 1e-10;
 
 /// Ordered-categorical GAMLSS distribution with `R` levels.
@@ -118,7 +118,7 @@ impl Ocat {
         Ok(thresholds)
     }
 
-    /// P(y = r | η_μ, θ) for r = 1 … R.  Returns a normalised Vec of length R.
+    /// P(y = r | η_μ, θ) for r = 1 … R.  Returns a normalized Vec of length R.
     ///
     /// P(y ≤ k | η_μ, θ) = logistic(θ_k − η_μ)  (proportional-odds model).
     pub fn category_probs(eta_mu: f64, thresholds: &[f64]) -> Vec<f64> {

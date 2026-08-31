@@ -36,8 +36,8 @@ impl Distribution for NegativeBinomial {
     }
 
     /// NB2 σ is the overdispersion coefficient (`Var = μ + σμ²`), not a standard
-    /// deviation: the trait default of `sd(y)` is on the wrong scale entirely
-    /// (often 10–30× too large for count data). Seed it with the method-of-moments
+    /// deviation, so the trait default of `sd(y)` is on the wrong scale entirely
+    /// (often 10–30× too large for count data). I seed it with the method-of-moments
     /// estimate `(var(y) − mean(y))/mean(y)²`, floored at 0.1 like gamlss NBI's
     /// `sigma.initial`.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
         // Un-folding introduces `1/(μ(1+σμ))` and `1/σ²` that the previous η-scale
-        // forms cancelled.
+        // forms canceled.
         let y = array![0.0, 3.0, 7.0];
         let owned = [
             ("mu", array![0.0, 1e-320, 1e-8]),

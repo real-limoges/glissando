@@ -15,7 +15,7 @@ use statrs::function::gamma::ln_gamma;
 
 // These thin wrappers delegate to the public DSL constructors (`Smooth::ps`,
 // `Term::linear`, …) so the test harness and the public API share one source of
-// truth — see `src/terms.rs`.
+// truth; see `src/terms.rs`.
 
 /// Default cubic P-spline (degree 3, second-order penalty) on `col`.
 pub fn pspline(col: &str, n_splines: usize) -> Term {
@@ -312,8 +312,9 @@ impl Generator {
 
     /// Gaussian with a genuinely nonlinear (sinusoidal) mean: `y ~ N(sin(x), σ)`
     /// on `x ∈ [0, 2π]`. A P-spline on `x` has solidly fractional effective df
-    /// here — the smooth cannot collapse to a straight line, unlike a linear-mean
-    /// dataset — which is what the fractional-df model-comparison tests need.
+    /// here: the smooth cannot collapse to a straight line the way it can on a
+    /// linear-mean dataset, which is what the fractional-df model-comparison
+    /// tests need.
     pub fn sinusoidal_gaussian(&mut self, n: usize, sigma: f64) -> (Array1<f64>, DataSet) {
         let x: Vec<f64> = (0..n)
             .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)

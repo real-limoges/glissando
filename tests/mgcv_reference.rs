@@ -1,4 +1,4 @@
-// Validates glissando fits against R/mgcv as the established reference
+// I validate glissando fits against R/mgcv as the established reference
 // implementation.
 //
 // Workflow:
@@ -17,8 +17,8 @@
 // Scale-smooth scenarios (gaulss, gammals) gate on both fitted_mu and
 // fitted_sigma.
 //
-// Student-t scenarios are validated against R/gamlss `TF()` — the like-for-like
-// oracle (same Rigby–Stasinopoulos algorithm and (μ, σ, ν) parameterization) — in
+// Student-t scenarios are validated against R/gamlss `TF()`, the like-for-like
+// oracle (same Rigby–Stasinopoulos algorithm and (μ, σ, ν) parameterization), in
 // `compare_studentt`, which gates μ, σ, ν, EDF, SE and the (unweighted)
 // log-likelihood. mgcv's `scat()` is retained only as a loose, μ-only cross-method
 // sanity check, since it folds σ and ν into internal nuisance scalars and so cannot
@@ -54,7 +54,7 @@ struct ScenarioComparison {
     smooth: bool,
     glissando: Option<FitResult>,
     mgcv: Option<FitResult>,
-    /// gamlss `TF()` fit — the like-for-like StudentT oracle (same RS algorithm and
+    /// gamlss `TF()` fit, the like-for-like StudentT oracle (same RS algorithm and
     /// (μ, σ, ν) parameterization). Present only for StudentT scenarios.
     #[serde(default)]
     gamlss: Option<FitResult>,
@@ -76,7 +76,7 @@ struct FitResult {
     log_likelihood: Option<f64>,
     #[allow(dead_code)]
     aic: Option<f64>,
-    /// Per-parameter selected λ values. Not gated — basis normalisations differ.
+    /// Per-parameter selected λ values. Not gated: basis normalizations differ.
     #[serde(default)]
     lambdas: HashMap<String, Vec<f64>>,
     /// Link-scale SEs on the training data.
@@ -162,7 +162,7 @@ const ST_MU_TOL_SMOOTH: f64 = 2e-2;
 /// check below); against gamlss's wigglier mean the pointwise gap reaches ~12%.
 const ST_MU_TOL_WEIGHTED: f64 = 0.15;
 /// log-scale σ/ν intercept coefficients (compared with a 1.0 denominator floor, so
-/// effectively absolute for these near-zero values). Linear only — see below.
+/// effectively absolute for these near-zero values). Linear only; see below.
 const ST_SCALE_COEF_TOL: f64 = 0.15;
 /// Per-observation log-likelihood gap (unweighted scenarios only).
 const ST_LOGLIK_PER_OBS_TOL: f64 = 5e-3;
@@ -174,7 +174,7 @@ const ST_SCAT_SANITY_TOL: f64 = 0.05;
 /// Validate a StudentT scenario against gamlss `TF()` (primary, tight) and mgcv
 /// `scat()` (loose, μ-only cross-method sanity). gamlss is the correct oracle: it
 /// shares glissando's RS algorithm and (μ, σ, ν) parameterization, so σ/ν/EDF/SE are
-/// directly comparable — which mgcv scat() (folding σ, ν into nuisance scalars) cannot
+/// directly comparable, which mgcv scat() (folding σ, ν into nuisance scalars) cannot
 /// provide.
 fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut Vec<String>) {
     let name = &scenario.name;
@@ -221,7 +221,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
             // and the basis matches. For smooth means gamlss reports only the
             // parametric part of its pb() basis (different from glissando's full
             // P-spline coefficients), and σ/ν are weakly identified under a flexible
-            // mean — so coefficient gating there is not meaningful.
+            // mean, so coefficient gating there is not meaningful.
             if !scenario.smooth {
                 for (label, g_coef) in &g.coefficients {
                     let Some(ref_coef) = gl.coefficients.get(label) else {
@@ -315,7 +315,7 @@ fn compare_studentt(scenario: &ScenarioComparison, g: &FitResult, failures: &mut
     }
 
     // Cross-method sanity: mgcv scat() is an independent algorithm (Wood's joint
-    // outer-BFGS). It exposes only μ, so we check fitted_mu only, loosely — it guards
+    // outer-BFGS). It exposes only μ, so I check fitted_mu only, loosely. It guards
     // against gross divergence that a same-algorithm oracle might share.
     if let Some(m) = &scenario.mgcv {
         if m.converged && g.fitted_mu.len() == m.fitted_mu.len() {
@@ -460,8 +460,8 @@ fn glissando_matches_mgcv_within_tolerance() {
                 // Mean (location) coefficients must match tightly. Scale/shape
                 // intercepts (sigma/phi/nu) legitimately differ: glissando
                 // reports the ML scale (÷n) while mgcv REML reports the
-                // unbiased scale (÷(n−p)) — the Gaussian gap is exactly
-                // 0.5·ln((n−p)/n) — and the Gamma/NB dispersion estimators
+                // unbiased scale (÷(n−p)); the Gaussian gap is exactly
+                // 0.5·ln((n−p)/n), and the Gamma/NB dispersion estimators
                 // differ in kind. Allow ~3% on the scale parameter.
                 let is_scale =
                     param.contains("sigma") || param.contains("phi") || param.contains("nu");
@@ -511,7 +511,7 @@ fn glissando_matches_mgcv_within_tolerance() {
         // log-likelihood at the fitted values (not the REML criterion).
         // gaulss and gammals use a tighter bound since both converge to the same MLE.
         // Weighted scenarios (b1/b2) are skipped: glissando uses ML (unweighted
-        // sum of ℓᵢ) while mgcv REML uses Σwᵢ·ℓᵢ — the numbers are not on the
+        // sum of ℓᵢ) while mgcv REML uses Σwᵢ·ℓᵢ, so the numbers are not on the
         // same scale and the comparison is meaningless.
         if !weighted {
             if let (Some(&g_ll), Some(&m_ll)) =
@@ -550,9 +550,9 @@ fn glissando_matches_mgcv_within_tolerance() {
 
         // ── λ report (informational) ──────────────────────────────────────
         // Not gated: glissando's `lambdas` and mgcv's `$sp` live in different
-        // basis-normalisation spaces. Print them for diagnostic purposes if
+        // basis-normalization spaces. Print them for diagnostic purposes if
         // they differ by more than an order of magnitude in the largest term.
-        // (No push to `failures` — this is advisory only.)
+        // (No push to `failures`; this is advisory only.)
         let _ = (&g.lambdas, &m.lambdas); // silence unused-field warnings
     }
 

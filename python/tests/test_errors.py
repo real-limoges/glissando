@@ -12,7 +12,7 @@ def test_unknown_family_object_rejected(synthetic_gaussian, gaussian_formula):
             data,
             synthetic_gaussian["y"],
             gaussian_formula,
-            object(),  # not a distribution
+            object(),  # deliberately not a distribution
         )
 
 
@@ -48,7 +48,7 @@ def test_missing_referenced_column_rejected():
         "sigma": [("intercept",)],
     }
     y = np.array([1.0, 2.0, 3.0])
-    data = {"x": np.array([1.0, 2.0, 3.0])}  # no "missing_col"
+    data = {"x": np.array([1.0, 2.0, 3.0])}  # note: no "missing_col" here
     with pytest.raises(RuntimeError):
         glissando.GamlssModel.fit(data, y, formula, glissando.Gaussian())
 

@@ -40,7 +40,7 @@ fn make_formula_with_smooth(n_params: usize) -> Formula {
 }
 
 fn synthetic_ocat_data(n: usize, seed: u64) -> (Array1<f64>, DataSet) {
-    // Simple deterministic "LCG" to avoid pulling in rand for tests.
+    // Dead-simple deterministic LCG. Keeps rand out of the test deps.
     let mut state = seed;
     let lcg = |s: &mut u64| -> f64 {
         *s = s
@@ -118,7 +118,7 @@ fn fit_intercept_only_r4_converges() {
 
 #[test]
 fn fit_intercept_only_r3_converges() {
-    // Generate R=3 data (y in {1,2,3}).
+    // R=3 data this time (y in {1,2,3}).
     let n = 150;
     let mut state = 7u64;
     let lcg = |s: &mut u64| -> f64 {
@@ -208,14 +208,14 @@ fn predict_class_probabilities_is_consistent_with_predict() {
     let mut new_data = DataSet::new();
     new_data.insert_column("x", Array1::zeros(10));
 
-    // predict() gives mu (η) and delta_k; predict_class_probabilities uses the same.
+    // predict() hands back mu (η) and delta_k. predict_class_probabilities runs off the same values.
     let param_preds = model.predict(&new_data, &family).expect("predict failed");
     let probs = model
         .predict_class_probabilities(&new_data, &family)
         .expect("predict_class_probabilities failed");
 
     let eta_mu = &param_preds["mu"];
-    // Manually reconstruct thresholds for obs 0 and check against probs.
+    // Rebuild the thresholds by hand for obs 0 and check them against probs.
     let d1 = param_preds["delta_1"][0];
     let d2 = param_preds["delta_2"][0]; // response-scale increment
     let d3 = param_preds["delta_3"][0]; // response-scale increment

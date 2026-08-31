@@ -1,18 +1,21 @@
 //! Linear algebra backend abstraction.
 //!
-//! Two mutually exclusive backends are selected at compile time:
-//! - `openblas` (default): `ndarray-linalg` with system OpenBLAS — fastest on native targets.
-//! - `pure-rust`: `nalgebra` — no system dependencies, WASM-compatible.
+//! One of two backends is picked at compile time, and never both:
+//! - `openblas` (default): `ndarray-linalg` on top of system OpenBLAS. The fast
+//!   path on native targets.
+//! - `pure-rust`: `nalgebra`, no system dependencies, and it builds for WASM.
 //!
-//! Each backend module exposes the same `solve`, `inv`, `cholesky_lower`,
-//! `log_det_via_cholesky`, and `symmetric_eigh` functions, and the file-level
-//! `pub use` re-exports the active backend's set.
+//! Both backend modules expose the identical set of functions (`solve`, `inv`,
+//! `cholesky_lower`, `log_det_via_cholesky`, `symmetric_eigh`), and the file-level
+//! `pub use` hands out whichever one is active. The rest of the crate never has to
+//! know which is underneath.
 
-// `openblas` and `pure-rust` define `mod backend { … }` with `#[cfg]` gates that
-// assume exactly one is active. Cargo's feature-unification across workspace
-// members can quietly activate both (e.g. `cargo --workspace --features pure-rust`
-// while the `benchmark` member forces `openblas`), producing a cryptic E0428
-// "name `backend` defined multiple times" instead of a useful diagnostic.
+// Both `openblas` and `pure-rust` define `mod backend { … }` behind `#[cfg]`
+// gates, each assuming it's the only one active. Cargo's feature-unification
+// across workspace members can quietly turn both on at once (say
+// `cargo --workspace --features pure-rust` while the `benchmark` member drags in
+// `openblas`), and then you get a cryptic E0428 "name `backend` defined multiple
+// times" instead of anything that tells you what went wrong. So we catch it here.
 #[cfg(all(feature = "openblas", feature = "pure-rust"))]
 compile_error!(
     "Features `openblas` and `pure-rust` are mutually exclusive — pick one linear-algebra backend. \
@@ -63,13 +66,14 @@ mod backend {
     /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
     /// such that `A = Q · diag(d) · Qᵀ`.
     pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
-        // ndarray-linalg's `eigh` already returns eigenvalues in ascending order.
+        // ndarray-linalg's `eigh` hands them back ascending already, so nothing to sort.
         a.eigh(UPLO::Lower).map_err(lin)
     }
 }
 
-// `not(feature = "openblas")` keeps this mod gone when both features unify, so
-// only the `compile_error!` above fires — no cryptic E0428 alongside it.
+// The `not(feature = "openblas")` gate keeps this mod out of the build when both
+// features unify, so the only thing that fires is the `compile_error!` above. No
+// cryptic E0428 piled on top of it.
 #[cfg(all(feature = "pure-rust", not(feature = "openblas")))]
 mod backend {
     use super::Result;
@@ -79,12 +83,12 @@ mod backend {
 
     /// Convert an `Array2<f64>` (row-major in standard layout) to a column-major nalgebra `DMatrix`.
     ///
-    /// Uses the underlying contiguous slice when available (a memcpy plus a transpose);
-    /// falls back to element-wise iteration for non-standard layouts.
+    /// Takes the contiguous slice when there is one (a memcpy plus a transpose);
+    /// only falls back to element-wise iteration when the layout is non-standard.
     fn to_dmatrix(arr: &Array2<f64>) -> DMatrix<f64> {
         let (nrows, ncols) = arr.dim();
         match arr.as_slice() {
-            // `as_slice` returns row-major data; `from_row_slice` matches that layout.
+            // `as_slice` gives row-major data, and `from_row_slice` reads it as exactly that.
             Some(s) => DMatrix::from_row_slice(nrows, ncols, s),
             None => DMatrix::from_iterator(nrows, ncols, arr.t().iter().copied()),
         }
@@ -93,9 +97,10 @@ mod backend {
     /// Convert a column-major nalgebra `DMatrix` back to a row-major `Array2<f64>`.
     fn from_dmatrix(mat: &DMatrix<f64>) -> Array2<f64> {
         let (nrows, ncols) = (mat.nrows(), mat.ncols());
-        // `mat.transpose().as_slice()` materializes the matrix in row-major order
-        // (transposing column-major → column-major-of-transpose = row-major-of-original).
-        // `from_shape_vec` then takes that contiguous slice without a per-element copy.
+        // `mat.transpose().as_slice()` lays the matrix out row-major
+        // (transpose a column-major matrix and its column-major storage is the
+        // original in row-major order). `from_shape_vec` then wraps that
+        // contiguous slice directly, no per-element copy.
         let transposed = mat.transpose();
         Array2::from_shape_vec((nrows, ncols), transposed.as_slice().to_vec())
             .expect("dim of transposed nalgebra slice matches (nrows, ncols)")
@@ -144,7 +149,8 @@ mod backend {
     pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
         let a_na = to_dmatrix(a);
         let eig = SymmetricEigen::new(a_na);
-        // nalgebra returns eigenvalues unsorted; sort ascending and apply permutation to vectors.
+        // nalgebra hands eigenvalues back in no particular order, so sort them
+        // ascending and drag the eigenvectors along by the same permutation.
         let n = eig.eigenvalues.len();
         let mut idx: Vec<usize> = (0..n).collect();
         idx.sort_by(|&a, &b| {
@@ -167,43 +173,45 @@ pub use backend::{cholesky_lower, inv, log_det_via_cholesky, solve, symmetric_ei
 
 /// Numerically stable log-determinant via symmetric eigendecomposition.
 ///
-/// Uses LAPACK `dsyev` (symmetric eigensolver) instead of Cholesky.  This is
-/// consistent with the analytic REML gradient, which contains the term
-/// `tr(V·S_j)` for `V = (H+S_λ)⁻¹` — the gradient of `log|H+S_λ|` w.r.t.
-/// `log λ_j` is `λ_j·tr(V·S_j)`, regardless of whether V was computed via LU
-/// or Cholesky.  Unlike Cholesky, `dsyev` succeeds for near-PD matrices (e.g.
-/// evenly-spaced B-spline designs whose normal-equation matrix develops tiny
-/// negative floating-point pivots) and returns meaningful eigenvalues.  Near-
-/// zero eigenvalues are clamped to `1e-300` before the log, which makes the
-/// log-det very negative, causing the REML optimizer to naturally avoid those
-/// λ regions — correct behavior rather than a crash.
+/// This reaches for LAPACK `dsyev` (the symmetric eigensolver) rather than
+/// Cholesky. That keeps it consistent with the analytic REML gradient, which
+/// carries the term `tr(V·S_j)` for `V = (H+S_λ)⁻¹`: the gradient of `log|H+S_λ|`
+/// w.r.t. `log λ_j` is `λ_j·tr(V·S_j)` no matter whether V came out of LU or
+/// Cholesky. The payoff is that `dsyev` succeeds exactly where Cholesky flatly
+/// fails, on near-PD matrices (think evenly-spaced B-spline designs whose
+/// normal-equation matrix picks up a few tiny negative floating-point pivots), and
+/// still returns meaningful eigenvalues. Near-zero eigenvalues get clamped to
+/// `1e-300` before the log, which drives the log-det very negative and steers the
+/// REML optimizer away from those λ regions on its own. That is the behavior we
+/// want, not a crash.
 pub fn log_det_robust(a: &ndarray::Array2<f64>) -> Result<f64> {
-    // Fast path: well-conditioned matrices skip the eigensolver.
+    // Fast path: a well-conditioned matrix never touches the eigensolver.
     if let Ok(ld) = log_det_via_cholesky(a) {
         return Ok(ld);
     }
-    // Cholesky failed — matrix is near-PD in floating point.  Eigenvalues of
-    // a symmetric matrix are always real and computed stably by dsyev; clamp
-    // any negative floating-point artifacts before taking the log.
+    // Cholesky bailed, so the matrix is near-PD in floating point. A symmetric
+    // matrix always has real eigenvalues and dsyev computes them stably; clamp
+    // away any negative floating-point junk before taking the log.
     let (eigvals, _) = symmetric_eigh(a)?;
     Ok(eigvals.iter().map(|&v| v.max(1e-300_f64).ln()).sum())
 }
 
-/// Symmetric pseudo-inverse via eigendecomposition, falling back from the direct
-/// LU/Cholesky-based [`inv`].
+/// Symmetric pseudo-inverse via eigendecomposition, the fallback when the direct
+/// LU/Cholesky-based [`inv`] gives up.
 ///
-/// `X'WX + S_λ` is symmetric positive definite in exact arithmetic (the penalty's
-/// null space, e.g. the polynomial trend a P-spline doesn't penalize, is always
-/// covered by `X'WX` for a well-posed design). In floating point it can still
-/// develop a near-zero pivot — the same failure mode documented on
-/// [`log_det_robust`] — which trips a hard LAPACK error (`dgesv`/`dpotrf`
-/// returning a nonzero info code) in [`inv`] on some BLAS builds but not others,
-/// so a design that fits locally can fail only on CI. Eigenvalues below a
-/// relative tolerance are treated as numerically zero and dropped from the
-/// pseudo-inverse rather than inverted, which avoids amplifying floating-point
-/// noise into a huge coefficient.
+/// In exact arithmetic `X'WX + S_λ` is symmetric positive definite (the penalty's
+/// null space, e.g. the polynomial trend a P-spline leaves unpenalized, is always
+/// covered by `X'WX` for a well-posed design). Floating point is less generous: it
+/// can develop a near-zero pivot, the same failure mode written up on
+/// [`log_det_robust`], and that trips a hard LAPACK error (`dgesv`/`dpotrf`
+/// returning a nonzero info code) inside [`inv`] on some BLAS builds and not
+/// others. So a design that fits fine on your machine can blow up only on CI,
+/// which is the worst place to find out. Here, eigenvalues below a relative
+/// tolerance are treated as numerically zero and dropped from the pseudo-inverse
+/// instead of inverted, so floating-point noise never gets amplified into a giant
+/// bogus coefficient.
 pub fn inv_robust(a: &ndarray::Array2<f64>) -> Result<ndarray::Array2<f64>> {
-    // Fast path: well-conditioned matrices skip the eigensolver.
+    // Fast path: a well-conditioned matrix never touches the eigensolver.
     if let Ok(v) = inv(a) {
         return Ok(v);
     }
@@ -222,16 +230,16 @@ pub fn inv_robust(a: &ndarray::Array2<f64>) -> Result<ndarray::Array2<f64>> {
     Ok(scaled.dot(&eigvecs.t()))
 }
 
-/// Solves `A x = b`, falling back to [`inv_robust`]'s pseudo-inverse when the
-/// direct solve hard-fails on a near-singular `A`. See [`inv_robust`] for why
-/// that can happen only on some BLAS builds.
+/// Solves `A x = b`, dropping back to [`inv_robust`]'s pseudo-inverse when the
+/// direct solve hard-fails on a near-singular `A`. See [`inv_robust`] for why that
+/// only happens on some BLAS builds.
 ///
-/// Kept as a fallback around [`solve`] rather than always routing through
-/// `inv_robust(a).dot(b)`: the two use different LAPACK paths (`dgesv` vs
-/// `dsyev`) whose floating-point rounding differs, and callers that iterate
-/// (e.g. the REML smoothing-parameter search) can be sensitive enough to that
-/// rounding to converge to a different optimum. Only reach for the
-/// pseudo-inverse when the fast path actually fails.
+/// Why keep this as a fallback around [`solve`] instead of always routing through
+/// `inv_robust(a).dot(b)`? The two take different LAPACK paths (`dgesv` vs
+/// `dsyev`) and round differently, and a caller that iterates (the REML
+/// smoothing-parameter search, say) can be sensitive enough to that rounding to
+/// settle on a different optimum. So the pseudo-inverse only comes out when the
+/// fast path has actually failed, never speculatively.
 pub fn solve_robust(
     a: &ndarray::Array2<f64>,
     b: &ndarray::Array1<f64>,
@@ -271,8 +279,8 @@ mod tests {
 
     #[test]
     fn test_solve_robust_singular_falls_back() {
-        // Consistent singular system (b is in the range of A): the pseudo-inverse
-        // fallback should return the minimum-norm solution.
+        // Singular but consistent (b lands in the range of A), so the pseudo-inverse
+        // fallback should hand back the minimum-norm solution rather than error.
         let a = array![[1.0, 1.0], [1.0, 1.0]];
         assert!(solve(&a, &array![2.0, 2.0]).is_err());
 
@@ -296,10 +304,10 @@ mod tests {
 
     #[test]
     fn test_inv_robust_singular_returns_pseudo_inverse() {
-        // Rank-1 matrix: `inv` fails outright, `inv_robust` should fall back to
-        // the Moore-Penrose pseudo-inverse via eigendecomposition rather than
-        // erroring, mirroring the near-singular normal-equations matrices this
-        // guards against in `fit_pwls`.
+        // Rank-1 matrix: `inv` fails outright. `inv_robust` should catch that and
+        // fall back to the Moore-Penrose pseudo-inverse via eigendecomposition
+        // instead of erroring, which is exactly what the near-singular
+        // normal-equations matrices in `fit_pwls` need it to do.
         let a = array![[1.0, 1.0], [1.0, 1.0]];
         assert!(inv(&a).is_err());
 

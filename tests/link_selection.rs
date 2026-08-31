@@ -20,8 +20,8 @@ use ndarray::Array1;
 /// `"cauchit"`, `"sqrt"`, `"inverse"`, and `"1/mu^2"`). The non-Gaussian rows are
 /// exact arithmetic; the probit rows were tabulated with an independent `erf`
 /// implementation. A sign or formula slip in any link fails this table.
-// These are exact R make.link reference values; some happen to land near √2 / 1/√2,
-// which clippy's approx_constant lint flags; they are data, not constant approximations.
+// These are exact R make.link reference values; a few happen to land near √2 / 1/√2,
+// which trips clippy's approx_constant lint. They're data, not constant approximations.
 #[allow(clippy::approx_constant)]
 #[rustfmt::skip]
 const MAKE_LINK_ORACLE: &[(&str, f64, f64, f64)] = &[
@@ -142,7 +142,7 @@ fn overriding_the_link_changes_the_fit() {
     .unwrap();
 
     let slope = |m: &GamlssModel| m.models["mu"].coefficients.0[1];
-    // All three should pick up the positive trend...
+    // All three should catch the positive trend...
     assert!(slope(&logit) > 0.0, "logit slope should be positive");
     assert!(slope(&probit) > 0.0, "probit slope should be positive");
     assert!(slope(&cloglog) > 0.0, "cloglog slope should be positive");
@@ -200,9 +200,9 @@ fn unit_interval_data() -> (DataSet, Array1<f64>) {
 #[test]
 fn a_link_override_for_an_unknown_parameter_is_rejected() {
     // Beta's second parameter is `phi`, not `sigma`. Before this check, the
-    // override simply never matched inside the per-parameter loop and the fit
+    // override just never matched inside the per-parameter loop and the fit
     // ran to completion under the default links, reporting success for a
-    // configuration it had entirely ignored.
+    // configuration it had completely ignored.
     let (data, y) = unit_interval_data();
     let err = GamlssModel::fit_with_config(
         &data,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ocat benchmark — compares glissando Ocat(R=4) against mgcv::ocat(R=4).
+ocat benchmark: compares glissando Ocat(R=4) against mgcv::ocat(R=4).
 
 Log-likelihood cross-check (intercept-only model)
   Fits `Ocat(R=4)` with an intercept-only formula in both glissando and mgcv
@@ -32,7 +32,7 @@ import polars as pl
 HERE      = Path(__file__).parent
 REPO_ROOT = HERE.parent
 
-LOGLIK_TOLERANCE = 0.01   # absolute difference in total log-likelihood
+LOGLIK_TOLERANCE = 0.01   # absolute gap in total log-likelihood we'll accept
 PROB_P95_TARGET  = 0.10   # P95 relative error on (n × 4) probability matrix
 ARGMAX_TARGET    = 0.90   # minimum argmax agreement rate
 

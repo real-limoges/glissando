@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
 //! DIAGNOSTIC harness (`#[ignore]`d) for the smoothing-parameter bistability:
@@ -7,12 +7,12 @@
 //! instead of recovering the sine.
 //!
 //! The companion in-crate test `solver::reml_tests::diagnostic_laml_landscape_control_case`
-//! established that the REML/LAML objective is *unimodal* on this data — global
+//! established that the REML/LAML objective is *unimodal* on this data: global
 //! min at edf ≈ 13, with the collapse region (edf ≈ 2) carrying a far worse
 //! −V_r and sitting on a near-flat high-λ shelf. So collapse is not a competing
 //! optimum; it is a gradient optimizer getting stuck on that flat shelf.
 //!
-//! This file measures the *behavioral* consequence: how often the default
+//! What I measure here is the *behavioral* consequence: how often the default
 //! (REML / L-BFGS) collapses across repeated fits, and whether `Gcv` and the
 //! deterministic `FellnerSchall` land on the good interior λ instead.
 //!
@@ -156,7 +156,7 @@ fn fit_once(criterion: SmoothingCriterion) -> (f64, f64, f64, usize) {
     )
 }
 
-/// Q1 — collapse frequency / determinism of the default REML path across repeats.
+/// Q1: collapse frequency / determinism of the default REML path across repeats.
 #[test]
 #[ignore = "diagnostic: measures REML collapse frequency over repeated fits"]
 fn diagnostic_reml_collapse_frequency() {
@@ -188,7 +188,7 @@ fn diagnostic_reml_collapse_frequency() {
     );
 }
 
-/// Q3 — cross-method comparison: does GCV / Fellner-Schall land on the interior λ?
+/// Q3: cross-method comparison, does GCV / Fellner-Schall land on the interior λ?
 #[test]
 #[ignore = "diagnostic: compares GCV / REML / Fellner-Schall on the control case"]
 fn diagnostic_criterion_comparison() {
@@ -206,7 +206,7 @@ fn diagnostic_criterion_comparison() {
         eprintln!("{name:>16}  {edf:>10.3}  {smooth_edf:>12.3}  {corr:>8.4}  {warns:>6}");
     }
 
-    // Collapse rate on the μ-control for REML vs F-S over many repeats — the
+    // Collapse rate on the μ-control for REML vs F-S over many repeats. The
     // nondeterminism is BLAS reduction order, so repeats on one machine sample it.
     eprintln!("\nμ-control collapse rate (30 repeats each, collapse ⇒ corr ≤ 0.95):");
     for (name, crit) in [
@@ -226,7 +226,7 @@ fn diagnostic_criterion_comparison() {
     }
 }
 
-/// Q1' — collapse frequency on the genuinely-flaky σ-smooth case, per criterion.
+/// Q1': collapse frequency on the genuinely-flaky σ-smooth case, per criterion.
 #[test]
 #[ignore = "diagnostic: σ-smooth collapse frequency across criteria"]
 fn diagnostic_sigma_collapse_frequency() {
