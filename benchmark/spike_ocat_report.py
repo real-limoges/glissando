@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 0 ocat spike report — Guide 3 §2.
+Phase 0 ocat spike report, Guide 3 §2.
 
 Orchestrates the full spike and prints a comparison table:
   - Candidate A (3 independent Binomial/logit threshold models) vs mgcv ocat(R=4)
@@ -154,7 +154,7 @@ def main() -> None:
     cand_probs = np.array(rust["probs"], dtype=float)        # (n, 4)
     mgcv_probs = np.array(mgcv_res["probs"], dtype=float)    # (n, 4)
 
-    # True DGP probs from test parquet
+    # true DGP probs, straight from the test parquet
     test_df = pl.read_parquet(test_parquet)
     true_probs = np.column_stack(
         [test_df[c].to_numpy() for c in ["p1", "p2", "p3", "p4"]]

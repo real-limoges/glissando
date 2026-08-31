@@ -6,8 +6,8 @@
 //! As `τ → ∞` the `t` approaches the normal and BCT reduces to BCCG.
 //!
 //! It shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCPE; only the
-//! distribution `z` follows (here Student-`t`) and the extra `τ` column differ. The
-//! `τ` score/Fisher pair mirror [`StudentT`](super::StudentT)'s df parameter.
+//! distribution `z` follows (here Student-`t`) and the extra `τ` column differ. I
+//! reuse [`StudentT`](super::StudentT)'s df parameter for the `τ` score/Fisher pair.
 
 use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
@@ -56,8 +56,8 @@ impl Distribution for BCT {
     }
 
     /// Robust seeds: `μ₀ = median(y)`, `σ₀` = robust CV, `ν₀ = 1` (symmetric), and
-    /// `τ₀` a fixed moderate df (see [`TAU_INIT`]). A fixed `τ` seed is preferred to
-    /// a kurtosis estimate for the same reason as [`StudentT`](super::StudentT).
+    /// `τ₀` a fixed moderate df (see `TAU_INIT`). I prefer a fixed `τ` seed over a
+    /// kurtosis estimate, for the same reason as [`StudentT`](super::StudentT).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         boxcox_seed(param, y).unwrap_or_else(|| {
             if param != "tau" {
@@ -74,11 +74,11 @@ impl Distribution for BCT {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Box-Cox spine (z, ∂z/∂ν) shared with BCCG; the `t` robustifying weight
+        // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The `t` robustifying weight
         // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG). Full
         // derivation in docs/math/mathematics.md [BCCG]. Natural-scale scores
-        // (Altitude #1); `chain_to_eta` reapplies the default links (log, log,
-        // identity, log) to recover the previous η-scale values exactly:
+        // (Altitude #1); chain_to_eta reapplies the default links (log, log,
+        // identity, log) and recovers the old η-scale values exactly:
         //   dl/dμ = [w_t·z·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [w_t·z² − 1] / σ
         //   dl/dν = −w_t·z·∂z/∂ν + log(y/μ)
@@ -110,9 +110,10 @@ impl Distribution for BCT {
             let w_t = (t + 1.0) / (t + z2); // t robustifying weight
             let big_t = 1.0 + nu_i * s * z; // T = (y/μ)^ν
 
-            // Guard each reciprocal at the power it is used at: raising an
-            // already-guarded reciprocal to a power would overflow to infinity for a
-            // parameter the log link can still underflow to, and `inf · 0` is NaN.
+            // Guard each reciprocal at the power it's actually used at. Take an
+            // already-guarded reciprocal and raise it to a power and it overflows to
+            // infinity for a parameter the log link can still underflow to. And inf · 0
+            // is NaN.
             let inv_m = 1.0 / m.max(DENOM_FLOOR);
             let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
             let inv_s = 1.0 / s.max(DENOM_FLOOR);
@@ -122,8 +123,8 @@ impl Distribution for BCT {
             u_sigma[i] = (w_t * z2 - 1.0) * inv_s;
             u_nu[i] = -w_t * z * dz_dnu + l;
 
-            // τ score: the same digamma form as StudentT's df parameter. This was
-            // already separable; the conversion is the deletion of the trailing `t *`.
+            // τ score: the same digamma form as StudentT's df parameter. It was
+            // already separable, so converting it was just deleting the trailing `t *`.
             u_tau[i] = 0.5
                 * (digamma((t + 1.0) / 2.0) - digamma(t / 2.0) - (1.0 + z2 / t).ln()
                     + (w_t * z2 - 1.0) / t);
@@ -136,8 +137,8 @@ impl Distribution for BCT {
             i_sigma[i] = (2.0 * t / (t + 3.0)) * inv_s_sq;
             i_nu[i] = (7.0 * s * s / 4.0) * shrink;
             // τ information mirrors StudentT and → 0 as τ → ∞ (df is unidentifiable
-            // for a normal). `.abs()` survives the un-fold because it previously
-            // wrapped `i_τ·τ²` and τ² > 0, so `|i_τ·τ²| = |i_τ|·τ²`.
+            // for a normal). The `.abs()` survives the un-fold: it used to wrap
+            // `i_τ·τ²`, and τ² > 0, so `|i_τ·τ²| = |i_τ|·τ²`.
             i_tau_out[i] = (0.25
                 * (trigamma(t / 2.0) - trigamma((t + 1.0) / 2.0)
                     + 2.0 * (t + 3.0) / (t * (t + 1.0))))
@@ -179,9 +180,9 @@ impl Distribution for BCT {
         Ok(out)
     }
 
-    /// `Var(Y) ≈ (σμ)²·τ/(τ−2)` for `τ > 2` — the BCCG CV approximation inflated by
-    /// the `t` variance factor. Clamped (denominator floored) so it stays finite for
-    /// `τ ≤ 2`; used only for Pearson residuals.
+    /// `Var(Y) ≈ (σμ)²·τ/(τ−2)` for `τ > 2`: the BCCG CV approximation inflated by
+    /// the `t` variance factor. I floor the denominator so it stays finite for
+    /// `τ ≤ 2`, and I use it only for Pearson residuals.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
@@ -327,7 +328,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
         // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms cancelled.
+        // η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             ("mu", array![0.0, 1e-320, 1e-8]),

@@ -45,5 +45,5 @@ def test_predict_tracks_linear_trend(synthetic_gaussian, gaussian_formula):
         glissando.Gaussian(),
     )
     preds = model.predict({"x": np.array([0.0, 5.0])})
-    # Slope is positive, so mu(5) should clearly exceed mu(0).
+    # slope is positive, so mu(5) should sit well above mu(0).
     assert preds["mu"][1] > preds["mu"][0] + 3.0

@@ -1,6 +1,6 @@
 //! Link functions mapping a response-scale parameter `μ` to the linear predictor
-//! `η = g(μ)`. Used by the IRLS scoring step (via `inv_link` to materialise `μ`
-//! from `η`) and by the design-matrix code (via `link` to seed initial values).
+//! `η = g(μ)`. The IRLS scoring step uses them (via `inv_link` to materialize `μ`
+//! from `η`), and so does the design-matrix code (via `link` to seed initial values).
 
 use crate::error::GamlssError;
 use crate::math::{std_normal_cdf, std_normal_pdf, std_normal_quantile};
@@ -27,12 +27,12 @@ pub trait Link: Debug + Send + Sync {
     ///
     /// The Fisher-scoring inner loop works on the η-scale, where the generic IRLS
     /// weight is `mu_eta(η)² · i_θ` (with `i_θ` the Fisher information on the
-    /// natural scale). Supplying this analytically lets the scoring step build
-    /// η-scale weights for *any* link: the prerequisite for the link expansion
-    /// (probit, cloglog, …).
+    /// natural scale). Supply this analytically and the scoring step can build
+    /// η-scale weights for *any* link, which is the whole prerequisite for the link
+    /// expansion (probit, cloglog, …).
     ///
     /// The default is a symmetric finite difference so external `Link` impls keep
-    /// compiling; the built-in links override it with their closed forms.
+    /// compiling; every built-in link overrides it with its closed form.
     fn mu_eta(&self, eta: f64) -> f64 {
         let h = 1e-6;
         (self.inv_link(eta + h) - self.inv_link(eta - h)) / (2.0 * h)
@@ -58,8 +58,8 @@ pub trait Link: Debug + Send + Sync {
     /// modeling constraint that the Student-t ν-floor KKT projection depends on.
     ///
     /// The default is a symmetric finite difference of `mu_eta` so external `Link`
-    /// impls keep compiling. It differences `mu_eta` rather than `inv_link` twice:
-    /// a second difference of `inv_link` loses roughly half the available digits.
+    /// impls keep compiling. Note it differences `mu_eta` rather than `inv_link`
+    /// twice: a second difference of `inv_link` loses roughly half the available digits.
     fn mu_eta2(&self, eta: f64) -> f64 {
         let h = 1e-6;
         (self.mu_eta(eta + h) - self.mu_eta(eta - h)) / (2.0 * h)
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn mu_eta_logit_peaks_at_zero() {
         let l = LogitLink;
-        // dμ/dη = μ(1−μ) is maximised at η=0 where μ=0.5 ⇒ 0.25.
+        // dμ/dη = μ(1−μ) is maximized at η=0 where μ=0.5 ⇒ 0.25.
         assert!((l.mu_eta(0.0) - 0.25).abs() < 1e-12);
         // Symmetric and strictly smaller away from 0.
         assert!(l.mu_eta(1.0) < 0.25);

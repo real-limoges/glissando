@@ -4,7 +4,7 @@ use ndarray::Array1;
 use rand::RngExt;
 
 fn main() -> Result<(), GamlssError> {
-    // Generate Synthetic Data
+    // Synthetic data.
 
     let mut rng = rand::rng();
     let n = 200;
@@ -26,8 +26,8 @@ fn main() -> Result<(), GamlssError> {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x_vals));
 
-    // The formula, built with the terse constructors. `Smooth::ps` carries sensible
-    // defaults (degree 3, 2nd-order penalty); builders like `.n_splines(20)` override.
+    // The formula, using the terse constructors. `Smooth::ps` already carries sane
+    // defaults (degree 3, 2nd-order penalty); builders like `.n_splines(20)` override them.
     //   mu    ~ intercept + P-spline(x)   (smooth mean)
     //   sigma ~ intercept + x             (linear heteroskedasticity)
     //   nu    ~ intercept                 (constant tail weight)
@@ -39,12 +39,12 @@ fn main() -> Result<(), GamlssError> {
         .with_terms("sigma", vec![Term::Intercept, Term::linear("x")])
         .with_terms("nu", vec![Term::Intercept]);
 
-    // Fit
+    // Fit it.
     println!("Fitting GAMLSS model...");
     let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new())?;
     println!("Successfully Trained GAMLSS Model!");
 
-    // 5. Inspect Results
+    // Poke at the results.
     let mu_model = &model.models["mu"];
     let sigma_model = &model.models["sigma"];
     let nu_model = &model.models["nu"];

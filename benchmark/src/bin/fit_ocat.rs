@@ -1,7 +1,8 @@
 //! Glissando Ocat benchmark binary.
 //!
-//! Fits `Ocat(R=4)` on the spike train data, computes training log-likelihood,
-//! and predicts the (n_test × 4) category-probability matrix on the test set.
+//! I fit `Ocat(R=4)` on the spike-train data, compute the training
+//! log-likelihood, and predict the (n_test × 4) category-probability matrix on
+//! the test set.
 //!
 //! Usage:
 //!   cargo run -p glissando_benchmark --bin fit_ocat --release -- \
@@ -10,10 +11,10 @@
 //!     --output path/to/glissando_ocat.json \
 //!     [--intercept-only]
 //!
-//! Without `--intercept-only` the mu parameter is modelled with two P-splines
+//! Without `--intercept-only` I model the mu parameter with two P-splines
 //! (matching the mgcv formula `y ~ s(x1,bs="ps") + s(x2,bs="ps")`).
-//! With `--intercept-only` all parameters have intercept-only formulas — this
-//! mode is used for the log-likelihood cross-check against mgcv.
+//! With `--intercept-only` every parameter gets an intercept-only formula; that
+//! is the mode I use for the log-likelihood cross-check against mgcv.
 
 use glissando::distributions::Ocat;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
@@ -29,7 +30,7 @@ use std::time::Instant;
 struct OcatResult {
     /// (n_test × 4) category probabilities; each row sums to 1.
     probs: Vec<Vec<f64>>,
-    /// Unpenalised training log-likelihood Σ log P(y_i = r_i | model).
+    /// Unpenalized training log-likelihood Σ log P(y_i = r_i | model).
     loglik_train: f64,
     n_train: usize,
     n_test: usize,
@@ -145,8 +146,8 @@ fn main() {
         test_data.insert_column("x1", extract_column(&test_df, "x1"));
         test_data.insert_column("x2", extract_column(&test_df, "x2"));
     } else {
-        // Intercept-only: we still need a column to satisfy DataSet requirements.
-        // Insert a dummy constant column of the right length.
+        // Intercept-only, but DataSet still wants a column. Give it a dummy
+        // constant of the right length.
         train_data.insert_column("_dummy", Array1::zeros(n_train));
         test_data.insert_column("_dummy", Array1::zeros(n_test));
     }
@@ -181,7 +182,7 @@ fn main() {
         .map(|d| d.log_likelihood)
         .unwrap_or(f64::NAN);
 
-    // Predict probabilities on the test set.
+    // Now the test-set probabilities.
     let prob_matrix = match model.predict_class_probabilities(&test_data, &family) {
         Ok(m) => m,
         Err(e) => {

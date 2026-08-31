@@ -1,7 +1,7 @@
 //! One Fisher-scoring step on a single distribution parameter.
 //!
-//! The Rigby–Stasinopoulos outer loop cycles through parameters; for each one,
-//! [`step`] performs the five operations that constitute a P-IRLS update:
+//! The Rigby–Stasinopoulos outer loop cycles through the parameters, and for each
+//! one [`step`] runs the five operations that make up a P-IRLS update:
 //!
 //! 1. Snapshot every parameter on the response scale.
 //! 2. Ask the family for score `u` and Fisher information `w` on the η-scale.
@@ -9,9 +9,10 @@
 //! 4. Optimize smoothing parameters λ via the configured criterion (warm-started from the previous step).
 //! 5. Solve penalized weighted least squares for `(β, V, EDF)`.
 //!
-//! `step` returns an [`Update`] describing the new state plus convergence and
-//! diagnostic deltas. The caller applies the update; `step` itself is pure with
-//! respect to the input `models` map, which keeps it unit-testable in isolation.
+//! `step` hands back an [`Update`] describing the new state plus the convergence
+//! and diagnostic deltas. The caller is the one that applies it; `step` itself
+//! never touches the input `models` map, and that purity is exactly what keeps it
+//! unit-testable on its own.
 
 use super::solver::{
     fit_pwls, group_penalties, initial_log_lambda, lambda_cost, restart_seed_from_heuristic,
@@ -30,32 +31,31 @@ use ndarray::{s, Array1, Zip};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
-/// Cap on the per-element Fisher-scoring step `u/w` (in η units): a pure
-/// anti-overflow guard for degenerate score/information combinations, NOT a
-/// robustness device. Overshoot control is the job of the deviance-guarded
-/// step-halving (FIT-1), and neither mgcv nor gamlss clips the working
-/// response at all.
+/// Cap on the per-element Fisher-scoring step `u/w` (in η units). This is purely
+/// an anti-overflow guard for degenerate score/information combinations, NOT a
+/// robustness device. Overshoot control belongs to the deviance-guarded
+/// step-halving (FIT-1), and for what it's worth neither mgcv nor gamlss clips the
+/// working response at all.
 ///
-/// The value must sit between two failure modes. Too tight inverts step
-/// directions: when many rows clip, the update direction is decided by the
-/// *count* of positive vs negative rows instead of the score-weighted
-/// aggregate, which can point the Fisher step uphill (caps ≤ 1e4 break
-/// Student-t ν recovery; legitimate transient steps exceed them). Too loose
-/// lets a degenerate row (weight at the MIN_WEIGHT floor with an O(1) score,
-/// e.g. a quasi-separated binomial observation) inject a large pseudo-residual
-/// that distorts λ selection: an accepted exposure at 1e6 whose principled
-/// fix is a REML criterion on the true likelihood rather than the working
-/// (z, w) model. Applies only when step-halving is enabled; see
-/// `MAX_STEP_NO_HALVING` for the disabled case.
+/// The value has to thread between two failure modes. Too tight and it inverts the
+/// step direction: once many rows clip, the update is decided by the *count* of
+/// positive vs negative rows rather than the score-weighted aggregate, which can
+/// aim the Fisher step uphill (caps ≤ 1e4 break Student-t ν recovery, because
+/// legitimate transient steps exceed them). Too loose and a single degenerate row
+/// (weight pinned at the MIN_WEIGHT floor with an O(1) score, say a quasi-separated
+/// binomial observation) injects a huge pseudo-residual that distorts λ selection:
+/// an exposure accepted at 1e6 whose principled fix is really a REML criterion on
+/// the true likelihood, not the working (z, w) model. Applies only when
+/// step-halving is on; see `MAX_STEP_NO_HALVING` for the off case.
 const MAX_STEP: f64 = 1e6;
 
 /// Fallback safety cap on the per-element accepted η-change when
-/// `FitConfig::step_halving` is `false`. With step-halving on, `MAX_STEP`
-/// above can safely be this loose because the deviance-guarded line search
-/// owns overshoot control; with it off, nothing else bounds the step, so the
-/// caller (`fitting::mod`) scales the raw Fisher step back to this bound
-/// instead. This restores the pre-widening `MAX_STEP` value (20) as the sole
-/// safety net for that path.
+/// `FitConfig::step_halving` is `false`. With step-halving on, `MAX_STEP` above
+/// gets to be as loose as it is because the deviance-guarded line search owns
+/// overshoot control. With it off, nothing else bounds the step, so the caller
+/// (`fitting::mod`) scales the raw Fisher step back to this bound instead. It just
+/// brings back the pre-widening `MAX_STEP` value (20) as the only safety net that
+/// path has.
 pub(super) const MAX_STEP_NO_HALVING: f64 = 20.0;
 
 /// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
@@ -121,14 +121,15 @@ pub(super) struct Halved {
 ///
 /// The Fisher-scoring direction `d_k = β_new − β_old` is an ascent direction for
 /// the **penalized** log-likelihood, i.e. a descent direction for
-/// `GD_pen(β) = GD(μ(β)) + Σ_j λ_j·βᵀS_jβ`, NOT for the raw deviance. When the
-/// current β is wigglier than the penalized optimum β*(λ) (e.g. λ grew across
-/// cycles), every move toward β*(λ) legitimately *raises* the raw deviance;
-/// backtracking on raw GD then rejects the step at every α and the fit freezes
-/// at a non-stationary point (observed as a permanent poisson-smooth
-/// non-convergence). Backtracking on `GD_pen`, evaluated at the *proposed*
-/// step's λ so the objective is consistent along the α-path, restores the
-/// guaranteed-descent property that makes halving terminate.
+/// `GD_pen(β) = GD(μ(β)) + Σ_j λ_j·βᵀS_jβ`, and NOT for the raw deviance. That
+/// distinction is the whole point. When the current β is wigglier than the
+/// penalized optimum β*(λ) (because λ grew across cycles, say), every move toward
+/// β*(λ) legitimately *raises* the raw deviance. Backtrack on raw GD and it rejects
+/// the step at every α, so the fit freezes at a non-stationary point; that showed
+/// up as a permanent poisson-smooth non-convergence. Backtracking on `GD_pen`
+/// instead, evaluated at the *proposed* step's λ so the objective stays consistent
+/// along the α-path, gives back the guaranteed-descent property that makes halving
+/// actually terminate.
 ///
 /// Returns the accepted step; `hits` is the number of halvings (`0` = full step).
 pub(super) fn step_halving<D: Distribution + ?Sized>(
@@ -144,12 +145,12 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     let dir = &proposed.beta.0 - &model.beta.0; // d_k
     let (x, link) = (&model.x_matrix.0, &model.link);
 
-    // Penalty CHANGE along the path, in cancellation-free form:
+    // Penalty CHANGE along the path, written in cancellation-free form:
     //   Δpen(α) = (β₀+αd)ᵀS_λ(β₀+αd) − β₀ᵀS_λβ₀ = 2α·dᵀS_λβ₀ + α²·dᵀS_λd.
-    // Evaluating the two quadratic forms separately and subtracting loses all
-    // significance when λ is huge (e.g. a correctly collapsed smooth with λ at
-    // the clamp ceiling ~1e13): the round-off noise of βᵀS_λβ dwarfs the true
-    // difference and every step gets spuriously rejected.
+    // Form the two quadratic forms separately and subtract, and you lose all
+    // significance once λ is huge (a correctly collapsed smooth with λ at the clamp
+    // ceiling ~1e13, say): the round-off noise in βᵀS_λβ swamps the true difference
+    // and every step gets rejected for no reason. The regrouped form dodges that.
     let (pen_cross, pen_dir) = {
         let mut cross = 0.0_f64; // dᵀ·S_λ·β₀
         let mut quad = 0.0_f64; // dᵀ·S_λ·d
@@ -188,11 +189,11 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
                 eta_max_change,
             });
         }
-        // At the backtracking floor the direction is uphill at every step size:
-        // *reject* the block update (α = 0). Forcing a micro-step instead would
-        // creep the parameter uphill every cycle: an unbounded slow divergence.
-        // Rejection preserves the monotone-descent guarantee exactly; a block at
-        // its optimum has a tiny full step and never reaches this branch.
+        // At the backtracking floor the direction is uphill at every step size, so
+        // *reject* the whole block update (α = 0). Force a micro-step instead and
+        // you creep the parameter uphill every cycle: a slow unbounded divergence.
+        // Rejecting keeps the monotone-descent guarantee exact. A block sitting at
+        // its optimum has a tiny full step and never gets down here anyway.
         if alpha <= min_alpha {
             return Ok(Halved {
                 beta: model.beta.clone(),
@@ -211,10 +212,11 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
 /// Run one Fisher-scoring step on `target_param`, given the current state of every
 /// parameter in `models`.
 ///
-/// `prior_weights` is an optional per-row scale applied to each observation's
-/// likelihood contribution.  When `Some(w)`, the solve weight becomes
-/// `w_solve_i = prior_i · safe_w_i`; the working response `z` always uses only
-/// `safe_w_i` in its denominator so the IRLS step size is not distorted.
+/// `prior_weights` is an optional per-row scale on each observation's likelihood
+/// contribution. When `Some(w)`, the solve weight becomes
+/// `w_solve_i = prior_i · safe_w_i`, but the working response `z` still uses only
+/// `safe_w_i` in its denominator, so the IRLS step size never gets distorted by
+/// the prior.
 pub(super) fn step<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
@@ -223,8 +225,8 @@ pub(super) fn step<D: Distribution + ?Sized>(
     target_param: &str,
     criterion: SmoothingCriterion,
 ) -> Result<Update, GamlssError> {
-    // 1. Reference every parameter's cached μ; theta_derivatives() expects all of them.
-    //    The cache is maintained by the outer loop so we don't re-run inv_link here.
+    // 1. Reference every parameter's cached μ; theta_derivatives() wants all of them.
+    //    The outer loop keeps that cache current, so there's no inv_link to re-run here.
     let params_ref: HashMap<&str, &Array1<f64>> = family
         .parameters()
         .iter()
@@ -232,11 +234,11 @@ pub(super) fn step<D: Distribution + ?Sized>(
         .collect();
 
     // 2. Score and Fisher info for the target parameter, on the η scale.
-    //    The link derivatives are materialized once per step from each parameter's
+    //    Materialize the link derivatives once per step from each parameter's
     //    resolved link and live η, so a family with a separable natural scale can
-    //    apply the chain rule generically instead of hardcoding its default link
-    //    (Altitude #1). Each pass costs O(n) per parameter, so only the structural
-    //    wrappers (the sole readers of `mu_eta2`) pay for the second one.
+    //    apply the chain rule generically rather than hardcoding its default link
+    //    (Altitude #1). Each pass is O(n) per parameter, so only the structural
+    //    wrappers (the only readers of `mu_eta2`) pay for the second one.
     let entries = family.parameters().iter().map(|name| {
         let param = &models[*name];
         (*name, param.link.as_ref(), &param.eta)
@@ -255,20 +257,20 @@ pub(super) fn step<D: Distribution + ?Sized>(
         GamlssError::Internal(format!("Model for parameter '{}' not found", target_param))
     })?;
 
-    // 3. Working response z = η + u/w.  Floor weights and clamp the step in η units
-    //    so degenerate Fisher information can't blow up the IRLS update. Count how
-    //    often each guard fires so the caller can flag a degenerate fit.
+    // 3. Working response z = η + u/w. Floor the weights and clamp the step in η
+    //    units so degenerate Fisher information can't blow up the IRLS update, and
+    //    count how often each guard fires so the caller can flag a degenerate fit.
     //
-    //    A single `Zip::for_each` pass builds both `z` and the floored weights `w`
-    //    and tallies the clamp counters — two output allocations instead of the
-    //    four that mapv-chained intermediate arrays produced.
+    //    One `Zip::for_each` pass builds both `z` and the floored weights `w` and
+    //    tallies the clamp counters: two output allocations instead of the four
+    //    the old mapv-chained intermediates produced.
     let n = target.eta.len();
     let mut z = Array1::<f64>::zeros(n);
     let mut w = Array1::<f64>::zeros(n);
     let mut weight_floor_hits = 0usize;
     let mut step_cap_hits = 0usize;
-    // When prior weights are absent, treat every row as weight 1 by using a temporary
-    // ones array.  This lets the Zip stay uniform without a per-element branch.
+    // When there are no prior weights, treat every row as weight 1 via a temporary
+    // ones array, so the Zip stays uniform and skips a per-element branch.
     let ones;
     let pw: &Array1<f64> = match prior_weights {
         Some(pw) => pw,
@@ -300,31 +302,31 @@ pub(super) fn step<D: Distribution + ?Sized>(
             } else {
                 step
             };
-            // z uses safe_w (not safe_w * prior_i): the IRLS step size is a property
+            // z uses safe_w, not safe_w * prior_i: the IRLS step size is a property
             // of log-likelihood curvature and must not be scaled by the observation
-            // weight.  Only w_solve carries the prior factor into the normal equations.
+            // weight. Only w_solve carries the prior factor into the normal equations.
             *z_out = eta_i + clipped;
             *w_out = prior_i * safe_w;
         });
 
-    // The solver fits X·β to z, so the fixed offset (which enters η but not β) is
-    // subtracted out: the adjusted working response becomes (η + u/w) − offset =
-    // X·β_old + u/w. η is reconstructed as X·β_new + offset below (DATA-3). This is
-    // a no-op when there is no offset (the vector is all zeros).
+    // The solver fits X·β to z, so the fixed offset (which enters η but not β) gets
+    // subtracted out here: the adjusted working response becomes (η + u/w) − offset
+    // = X·β_old + u/w. η is rebuilt as X·β_new + offset below (DATA-3). A no-op when
+    // there is no offset, since the vector is all zeros.
     z -= &target.offset;
 
     // 4–5. Optimize λ (warm-started from the previous step), solve PWLS, and
-    //      attribute per-term EDF. Purely parametric models (no penalties) take
-    //      the zero-λ fast path inside `run_opt`.
+    //      attribute per-term EDF. A purely parametric model (no penalties) takes
+    //      the zero-λ fast path inside `run_opt` and skips all of this.
     let penalties = &target.penalty_matrices;
 
-    // `X`, `z`, and `w` are fixed for the rest of this function: every λ
-    // evaluation below (L-BFGS/Fellner-Schall iterations, the collapse-guarded
-    // restart's basin probes, the coarse grid search) re-solves the same
-    // weighted normal equations at a different λ. Building them once here
-    // turns each evaluation's dominant cost from O(n·p²) into O(p²)–O(p³);
-    // `group_penalties` similarly caches the (λ-independent) coefficient-block
-    // structure instead of re-scanning every penalty matrix on every call.
+    // `X`, `z`, and `w` are fixed for the rest of this function. Every λ evaluation
+    // below (L-BFGS/Fellner-Schall iterations, the collapse-guarded restart's basin
+    // probes, the coarse grid search) re-solves the same weighted normal equations
+    // at a different λ, so building them once here turns each evaluation's dominant
+    // cost from O(n·p²) into O(p²)–O(p³). `group_penalties` plays the same trick,
+    // caching the (λ-independent) coefficient-block structure instead of re-scanning
+    // every penalty matrix on every call.
     let nfo = WeightedNormalEquations::new(&target.x_matrix, &z, &w);
     let groups = group_penalties(penalties);
 
@@ -363,7 +365,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
         };
 
     // A smooth term whose EDF has decayed to its penalty null-space dimension has
-    // collapsed onto the unpenalized polynomial remainder (e.g. a straight line).
+    // collapsed onto its unpenalized polynomial remainder (a straight line, say).
     let is_collapsed = |term_edf: &[f64]| -> bool {
         target
             .term_layouts
@@ -372,11 +374,11 @@ pub(super) fn step<D: Distribution + ?Sized>(
             .any(|(l, &e)| l.is_smooth && e <= l.null_dim as f64 + super::EDF_COLLAPSE_SLACK)
     };
 
-    // A λ pinned at (or beyond) the log-clamp bounds is the multi-penalty
-    // analogue of a collapsed term: for a tensor smooth, one margin can be
-    // driven to the ceiling while the term's TOTAL EDF still sits far above its
-    // null-space dimension, so the EDF test alone cannot see it. A pinned λ is
-    // never a genuine interior optimum: it deserves the same restart probe.
+    // A λ pinned at (or past) the log-clamp bounds is the multi-penalty analogue of
+    // a collapsed term. On a tensor smooth one margin can get driven to the ceiling
+    // while the term's TOTAL EDF still sits well above its null-space dimension, so
+    // the EDF test alone is blind to it. A pinned λ is never a real interior
+    // optimum, so it earns the same restart probe.
     let lambda_bounds = || -> (f64, f64) {
         (
             (super::solver::LOG_LAMBDA_CLAMP - 1e-6).exp(),
@@ -392,40 +394,41 @@ pub(super) fn step<D: Distribution + ?Sized>(
     let (best_lambdas, new_beta, cov_matrix, term_edf) = {
         let (beta, cov, term_edf) = fit_and_terms(&best_lambdas)?;
 
-        // Collapse-guarded restart. The LAML/GCV objective is unimodal in λ but
-        // carries a flat high-λ shelf where a smooth sits in its penalty null
-        // space; BLAS reduction-order noise can occasionally tip the optimizer
-        // onto that shelf (rare, nondeterministic). If the incumbent collapsed,
-        // re-optimize from a low-λ seed (below the shelf) and keep whichever λ
-        // has the better objective. Comparing objectives means a genuinely
-        // null-space-optimal fit (a linear truth under an order-2 penalty) is
-        // preserved — its collapse has the better marginal likelihood — while a
-        // spuriously collapsed signal-bearing fit is repaired.
+        // Collapse-guarded restart. The LAML/GCV objective is unimodal in λ, but it
+        // carries a flat high-λ shelf where a smooth just sits in its penalty null
+        // space, and BLAS reduction-order noise can occasionally tip the optimizer
+        // up onto that shelf (rare, and nondeterministic, which is the annoying
+        // part). If the incumbent collapsed, re-optimize from a low-λ seed below the
+        // shelf and keep whichever λ scores better. Comparing objectives is what
+        // makes this safe: a genuinely null-space-optimal fit (a linear truth under
+        // an order-2 penalty) survives, because its collapse really does have the
+        // better marginal likelihood, while a signal-bearing fit that collapsed by
+        // accident gets repaired.
         // The trigger is the CHEAP suspicion set only: a collapsed term, or a λ
-        // pinned at the log-clamp ceiling / MIN_LAMBDA floor. It re-runs every
-        // cycle the state stays suspicious, deliberately: λ can reach a bound on
-        // cycle 1–2 while the working (z, w) still reflect a poor scale estimate,
-        // so an early probe finds nothing and a skip-once rule would never
-        // re-probe at the converged state where the rescue is actually decidable.
+        // pinned at the log-clamp ceiling / MIN_LAMBDA floor. It deliberately re-runs
+        // every cycle the state stays suspicious. λ can hit a bound on cycle 1–2
+        // while the working (z, w) still reflect a poor scale estimate, so an early
+        // probe finds nothing, and a skip-once rule would then never re-probe at the
+        // converged state, which is the one place the rescue is actually decidable.
         //
         // A prior revision ALSO probed every multi-penalty (anisotropic-tensor)
         // cycle unconditionally, to catch the one spurious shape the cheap set
-        // misses: a margin's λ "merely very large" but not at a bound while the
-        // term EDF sits above its null dim. That was ruinously expensive: each
+        // misses: a margin's λ "merely very large" but not at a bound, while the
+        // term EDF sits above its null dim. That was ruinously expensive. Each
         // firing runs a 7^k derivative-free grid plus several full
         // L-BFGS/Fellner-Schall optimizations, every one an eigendecomposition on
         // the term's k₁k₂ coefficient block, so a single default-10×10 tensor fit
-        // ran ~30 s (OpenBLAS) to >2 min (pure-rust/nalgebra) in a debug build,
-        // hanging the pre-push/CI suites, which build unoptimized and run both
-        // backends. Nothing runnable guarded the payoff: the merely-large-λ
+        // ran ~30 s (OpenBLAS) to >2 min (pure-rust/nalgebra) in a debug build and
+        // hung the pre-push/CI suites, which build unoptimized and run both
+        // backends. And nothing runnable even guarded the payoff: the merely-large-λ
         // rescue is validated only by the `#[ignore]`d, data-gated
-        // `benchmark/run_comparison.sh` mgcv sweep, so the cost was paid on every
-        // tensor fit to protect a case no CI/pre-push test checks. Reverted to the
-        // cheap trigger here. The ceiling/floor spurious basins (incl. the seed-9
-        // "corner") are still caught by `lambda_at_bound`; only the
-        // merely-large-interior sub-case is dropped, and it sits within the
-        // sweep's 20–25 % EDF tolerance. Re-run the mgcv comparison before relying
-        // on tensor EDF parity for a new seed.
+        // `benchmark/run_comparison.sh` mgcv sweep, so we were paying that cost on
+        // every tensor fit to protect a case no CI/pre-push test checks. So it's
+        // reverted to the cheap trigger here. The ceiling/floor spurious basins (the
+        // seed-9 "corner" included) are still caught by `lambda_at_bound`; only the
+        // merely-large-interior sub-case is dropped, and it sits inside the sweep's
+        // 20–25 % EDF tolerance anyway. Re-run the mgcv comparison before you trust
+        // tensor EDF parity on a new seed.
         if !penalties.is_empty() && (is_collapsed(&term_edf) || lambda_at_bound(&best_lambdas)) {
             let cost_of = |lams: &Array1<f64>| -> Result<f64, GamlssError> {
                 lambda_cost(criterion, &nfo, penalties, &groups, lams)
@@ -435,16 +438,16 @@ pub(super) fn step<D: Distribution + ?Sized>(
 
             // Probe alternative basins and keep the best-scoring λ:
             //  1. the low-λ restart seed (below the high-λ collapse shelf);
-            //  2. a fresh cold start (`initial_lambdas = None`), which explores
-            //     the surface unanchored: warm-start history can pin λ in a
-            //     corner basin that a cold start correctly avoids;
-            //  3. for multi-penalty terms, PER-COORDINATE variants of the
-            //     incumbent with each bound-pinned λ_j individually dropped to
-            //     the restart level. Anisotropic tensor smooths develop corner
-            //     traps where one margin's λ sits at the ceiling while the true
-            //     LAML optimum has that margin interior, a geometry the
-            //     all-coordinates seeds (1) and (2) can both miss because they
-            //     descend into a different stationary point.
+            //  2. a fresh cold start (`initial_lambdas = None`), which explores the
+            //     surface with no anchor: warm-start history can pin λ in a corner
+            //     basin that a cold start steers clear of;
+            //  3. for multi-penalty terms, PER-COORDINATE variants of the incumbent
+            //     with each bound-pinned λ_j dropped to the restart level one at a
+            //     time. Anisotropic tensor smooths grow corner traps where one
+            //     margin's λ sits at the ceiling while the true LAML optimum has
+            //     that margin interior, and the all-coordinates seeds (1) and (2)
+            //     can both walk right past it, because they descend into a different
+            //     stationary point.
             let heur = initial_log_lambda(&target.x_matrix, penalties);
             let restart = restart_seed_from_heuristic(&heur);
             let mut seeds: Vec<Option<Array1<f64>>> = vec![Some(restart.clone()), None];
@@ -458,14 +461,14 @@ pub(super) fn step<D: Distribution + ?Sized>(
                     }
                 }
             }
-            // For one- and two-penalty terms, additionally seed from the best
-            // cell of a coarse log-λ grid around the cold-start heuristic.
-            // Gradient descent from ANY single seed can fall into a spurious
-            // stationary point of the multimodal anisotropic-tensor LAML
-            // surface (observed: a corner with one margin at the ceiling
-            // scoring 5 LAML units worse than the interior optimum, missed by
-            // every gradient-started probe on some datasets); a grid evaluation
-            // is derivative-free and cannot be captured by a basin boundary.
+            // For one- and two-penalty terms, also seed from the best cell of a
+            // coarse log-λ grid around the cold-start heuristic. Gradient descent
+            // from ANY single seed can drop into a spurious stationary point of the
+            // multimodal anisotropic-tensor LAML surface (I've watched it: a corner
+            // with one margin at the ceiling scoring 5 LAML units worse than the
+            // interior optimum, missed by every gradient-started probe on some
+            // datasets). A grid evaluation is derivative-free, so no basin boundary
+            // can trap it.
             if best_lambdas.len() <= 2 {
                 let offsets: [f64; 7] = [-16.0, -12.0, -8.0, -4.0, 0.0, 4.0, 8.0];
                 let n_dims = best_lambdas.len();
@@ -479,7 +482,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
                     }
                     cell
                 };
-                // Every grid cell's cost is independent of the others (at most
+                // Every grid cell's cost is independent of every other (at most
                 // 7² = 49 cells), so evaluate them in parallel; picking the
                 // best-scoring cell stays a serial reduction over the results.
                 let cell_costs: Vec<Option<(f64, Array1<f64>)>> = {
@@ -513,14 +516,14 @@ pub(super) fn step<D: Distribution + ?Sized>(
                     seeds.push(Some(cell));
                 }
             }
-            // Screen candidates cheaply (no polish) and keep the best-scoring
-            // one; a seed that combines an extreme pinned λ on one margin with
-            // a tiny restart value on another can make the speculative solve
-            // ill-conditioned, so a failed candidate is skipped rather than
-            // aborting the whole fit, mirroring the grid-cell loop above. Each
-            // seed's optimization is independent, so it runs in parallel too;
-            // the winner-tracking reduction stays serial so a tie keeps the
-            // earliest-listed seed, matching the sequential behavior.
+            // Screen candidates cheaply (no polish) and keep the best-scoring one.
+            // A seed that pairs an extreme pinned λ on one margin with a tiny restart
+            // value on another can leave the speculative solve ill-conditioned, so a
+            // candidate that fails just gets skipped rather than taking the whole fit
+            // down, the same way the grid-cell loop above handles it. Each seed's
+            // optimization is independent, so this runs in parallel too; the
+            // winner-tracking reduction stays serial, so a tie keeps the
+            // earliest-listed seed and matches the sequential behavior.
             let seed_results: Vec<Option<(f64, Array1<f64>)>> = {
                 #[cfg(feature = "parallel")]
                 {
@@ -907,7 +910,7 @@ mod tests {
     fn step_halving_damps_an_overshooting_step() {
         // ȳ = 3; a proposed μ = 10 overshoots so far the deviance *increases*
         // (Σ(y−10)² = 255 > Σy² = 55). Halving once lands on μ = 5
-        // (Σ(y−5)² = 30 < 55), a strict decrease — so hits ≥ 1 and the accepted
+        // (Σ(y−5)² = 30 < 55), a strict decrease, so hits ≥ 1 and the accepted
         // deviance is below the starting deviance.
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
         let n = y.len();

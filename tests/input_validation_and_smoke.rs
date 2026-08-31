@@ -1,10 +1,10 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking blocks it.
 #![cfg(not(feature = "python"))]
 
-//! Gaps the rest of the suite left open: the input-validation error paths
-//! (`preprocessing::validate_inputs`), degenerate-size robustness (n = 1, perfect
-//! separation), and one end-to-end smoke test exercising the whole public pipeline
-//! (`fit → predict → predict_with_se → JSON round-trip`).
+//! This one mops up the gaps the rest of the suite left open: the input-validation
+//! error paths (`preprocessing::validate_inputs`), degenerate-size robustness (n = 1,
+//! perfect separation), and one end-to-end smoke test that drives the whole public
+//! pipeline (`fit → predict → predict_with_se → JSON round-trip`).
 
 use glissando::{
     distributions::{Binomial, Gaussian},
@@ -12,8 +12,8 @@ use glissando::{
 };
 use ndarray::Array1;
 
-/// `NaAction::Fail` config — the path that rejects non-finite model variables
-/// rather than dropping their rows (the historical default).
+/// `NaAction::Fail` config: the path that rejects non-finite model variables
+/// instead of dropping their rows (the historical default).
 fn fail_on_na() -> FitConfig {
     FitConfig::default().with_na_action(NaAction::Fail)
 }
@@ -55,7 +55,7 @@ fn nan_in_response_returns_non_finite_error() {
     data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0]));
 
     // Under `NaAction::Fail`, a non-finite response is a hard error (the default
-    // `DropRows` would instead drop the row — see `tests/data_na_handling.rs`).
+    // `DropRows` would drop the row instead; see `tests/data_na_handling.rs`).
     let err = GamlssModel::fit_with_config(
         &data,
         &y,
@@ -104,8 +104,8 @@ fn single_observation_intercept_only_does_not_panic() {
     f.add_terms("mu", vec![Term::Intercept]);
     f.add_terms("sigma", vec![Term::Intercept]);
 
-    // A single observation is degenerate for σ, but the call must return a Result
-    // rather than panic. If it converges, the mean intercept should sit at y[0].
+    // One observation is degenerate for σ. Doesn't matter, the call has to return a
+    // Result and not panic. If it does converge, the mean intercept should land on y[0].
     match GamlssModel::fit(&data, &y, &f, &Gaussian::new()) {
         Ok(model) => {
             let mu0 = model.models["mu"].coefficients[0];
@@ -121,8 +121,8 @@ fn single_observation_intercept_only_does_not_panic() {
 #[test]
 fn binomial_perfect_separation_does_not_panic() {
     // Perfectly separable Bernoulli data: y flips at x = 0. The MLE slope is
-    // unbounded, so the fit may not converge — but it must not panic, and the
-    // coefficients it reports must stay finite (logit link + Fisher weights guard).
+    // unbounded, so the fit may not converge. It must not panic either way, and
+    // the coefficients it reports have to stay finite (logit link + Fisher weights guard).
     let x: Vec<f64> = (-10..10).map(|i| i as f64).collect();
     let y: Vec<f64> = x
         .iter()
@@ -195,8 +195,8 @@ fn fit_predict_se_and_json_roundtrip() {
     }
 }
 
-/// JSON round-trip extends the smoke test through the `serialization` surface:
-/// a reloaded model must reproduce the original predictions bit-for-bit.
+/// JSON round-trip carries the smoke test on through the `serialization` surface:
+/// a reloaded model has to reproduce the original predictions bit-for-bit.
 #[cfg(feature = "serialization")]
 #[test]
 fn json_roundtrip_preserves_predictions() {

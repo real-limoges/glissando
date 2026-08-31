@@ -2,8 +2,8 @@
 
 use ndarray::Array2;
 
-/// P-spline penalty S = D'D.  Order 2 approximates the integral of the squared
-/// second derivative (exact for the natural cubic spline, approximate for B-splines).
+/// P-spline penalty S = D'D. Order 2 approximates the integral of the squared
+/// second derivative: exact for the natural cubic spline, only approximate for B-splines.
 pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f64> {
     let n_rows_d = n_splines.saturating_sub(order);
     if n_rows_d == 0 {
@@ -11,10 +11,10 @@ pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f6
     }
 
     // General order-d difference coefficients: convolve [1, -1] with itself d
-    // times, giving the alternating binomial row (1, -d, ..., ±1): identical to
-    // R's diff(diag(k), differences = d). The previous code special-cased orders
-    // 1 and 2 and silently reused the order-2 row (with the wrong number of
-    // rows) for anything higher.
+    // times to get the alternating binomial row (1, -d, ..., ±1). Same thing as
+    // R's diff(diag(k), differences = d). The old code special-cased orders 1 and
+    // 2, then silently reused the order-2 row (with the wrong number of rows) for
+    // anything higher. That was a bug.
     let mut coef = vec![1.0_f64];
     for _ in 0..order {
         let mut next = vec![0.0; coef.len() + 1];

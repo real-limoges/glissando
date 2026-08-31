@@ -1,20 +1,20 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature, courtesy of PyO3's extension-module linking
 #![cfg(not(feature = "python"))]
 
 //! Parameter-recovery coverage for a P-spline smooth on a *scale* parameter.
 //!
 //! `tests/parameter_recovery.rs` and `tests/comprehensive.rs` cover smooths on
 //! `mu` and linear terms on `sigma`, but nothing fits a *smooth* on `sigma`.
-//! This file pins that case: a smooth on `sigma` must track a known nonlinear
+//! This file pins that case: a smooth on `sigma` has to track a known nonlinear
 //! `log σ(x)`, not collapse onto the penalty null space (a straight line in
-//! `log σ`). A collapsed σ-smooth shows up two ways here — low correlation with
-//! the truth, and an effective degrees of freedom pinned near its null-space
-//! dimension — and either makes the test fail.
+//! `log σ`). A collapsed σ-smooth shows up two ways here, low correlation with
+//! the truth and an effective degrees of freedom pinned near its null-space
+//! dimension, and either one fails the test.
 //!
-//! These recovery fits used to collapse rarely and nondeterministically: the
+//! These recovery fits used to collapse rarely and nondeterministically. The
 //! λ-objective is unimodal but has a flat high-λ shelf (smooth pinned to its
 //! null space) that OpenBLAS reduction-order noise could occasionally tip the
-//! optimizer onto. That is now repaired by the collapse-guarded restart in
+//! optimizer onto. That's now fixed by the collapse-guarded restart in
 //! `fitting::scoring::step` (see `docs/math/mathematics.md` [RESTART-GUARD]). The root-cause
 //! diagnostics live in `tests/lambda_bistability.rs` and
 //! `solver::reml_tests::diagnostic_laml_landscape_control_case` (both `#[ignore]`d).
@@ -24,7 +24,7 @@ use ndarray::Array1;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 
-/// Pearson correlation between two equal-length vectors.
+/// Pearson correlation between two equal-length vectors. Nothing fancy.
 fn correlation(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len() as f64;
     let mean_a = a.iter().sum::<f64>() / n;
@@ -42,7 +42,7 @@ fn correlation(a: &[f64], b: &[f64]) -> f64 {
     cov / (var_a.sqrt() * var_b.sqrt())
 }
 
-/// True scale curve: `log σ(x) = -0.7 + 0.8·sin(2πx)` for `x ∈ [0, 1]`.
+/// The true scale curve: `log σ(x) = -0.7 + 0.8·sin(2πx)` for `x ∈ [0, 1]`.
 fn true_log_sigma(x: f64) -> f64 {
     -0.7 + 0.8 * (2.0 * std::f64::consts::PI * x).sin()
 }
@@ -52,7 +52,7 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
 
-    // Constant mean; all of the structure lives in the scale parameter.
+    // Constant mean; all the structure lives in the scale parameter.
     let true_mu = 5.0;
 
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
@@ -90,6 +90,7 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     let edf_sigma = sigma_param.edf;
 
     // Predicted σ on the response scale; compare log σ̂ against the truth.
+    // That's the actual test.
     let preds = model
         .predict(&data, &Gaussian::new())
         .expect("predict failed");
@@ -101,9 +102,9 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     println!("σ-smooth edf = {edf_sigma:.3}, corr(log σ̂, log σ) = {corr:.4}");
     println!("{model}");
 
-    // A smooth on σ that has truly fit the curve correlates strongly with the
-    // truth. A null-space collapse (straight line in log σ) cannot follow a full
-    // sine period and correlates weakly.
+    // A smooth on σ that genuinely fit the curve correlates strongly with the
+    // truth. A null-space collapse (straight line in log σ) can't follow a full
+    // sine period, so it correlates weakly.
     assert!(
         corr > 0.8,
         "σ-smooth failed to track log σ(x): corr = {corr:.4} (expected > 0.8). \
@@ -111,7 +112,7 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     );
 
     // The smooth block's penalty null space (after sum-to-zero centering of an
-    // order-2 P-spline) is the linear direction, so a collapsed σ model has
+    // order-2 P-spline) is the linear direction, so a collapsed σ model sits at
     // edf ≈ 2 (intercept + linear remainder). Recovering a sine needs visibly
     // more curvature than that.
     assert!(
@@ -127,7 +128,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
     let mut rng = StdRng::seed_from_u64(3);
 
     // A strictly linear mean. A 2nd-order P-spline's penalty null space is the
-    // set of straight lines, so the optimal smooth here *is* its null space —
+    // set of straight lines, so the optimal smooth here *is* its null space:
     // REML drives λ up and the smooth collapses to a line, tripping the warning.
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
     let y_vals: Vec<f64> = x_vals
@@ -157,7 +158,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).expect("Fit failed");
 
-    // Per-term EDF must decompose the parameter EDF.
+    // Per-term EDF has to decompose the parameter EDF.
     for (name, fp) in &model.models {
         let sum: f64 = fp.term_edf.iter().sum();
         assert!(
@@ -182,7 +183,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 #[test]
 fn recovered_curve_does_not_warn() {
     // The strong-signal recovery case from `sigma_smooth_recovers_nonlinear_scale`
-    // must NOT raise a spurious collapse warning.
+    // must NOT throw a spurious collapse warning.
     let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();
@@ -222,8 +223,8 @@ fn recovered_curve_does_not_warn() {
 }
 
 /// Control: the *same* nonlinear curve placed on `mu` recovers fine today. This
-/// isolates the failure to the scale-parameter path rather than the smooth
-/// machinery in general.
+/// pins the failure to the scale-parameter path, not the smooth machinery in
+/// general.
 #[test]
 fn mu_smooth_recovers_nonlinear_mean_control() {
     let n = 8_000;
@@ -233,7 +234,7 @@ fn mu_smooth_recovers_nonlinear_mean_control() {
     let y_vals: Vec<f64> = x_vals
         .iter()
         .map(|&x| {
-            // log σ curve reused as a mean curve, constant noise.
+            // Reuse the log σ curve as a mean curve, with constant noise.
             let mu = true_log_sigma(x);
             Normal::new(mu, 0.2).unwrap().sample(&mut rng)
         })

@@ -1,18 +1,19 @@
 # Glissando Benchmark Suite
 
-Comparison framework for validating the Rust `glissando` implementation against R's established GAMLSS tools (`mgcv` and `gamlss` packages).
+This is how I keep the Rust `glissando` implementation honest: I fit the same models in R's established GAMLSS tools (`mgcv` and `gamlss`) and check that the numbers agree.
 
 ## Overview
 
-This benchmark compares glissando (Rust) against:
-- **R/mgcv**: For Gaussian, Poisson, Gamma, Negative Binomial, and Beta distributions
-- **R/gamlss**: The like-for-like oracle for Student-t (`TF()`), since it implements the
-  same Rigby–Stasinopoulos algorithm and the same (μ, σ, ν) location-scale-df
-  parameterization glissando uses. mgcv's `scat()` is *also* run for Student-t as a loose,
-  μ-only cross-method sanity check, but it cannot validate σ/ν/EDF/SE because it folds
-  σ and ν into internal nuisance scalars rather than exposing them as modelled predictors.
+The benchmark holds glissando (Rust) up against two R oracles:
+- **R/mgcv**: for Gaussian, Poisson, Gamma, Negative Binomial, and Beta.
+- **R/gamlss**: the like-for-like oracle for Student-t (`TF()`). It is the oracle because it
+  implements the same Rigby–Stasinopoulos algorithm and the same (μ, σ, ν)
+  location-scale-df parameterization glissando uses, so a disagreement is a real bug rather
+  than a difference of convention. mgcv's `scat()` is *also* run for Student-t, but only as a
+  loose, μ-only cross-method sanity check: it cannot validate σ/ν/EDF/SE, because it folds σ
+  and ν into internal nuisance scalars instead of exposing them as modeled predictors.
 
-The suite generates synthetic data with known parameters, fits models in both implementations, and produces detailed comparison reports.
+The suite draws synthetic data with known parameters, fits it in both implementations, and writes out detailed comparison reports.
 
 ## Quick Start
 
@@ -43,17 +44,17 @@ cd benchmark
 ./run_comparison.sh
 ```
 
-After regeneration, `tests/mgcv_reference.rs` validates the glissando results
+Once the data is regenerated, `tests/mgcv_reference.rs` checks the glissando results
 against mgcv coefficient-by-coefficient and pointwise on fitted μ:
 
 ```bash
 cargo test --test mgcv_reference -- --ignored
 ```
 
-The test reads `benchmark/output/comparison_summary.json` (gitignored) and
-asserts agreement within scenario-aware tolerances (~1e-3 relative for linear
-models, ~5% for smooths). It is `#[ignore]`-gated because the comparison output
-must exist locally; CI without R cannot run it.
+The test reads `benchmark/output/comparison_summary.json` (gitignored) and asserts
+agreement within scenario-aware tolerances (~1e-3 relative for linear models, ~5% for
+smooths). It is `#[ignore]`-gated on purpose: the comparison output has to exist locally
+first, and CI without R has no way to produce it.
 
 ## Commands
 
@@ -110,15 +111,16 @@ All scenarios use 500 observations by default (configurable via `N_OBS`).
 ## Interpretation
 
 ### Convergence
-Both implementations should converge for all scenarios.
+Both implementations should converge on every scenario.
+If one of them does not, that is the finding.
 
 ### Performance
-Speedup = R time / Rust time (typical range: 2-10x for large data)
+Speedup = R time / Rust time (typically 2-10x on large data).
 
 ### Accuracy
-- **Correlation**: Should be > 0.99 for linear, > 0.95 for smooth
-- **RMSE**: Smaller is better
-- **Coefficient differences**: Should be within ~1e-6 to 1e-3
+- **Correlation**: > 0.99 for linear, > 0.95 for smooth.
+- **RMSE**: smaller is better.
+- **Coefficient differences**: within ~1e-6 to 1e-3.
 
 ## Dependencies
 

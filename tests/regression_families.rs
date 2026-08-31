@@ -1,17 +1,17 @@
 // Per-family end-to-end fit snapshots.
 //
 // `tests/regression.rs` snapshots three Gaussian fits, 1 of 15 families. This
-// file covers the rest, so that a change to any family's `theta_derivatives()` shows
-// up as fitted-coefficient drift rather than passing unnoticed.
+// file picks up the rest, so a change to any family's `theta_derivatives()` shows
+// up as fitted-coefficient drift instead of slipping by unnoticed.
 //
-// It is the end-to-end counterpart to `tests/derivative_golden.rs`: that file
-// pins what each family *returns*, this one pins where the fitting loop
-// *lands*. The generic-link-chain-rule refactor (Altitude #1) must leave every
-// snapshot here byte-identical, because it only changes how the default-link
-// chain rule is expressed, not what it evaluates to.
+// Think of it as the end-to-end counterpart to `tests/derivative_golden.rs`: that
+// file pins what each family *returns*, this one pins where the fitting loop
+// *lands*. The generic-link-chain-rule refactor (Altitude #1) has to leave every
+// snapshot here byte-identical, since it only changes how the default-link chain
+// rule is expressed, not what it evaluates to.
 //
-// Data is generated deterministically from closed-form patterns rather than an
-// RNG, so the fixtures do not depend on any random-number implementation.
+// Data is generated deterministically from closed-form patterns, no RNG, so the
+// fixtures don't lean on any random-number implementation.
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test regression_families`.
 #![cfg(not(feature = "python"))]
@@ -32,9 +32,9 @@ use std::collections::BTreeMap;
 
 const N: usize = 60;
 
-/// Snapshotted fit summary. Mirrors `tests/regression.rs::ModelSnapshot`;
-/// λ is omitted because every fixture here is purely parametric (no penalties),
-/// so λ carries no information.
+/// Snapshotted fit summary. Mirrors `tests/regression.rs::ModelSnapshot`; I drop
+/// λ because every fixture here is purely parametric (no penalties), so λ carries
+/// no information.
 #[derive(Debug, Serialize)]
 struct FitSnapshot {
     converged: bool,
@@ -44,8 +44,8 @@ struct FitSnapshot {
     aic: String,
 }
 
-/// 5 significant figures, matching `tests/regression.rs`'s convention: enough
-/// to catch real drift, loose enough to survive trailing-digit differences
+/// 5 significant figures, matching `tests/regression.rs`'s convention: tight
+/// enough to catch real drift, loose enough to survive trailing-digit differences
 /// between the openblas and pure-rust backends.
 fn fmt(x: f64) -> String {
     format!("{:.4e}", x)
@@ -79,7 +79,7 @@ fn snapshot<D: Distribution + ?Sized>(
     }
 }
 
-/// Deterministic covariate on `[0, 1)`.
+/// A deterministic covariate on `[0, 1)`.
 fn x_grid() -> Array1<f64> {
     (0..N).map(|i| i as f64 / N as f64).collect()
 }
@@ -90,12 +90,12 @@ fn dataset(x: &Array1<f64>) -> DataSet {
     d
 }
 
-/// Deterministic bounded "noise" in `[-1, 1]`, from a non-repeating pattern.
+/// Deterministic bounded "noise" in `[-1, 1]`, off a non-repeating pattern.
 fn jitter(i: usize) -> f64 {
     ((i as f64 * 0.7391).sin() + (i as f64 * 1.317).cos()) * 0.5
 }
 
-/// `μ ~ 1 + x`, every remaining parameter intercept-only.
+/// `μ ~ 1 + x`, with every remaining parameter intercept-only.
 fn formula_for<D: Distribution + ?Sized>(family: &D) -> Formula {
     let mut f = Formula::new();
     f.add_terms(
@@ -171,13 +171,12 @@ fn fit_gamma() {
 
 #[test]
 fn fit_negative_binomial() {
-    // Genuinely overdispersed draws, not smooth jitter. With deterministic
-    // jitter the sample variance sits *below* the mean, so σ collapses toward
-    // its numerical floor (σ ≈ 1e-10, the Poisson limit) and its coefficient is
-    // then determined by where that floor bites, which differs between the
-    // openblas and pure-rust backends and made the snapshot backend-dependent.
-    // Drawing from NB(μ, σ) with σ = 0.4 keeps σ identifiable and the snapshot
-    // stable across both.
+    // Genuinely overdispersed draws here, not smooth jitter. With deterministic
+    // jitter the sample variance sits *below* the mean, so σ collapses toward its
+    // numerical floor (σ ≈ 1e-10, the Poisson limit) and its coefficient is then
+    // pinned by where that floor bites. That differs between the openblas and
+    // pure-rust backends, which made the snapshot backend-dependent. Drawing from
+    // NB(μ, σ) with σ = 0.4 keeps σ identifiable and the snapshot stable across both.
     let mut gen = Generator::new(42);
     let x = x_grid();
     let y: Array1<f64> = (0..N)
@@ -206,8 +205,9 @@ fn fit_weibull() {
 
 #[test]
 fn fit_student_t() {
-    // ν must be intercept-only (the KKT projection at the ν floor is exact only
-    // for a constant η_ν; `student_t.rs:140-146`), which `formula_for` gives.
+    // ν has to be intercept-only. The KKT projection at the ν floor is exact only
+    // for a constant η_ν (`student_t.rs:140-146`), which is exactly what
+    // `formula_for` hands us.
     let x = x_grid();
     let y: Array1<f64> = (0..N).map(|i| 1.0 + 2.0 * x[i] + 0.5 * jitter(i)).collect();
     insta::assert_yaml_snapshot!(fit_and_snapshot(&StudentT::new(), &y, &x));
@@ -217,13 +217,13 @@ fn fit_student_t() {
 // Box-Cox family
 // ---------------------------------------------------------------------------
 
-// The Box-Cox trio is the one place a closed-form fixture does not work. BCT
-// and BCPE estimate a fourth, tail-shape parameter (τ), which is unidentifiable
+// The Box-Cox trio is the one spot where a closed-form fixture just doesn't work.
+// BCT and BCPE estimate a fourth, tail-shape parameter (τ) that's unidentifiable
 // from smooth deterministic jitter: τ drifts toward its boundary and the fit
-// stops at the iteration limit. A non-converged snapshot would pin
-// iteration-limit behavior rather than a fitted optimum, so these three draw
-// from the actual family via the shared seeded generators, the same
-// `Generator::new(42)` pattern `tests/regression.rs` already uses.
+// stalls at the iteration limit. A non-converged snapshot would pin
+// iteration-limit behavior instead of a fitted optimum, so these three draw from
+// the actual family via the shared seeded generators, the same `Generator::new(42)`
+// pattern `tests/regression.rs` already uses.
 
 #[test]
 fn fit_bccg() {
@@ -233,16 +233,15 @@ fn fit_bccg() {
 
 #[test]
 fn fit_bct() {
-    // This snapshot records `converged: false`, and that is pre-existing and
-    // expected, not a defect in the fixture: near the normal limit τ is weakly
-    // identified, so the deviance keeps wiggling above tolerance even though
-    // every estimate lands on target. `bct_recovers_known_parameters`
-    // (`tests/boxcox_families.rs:32-35`) documents the same behavior and asserts
-    // recovery rather than the flag.
+    // This snapshot records `converged: false`. That's pre-existing and expected,
+    // not a bug in the fixture: near the normal limit τ is weakly identified, so
+    // the deviance keeps wiggling above tolerance even though every estimate lands
+    // on target. `bct_recovers_known_parameters` (`tests/boxcox_families.rs:32-35`)
+    // documents the same behavior and asserts recovery, not the flag.
     //
-    // The estimates here confirm it: σ = exp(-1.634) = 0.195 against a true 0.2,
-    // τ = exp(1.916) = 6.8 against a true 6.0, slope 1.06 against a true 1.0.
-    // The coefficients are what this file pins, and they are stable.
+    // The estimates here bear it out: σ = exp(-1.634) = 0.195 against a true 0.2,
+    // τ = exp(1.916) = 6.8 against a true 6.0, slope 1.06 against a true 1.0. The
+    // coefficients are what this file pins, and they're stable.
     let (y, data) = Generator::new(42).bct_data(200, 0.0, 1.0, 0.2, 0.5, 6.0);
     insta::assert_yaml_snapshot!(fit_and_snapshot_with_data(&BCT::new(), &y, &data));
 }
@@ -285,7 +284,7 @@ fn fit_ocat() {
 fn fit_censored_gaussian() {
     let x = x_grid();
     let y: Array1<f64> = (0..N).map(|i| 1.0 + 2.0 * x[i] + 0.4 * jitter(i)).collect();
-    // Every third row right-censored: a deterministic, reproducible pattern.
+    // Every third row right-censored, a deterministic and reproducible pattern.
     let status = Array1::from_vec(
         (0..N)
             .map(|i| {
@@ -314,7 +313,7 @@ fn fit_truncated_gaussian() {
 #[test]
 fn fit_hurdle_gamma() {
     let x = x_grid();
-    // Every fourth row is a structural zero; the rest are strictly positive.
+    // Every fourth row is a structural zero; the rest stay strictly positive.
     let y: Array1<f64> = (0..N)
         .map(|i| {
             if i % 4 == 0 {
@@ -334,9 +333,9 @@ fn fit_hurdle_gamma() {
 
 #[test]
 fn fit_gaussian_pspline_reml() {
-    // `tests/regression.rs` pins every snapshot to GCV. This covers the default
-    // criterion (REML) on a penalized fit, so a change that moves λ selection
-    // has somewhere to show up.
+    // `tests/regression.rs` pins every snapshot to GCV. This one covers the default
+    // criterion (REML) on a penalized fit, so a change that moves λ selection has
+    // somewhere to show up.
     let x = x_grid();
     let y: Array1<f64> = (0..N)
         .map(|i| (2.0 * std::f64::consts::PI * x[i]).sin() + 0.2 * jitter(i))
@@ -365,7 +364,7 @@ fn fit_gaussian_pspline_reml() {
         None,
         &formula,
         &family,
-        FitConfig::default(), // criterion: Reml
+        FitConfig::default(), // criterion: Reml, the default
     )
     .unwrap();
     insta::assert_yaml_snapshot!(snapshot(&model, &family, &y));

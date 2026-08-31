@@ -12,8 +12,9 @@
 //! Bounds may be `±∞` (an open side reduces that term to `0` or `1`). With
 //! `(−∞, ∞)` the wrapper reduces exactly to the base family. `cdf` / `quantile`
 //! are renormalized onto the truncated support; `variance` / `expected_value`
-//! delegate to the base family (they report the *untruncated* parameter moments;
-//! truncated moments would need numerical integration and are out of scope).
+//! delegate to the base family. Those report the *untruncated* parameter moments:
+//! the truncated moments would need numerical integration, and I've left that out
+//! of scope.
 //!
 //! Like the other structural wrappers it carries per-row state and is excluded
 //! from [`from_name`](super::from_name).

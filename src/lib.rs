@@ -1,9 +1,11 @@
 #![recursion_limit = "1024"]
 //! Generalized Additive Models for Location, Scale, and Shape (GAMLSS) in Rust.
 //!
-//! GAMLSS extends traditional regression by modeling multiple distribution parameters
-//! (mean, variance, shape) as functions of predictors using the Rigby-Stasinopoulos
-//! algorithm with penalized B-splines for nonlinear effects.
+//! Ordinary regression models the mean and stops there. GAMLSS models the whole
+//! shape of the response: the mean, yes, but also the spread, the skew, and the
+//! kurtosis, each as its own function of the predictors. It does that through the
+//! Rigby-Stasinopoulos algorithm, with penalized B-splines carrying the nonlinear
+//! effects.
 //!
 //! # Quick start
 //!
@@ -43,10 +45,12 @@ mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-/// Re-export of the exact `ndarray` major this crate is built against. Construct
-/// or consume `Array1`/`Array2` through `glissando::ndarray::…` so the types
-/// unify with this crate's public API (`predict`, `predict_with_se`) without
-/// pinning a matching `ndarray` version yourself.
+/// The exact `ndarray` major this crate is built against, re-exported. Build and
+/// read your `Array1`/`Array2` through `glissando::ndarray::…` and they unify
+/// with this crate's public API (`predict`, `predict_with_se`) for free. Skip it
+/// and pin the wrong `ndarray` version yourself, and you get a type-mismatch
+/// error that reads like the two arrays are unrelated when they only differ by a
+/// version number.
 pub use ndarray;
 
 pub use error::GamlssError;

@@ -1,4 +1,4 @@
-//! `Formula` — a mapping from distribution-parameter names (`"mu"`, `"sigma"`, …)
+//! `Formula`: a mapping from distribution-parameter names (`"mu"`, `"sigma"`, …)
 //! to the list of [`Term`]s describing each parameter's linear predictor.
 
 use std::collections::HashMap;
@@ -6,9 +6,9 @@ use std::ops::{Deref, DerefMut};
 
 use crate::terms::Term;
 
-/// A model formula mapping parameter names to term vectors,
-/// wrapping `HashMap<String, Vec<Term>>`. Inner field is crate-private; use
-/// the builder methods or `Deref` for read access.
+/// A model formula mapping parameter names to term vectors, wrapping
+/// `HashMap<String, Vec<Term>>`. The inner field is crate-private; go through the
+/// builder methods or `Deref` for read access.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -44,9 +44,9 @@ impl Formula {
 
     /// Build a single-parameter formula from an R/mgcv-style string (DATA-5).
     ///
-    /// The response on the left of `~` is parsed but discarded — glissando takes
-    /// the response array separately at fit time — so `"y ~ s(x) + z"` and
-    /// `"~ s(x) + z"` are equivalent here.
+    /// The response on the left of `~` is parsed and then thrown away (glissando
+    /// takes the response array separately at fit time), so `"y ~ s(x) + z"` and
+    /// `"~ s(x) + z"` mean the same thing here.
     ///
     /// ```
     /// use glissando::{Formula, Term};

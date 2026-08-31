@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking.
+// These can't run under the `python` feature. PyO3's extension-module linking won't have it.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -11,13 +11,13 @@ use glissando::{
 };
 
 // ----------------------------------------------------------------------------
-// INFER-7 — ic_table
+// INFER-7: ic_table
 // ----------------------------------------------------------------------------
 
 #[test]
 fn ic_table_ranks_better_fit_below_worse_fit() {
     let mut rng = Generator::new(42);
-    // y depends on x1; the null (intercept-only) model fits worse than mu ~ x1.
+    // y depends on x1, so the null (intercept-only) model fits worse than mu ~ x1.
     let (y, data) = rng.gaussian_with_noise_columns(200, 4.0, 1.0, 0.5);
 
     let null = intercept_only(&["mu", "sigma"]);
@@ -36,7 +36,7 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].label, "null");
     assert_eq!(rows[1].label, "with_x1");
-    // The predictive model has lower deviance and lower GAIC despite costing EDF.
+    // The predictive model wins on deviance and GAIC even though it costs EDF.
     assert!(
         rows[1].global_deviance < rows[0].global_deviance,
         "with_x1 deviance {} should be < null {}",
@@ -49,7 +49,7 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
         rows[1].gaic,
         rows[0].gaic
     );
-    // global_deviance == -2·loglik, and GAIC(2) == deviance + 2·edf.
+    // global_deviance == -2·loglik, and GAIC(2) == deviance + 2·edf. Both hold.
     for r in &rows {
         assert!((r.gaic - (r.global_deviance + 2.0 * r.edf)).abs() < 1e-9);
         assert!(r.edf > 0.0);
@@ -57,11 +57,11 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
 }
 
 // ----------------------------------------------------------------------------
-// INFER-7 — lr_test
+// INFER-7: lr_test
 // ----------------------------------------------------------------------------
 
-/// `mu ~ 1 + Linear(x1) + Linear(noise_col)`, `sigma ~ 1` — the correct model
-/// (`linear_intercepts("x1", ..)`) with one extra noise predictor on `mu`.
+/// `mu ~ 1 + Linear(x1) + Linear(noise_col)`, `sigma ~ 1`: the correct model
+/// (`linear_intercepts("x1", ..)`) with one extra noise predictor bolted onto `mu`.
 fn mu_x1_plus_noise(noise_col: &str) -> Formula {
     let mut f = Formula::new();
     f.add_terms(
@@ -101,14 +101,14 @@ fn lr_test_noise_term_is_weaker_than_genuine_term() {
     let mut rng = Generator::new(99);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
-    // Correct model mu ~ x1; add the pure-noise column x2 on top.
+    // Correct model mu ~ x1, then pile the pure-noise column x2 on top.
     let correct = linear_intercepts("x1", &["mu", "sigma"]);
     let with_noise = mu_x1_plus_noise("x2");
     let small = GamlssModel::fit(&data, &y, &correct, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &with_noise, &Gaussian::new()).unwrap();
 
     let test = lr_test(&small, &big, &Gaussian::new(), &y).unwrap();
-    // A noise column barely moves the deviance: small LR, non-tiny p-value.
+    // A noise column barely nudges the deviance: small LR, non-tiny p-value.
     assert!(
         test.lr_stat < 10.0,
         "noise column should give a small LR, got {}",
@@ -131,7 +131,7 @@ fn lr_test_rejects_misordered_pair() {
     let small = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &alt, &Gaussian::new()).unwrap();
 
-    // Swap the arguments: `big` passed as small, `small` as big → edf decreases.
+    // Swap the arguments: `big` passed as small, `small` as big, so edf decreases.
     let err = lr_test(&big, &small, &Gaussian::new(), &y).unwrap_err();
     assert!(
         matches!(err, GamlssError::Input(_)),
@@ -141,7 +141,7 @@ fn lr_test_rejects_misordered_pair() {
 }
 
 // ----------------------------------------------------------------------------
-// INFER-4 — step_gaic
+// INFER-4: step_gaic
 // ----------------------------------------------------------------------------
 
 /// Sorted term names on `mu` in a selected model.
@@ -157,7 +157,7 @@ fn mu_term_names(r: &StepResult) -> Vec<String> {
     names
 }
 
-/// Candidate scope: the three predictors are all eligible to add/drop on `mu`.
+/// Candidate scope: all three predictors are eligible to add or drop on `mu`.
 fn mu_scope() -> Vec<StepScope> {
     vec![StepScope {
         param: "mu".to_string(),
@@ -172,9 +172,9 @@ fn step_gaic_forward_selects_signal_rejects_noise() {
 
     let start = intercept_only(&["mu", "sigma"]);
     // BIC penalty (k = log n) is the parsimonious knob: it reliably keeps the
-    // genuine predictor and rejects the pure-noise columns. (AIC's k = 2 is
-    // permissive enough that a noise column's deviance drop occasionally clears
-    // the penalty — that's expected, not a selection bug.)
+    // genuine predictor and rejects the pure-noise columns. (AIC's k = 2 is loose
+    // enough that a noise column's deviance drop sometimes clears the penalty.
+    // That's expected, not a selection bug.)
     let k = (y.len() as f64).ln();
     let result = step_gaic(
         &data,
@@ -306,7 +306,7 @@ fn step_gaic_trace_is_monotone_decreasing() {
     )
     .unwrap();
 
-    // Each accepted move strictly lowered GAIC.
+    // Every accepted move strictly lowered GAIC.
     for w in result.trace.windows(2) {
         assert!(
             w[1].gaic < w[0].gaic,
@@ -318,7 +318,7 @@ fn step_gaic_trace_is_monotone_decreasing() {
 }
 
 // ============================================================================
-// Exhaustive hardening — lr_test
+// Exhaustive hardening: lr_test
 // ============================================================================
 
 #[test]
@@ -339,7 +339,7 @@ fn lr_test_p_value_matches_chi_squared_survival() {
         "lr_stat {} should clear chi2_1,0.95",
         test.lr_stat
     );
-    // Known-value: the p-value is the χ²_df survival function at lr_stat.
+    // Known-value: the p-value is the χ²_df survival function evaluated at lr_stat.
     let expected = 1.0 - ChiSquared::new(test.df).unwrap().cdf(test.lr_stat);
     assert!(
         (test.p_value - expected).abs() < 1e-9,
@@ -353,8 +353,8 @@ fn lr_test_p_value_matches_chi_squared_survival() {
 fn lr_test_handles_fractional_df_from_a_penalized_smooth() {
     use statrs::distribution::{ChiSquared, ContinuousCDF};
     let mut rng = Generator::new(21);
-    // A genuinely nonlinear (sinusoidal) mean so the P-spline cannot collapse to
-    // a straight line — its effective df stays solidly fractional on either
+    // A genuinely nonlinear (sinusoidal) mean so the P-spline can't collapse to a
+    // straight line. Its effective df stays solidly fractional on either
     // linear-algebra backend.
     let (y, data) = rng.sinusoidal_gaussian(200, 0.3);
     let linear_mu = linear_intercepts("x", &["mu", "sigma"]);
@@ -363,7 +363,7 @@ fn lr_test_handles_fractional_df_from_a_penalized_smooth() {
     let big = GamlssModel::fit(&data, &y, &smooth_mu, &Gaussian::new()).unwrap();
 
     let test = lr_test(&small, &big, &Gaussian::new(), &y).unwrap();
-    // A penalized smooth has non-integer effective df ⇒ fractional ν.
+    // A penalized smooth has non-integer effective df, hence fractional ν.
     assert!(test.df > 0.0);
     assert!(
         (test.df - test.df.round()).abs() > 1e-6,
@@ -404,7 +404,7 @@ fn lr_test_error_message_names_the_nesting_requirement() {
 }
 
 // ============================================================================
-// Exhaustive hardening — ic_table
+// Exhaustive hardening: ic_table
 // ============================================================================
 
 #[test]
@@ -443,8 +443,8 @@ fn ic_table_ranks_three_models() {
     )
     .unwrap();
     assert_eq!(rows.len(), 3);
-    // The single-signal model wins under BIC: lower than the underfit null and
-    // the overfit full model.
+    // The single-signal model wins under BIC: lower than both the underfit null
+    // and the overfit full model.
     let gaic = |label: &str| rows.iter().find(|r| r.label == label).unwrap().gaic;
     assert!(
         gaic("x1") < gaic("null"),
@@ -462,7 +462,7 @@ fn ic_table_ranks_three_models() {
 
 #[test]
 fn ic_table_compares_non_nested_families() {
-    // Count data: Poisson and Gaussian are non-nested; ic_table still ranks them.
+    // Count data: Poisson and Gaussian are non-nested, but ic_table still ranks them.
     let mut rng = Generator::new(13);
     let (y, data) = rng.poisson_data(300, 0.5, 0.3);
     let formula_p = linear_intercepts("x", &["mu"]);
@@ -470,12 +470,12 @@ fn ic_table_compares_non_nested_families() {
     let m_pois = GamlssModel::fit(&data, &y, &formula_p, &Poisson::new()).unwrap();
     let m_gauss = GamlssModel::fit(&data, &y, &formula_g, &Gaussian::new()).unwrap();
 
-    // Each model scored under its own family (the IC is comparable as −2·ll + k·edf).
+    // Each model scored under its own family. The IC is comparable as −2·ll + k·edf.
     let pois_row = &ic_table(&[("poisson", &m_pois)], &Poisson::new(), &y, 2.0).unwrap()[0];
     let gauss_row = &ic_table(&[("gaussian", &m_gauss)], &Gaussian::new(), &y, 2.0).unwrap()[0];
     assert!(pois_row.global_deviance.is_finite());
     assert!(gauss_row.global_deviance.is_finite());
-    // The correctly-specified Poisson fits the counts better than the Gaussian.
+    // The correctly-specified Poisson fits the counts better than the Gaussian does.
     assert!(
         pois_row.gaic < gauss_row.gaic,
         "Poisson GAIC {} should beat Gaussian {}",
@@ -485,7 +485,7 @@ fn ic_table_compares_non_nested_families() {
 }
 
 // ============================================================================
-// Exhaustive hardening — step_gaic directions, parameters, families
+// Exhaustive hardening: step_gaic directions, parameters, families
 // ============================================================================
 
 #[test]
@@ -631,7 +631,7 @@ fn step_gaic_recovers_signal_for_a_poisson_family() {
 }
 
 // ============================================================================
-// Exhaustive hardening — step_gaic degenerate / no-op paths
+// Exhaustive hardening: step_gaic degenerate / no-op paths
 // ============================================================================
 
 #[test]
@@ -661,7 +661,7 @@ fn step_gaic_empty_scope_is_a_noop() {
 fn step_gaic_forward_with_all_candidates_present_is_a_noop() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.gaussian_with_noise_columns(120, 4.0, 1.0, 0.5);
-    // x1 already in the starting formula; forward can only add absent terms.
+    // x1 is already in the starting formula, and forward can only add absent terms.
     let start = linear_intercepts("x1", &["mu", "sigma"]);
     let scope = vec![StepScope {
         param: "mu".to_string(),
@@ -685,7 +685,7 @@ fn step_gaic_forward_with_all_candidates_present_is_a_noop() {
 fn step_gaic_rejects_a_non_improving_move() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
-    // Only a pure-noise candidate is offered; under BIC it never beats the penalty.
+    // Only a pure-noise candidate is on offer, and under BIC it never beats the penalty.
     let start = linear_intercepts("x1", &["mu", "sigma"]); // already correct
     let scope = vec![StepScope {
         param: "mu".to_string(),
@@ -702,7 +702,7 @@ fn step_gaic_rejects_a_non_improving_move() {
         FitConfig::default(),
     )
     .unwrap();
-    // The EPS guard rejects a move that doesn't lower GAIC ⇒ empty trace.
+    // The EPS guard rejects any move that doesn't lower GAIC, so the trace is empty.
     assert!(
         result.trace.is_empty(),
         "noise term should not be accepted, trace {:?}",
@@ -736,7 +736,7 @@ fn step_gaic_is_deterministic_at_formula_level_across_seeds_and_k() {
                 assert_eq!(a.move_, b.move_);
                 assert!((a.gaic - b.gaic).abs() < 1e-12);
             }
-            // Formula-level replayability, not just the trace structure.
+            // Formula-level replayability, not just matching trace structure.
             assert_eq!(
                 mu_term_names(&r1),
                 mu_term_names(&r2),

@@ -2,18 +2,18 @@
 //!
 //! Parses an R/mgcv-style formula string such as
 //! `"y ~ s(x) + region + age:sex + offset(log_e)"` into the same `Vec<Term>` the
-//! builder API produces, so nothing downstream changes — the parser is a pure
+//! builder API produces, so nothing downstream changes. The parser is a pure
 //! front-end over [`Term`]/[`Formula`](crate::Formula).
 //!
 //! Grammar (each `+`-separated piece is one term, parentheses respected):
-//! - `1` — explicit intercept; `0` or `-1` — suppress the (otherwise implicit) intercept
-//! - `s(x)` — P-spline smooth; `k=` sets the basis size, `bs="cr"` a cubic
+//! - `1`: explicit intercept; `0` or `-1` suppresses the (otherwise implicit) intercept
+//! - `s(x)`: P-spline smooth; `k=` sets the basis size, `bs="cr"` a cubic
 //!   regression spline, `bs="re"` a random effect
-//! - `te(x, z)` — tensor-product smooth
-//! - `offset(e)` — an [`Term::Offset`]
-//! - `factor(f)` / `factor(f, sum)` — a [`Term::Factor`] (treatment / sum-to-zero)
-//! - bare name — a [`Term::Linear`]
-//! - `a:b` — interaction (product); `a*b` — `a + b + a:b`
+//! - `te(x, z)`: tensor-product smooth
+//! - `offset(e)`: an [`Term::Offset`]
+//! - `factor(f)` / `factor(f, sum)`: a [`Term::Factor`] (treatment / sum-to-zero)
+//! - bare name: a [`Term::Linear`]
+//! - `a:b`: interaction (product); `a*b` expands to `a + b + a:b`
 //!
 //! The response (left of `~`) is returned to the caller but not stored in a
 //! `Formula`; glissando takes the response array separately at fit time. A formula
@@ -64,8 +64,8 @@ fn parse_rhs(rhs: &str) -> Result<Vec<Term>, GamlssError> {
         }
     }
 
-    // A formula needs at least one piece — `y ~ ` (empty right-hand side) is an
-    // error, whereas `y ~ 1` is a valid intercept-only model.
+    // A formula needs at least one piece. `y ~ ` (empty right-hand side) is an
+    // error; `y ~ 1` is a valid intercept-only model.
     if !saw_any_piece {
         return Err(GamlssError::Input(
             "formula has an empty right-hand side".to_string(),
@@ -89,8 +89,8 @@ fn parse_rhs(rhs: &str) -> Result<Vec<Term>, GamlssError> {
 fn parse_term_piece(piece: &str, out: &mut Vec<Term>) -> Result<(), GamlssError> {
     // `*` crossing binds looser than `:`. `a*b` ⇒ a + b + a:b. For more than two
     // operands we emit each main effect plus the single full interaction
-    // (`a*b*c` ⇒ a + b + c + a:b:c); R's full factorial of pairwise terms is not
-    // yet expanded — write the pairwise terms explicitly with `:` if you need them.
+    // (`a*b*c` ⇒ a + b + c + a:b:c). R's full factorial of pairwise terms is not
+    // expanded yet, so write the pairwise terms out with `:` if you need them.
     let crossed = split_top_level(piece, '*');
     if crossed.len() > 1 {
         let mut atoms = Vec::with_capacity(crossed.len());
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed() {
-        assert!(parse_formula_string("y ~ s(x").is_err()); // unbalanced — not a call
+        assert!(parse_formula_string("y ~ s(x").is_err()); // unbalanced, not a call
         assert!(parse_formula_string("y ~ ").is_err()); // no terms
         assert!(parse_formula_string("y ~ s(x, foo=3)").is_err()); // unknown smooth arg
         assert!(parse_formula_string("y ~ factor(g, bogus)").is_err()); // unknown contrast

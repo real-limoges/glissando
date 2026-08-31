@@ -1,4 +1,4 @@
-//! Box-Cox–Cole-Green (BCCG) family — public-API integration tests (DIST-1).
+//! Box-Cox–Cole-Green (BCCG) family: public-API integration tests (DIST-1).
 //!
 //! Covers: coefficient recovery from simulated data; the chosen distribution
 //! reduces to the right textbook law at the ν special cases (an *independent*
@@ -6,7 +6,7 @@
 //! the same family; and LMS centile curves are monotone with C50 = the fitted
 //! median μ.
 
-// Integration tests cannot run with the `python` feature (PyO3 extension-module linking).
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -18,7 +18,8 @@ use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, LogNormal, Normal};
 
 /// μ ~ intercept + x (log link), σ and ν intercept-only. A purely parametric
-/// GAMLSS (no smooths → no penalty), so the fit is plain maximum likelihood.
+/// GAMLSS (no smooths, so no penalty), which makes the fit plain maximum
+/// likelihood.
 fn recovery_formula() -> Formula {
     Formula::new()
         .with_terms("mu", vec![Term::Intercept, linear("x")])
@@ -179,8 +180,8 @@ fn bccg_json_roundtrip_predicts_identically() {
     let json = model.to_json(&family).unwrap();
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
 
-    // The reloaded model predicts bit-for-bit — confirms μ/σ/ν and the family all
-    // survive the round-trip and predict reconstructs the BCCG transform.
+    // The reloaded model predicts bit-for-bit. That confirms μ/σ/ν and the family
+    // all survive the round-trip and predict reconstructs the BCCG transform.
     let reloaded_family = desc.build().unwrap();
     assert_eq!(reloaded_family.name(), "BCCG");
     let preds2 = reloaded.predict(&data, reloaded_family.as_ref()).unwrap();

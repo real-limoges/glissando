@@ -1,5 +1,5 @@
-//! STRUCT-4 integration tests: finite mixtures fit by EM recover a known
-//! two-component structure and improve on a single-component fit.
+//! STRUCT-4 integration tests. Finite mixtures fit by EM should recover a known
+//! two-component structure and beat a single-component fit. If they don't, EM isn't earning its keep.
 
 #![cfg(not(feature = "python"))]
 
@@ -9,20 +9,20 @@ use glissando::{DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
 /// Two well-separated Gaussian clusters (means 0 and 6) with mild within-cluster
-/// spread, built deterministically so the test is reproducible.
+/// spread. I build them deterministically so the test reproduces every run.
 fn two_cluster_data() -> (DataSet, Array1<f64>) {
     let mut vals = Vec::new();
     for i in 0..60 {
-        // cluster A around 0, spread in [−1.5, 1.5]
+        // cluster A sitting around 0, spread across [−1.5, 1.5]
         vals.push(-1.5 + 3.0 * (i as f64) / 59.0);
     }
     for i in 0..60 {
-        // cluster B around 6, spread in [4.5, 7.5]
+        // cluster B sitting around 6, spread across [4.5, 7.5]
         vals.push(4.5 + 3.0 * (i as f64) / 59.0);
     }
     let y = Array1::from_vec(vals);
     let mut data = DataSet::new();
-    // Dummy column so the dataset reports n_obs; the formula is intercept-only.
+    // Dummy column just so the dataset reports n_obs. The formula is intercept-only.
     data.insert_column("x", Array1::from_iter((0..y.len()).map(|i| i as f64)));
     (data, y)
 }
@@ -48,7 +48,7 @@ fn mixture_recovers_two_components() {
     );
     assert!(mix.log_likelihood.is_finite());
 
-    // Recover the two intercepts (identity link ⇒ coefficient[0] is the mean).
+    // Recover the two intercepts. Identity link, so coefficient[0] just is the mean.
     let mut means: Vec<f64> = mix
         .components
         .iter()
@@ -66,7 +66,7 @@ fn mixture_recovers_two_components() {
         means[1]
     );
 
-    // Balanced clusters ⇒ weights near 0.5 each, summing to 1.
+    // Balanced clusters, so the weights should sit near 0.5 each and sum to 1.
     let wsum: f64 = mix.weights.iter().sum();
     assert!((wsum - 1.0).abs() < 1e-9);
     for w in &mix.weights {
@@ -94,7 +94,7 @@ fn mixture_beats_single_component() {
         mix.log_likelihood,
         single_ll
     );
-    // AIC should also prefer the mixture for genuinely bimodal data.
+    // AIC should land on the mixture too, for data this genuinely bimodal.
     let single_aic = single.diagnostics(&Gaussian::new(), &y).unwrap().aic;
     assert!(
         mix.aic() < single_aic,

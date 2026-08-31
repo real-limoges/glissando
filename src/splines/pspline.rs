@@ -2,9 +2,9 @@
 
 use ndarray::{Array1, Array2};
 
-/// Test-only wrapper deriving the knot range from `x` itself. Production paths
-/// must pass the range resolved at fit time (`create_basis_matrix_with_range`),
-/// so this is compiled out of non-test builds to make that unrepresentable.
+/// Test-only wrapper that derives the knot range from `x` itself. Production paths
+/// have to pass the range resolved at fit time (`create_basis_matrix_with_range`),
+/// so I compile this out of non-test builds to make the wrong call unrepresentable.
 #[cfg(test)]
 pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     create_basis_matrix_with_range(x, n_splines, degree, None)
@@ -14,11 +14,11 @@ pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usi
 /// values at `x[i]` on the uniform knot grid anchored to `range`.
 ///
 /// The fitter resolves each P-spline's training range once and stores it on the
-/// term; prediction passes it back here so new data (a grid, a subset, a
-/// single point) is evaluated on the *training* basis. `None` derives the
-/// range from `x` (fit-time resolution and tests only). Without the stored
-/// range, the knots silently followed the prediction data's range and the
-/// coefficients were applied to a different basis.
+/// term; prediction hands it back here so new data (a grid, a subset, a single
+/// point) is evaluated on the *training* basis. `None` derives the range from `x`,
+/// which is fit-time resolution and tests only. Get this wrong and the knots
+/// silently follow the prediction data's range, so the coefficients end up applied
+/// to a different basis than the one they were fit on.
 pub(crate) fn create_basis_matrix_with_range(
     x: &Array1<f64>,
     n_splines: usize,
@@ -82,8 +82,8 @@ pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
 /// Eilers–Marx P-spline layout).
 ///
 /// A difference penalty (`create_penalty_matrix`) only approximates a roughness
-/// penalty on the fitted function when the knots are **equally spaced** — so the
-/// P-spline penalty and the basis must share that assumption. We place
+/// penalty on the fitted function when the knots are **equally spaced**, so the
+/// P-spline penalty and the basis have to share that assumption. I place
 /// `safe_n_splines + degree + 1` uniform knots with spacing
 /// `dx = (max − min) / (safe_n_splines − degree)` such that `t[degree] = min` and
 /// `t[safe_n_splines] = max`, leaving `degree` knots beyond each end. Over the
@@ -105,8 +105,8 @@ fn select_knots(
     let num_total_knots = safe_n_splines + degree + 1;
 
     // `safe_n_splines > degree` always holds, so the denominator is ≥ 1.
-    // Degenerate constant-x (or non-finite) input falls back to unit spacing so
-    // the basis stays finite rather than dividing by a zero range.
+    // Degenerate constant-x input (or non-finite) falls back to unit spacing, so the
+    // basis stays finite instead of dividing by a zero range.
     let range = max_val - min_val;
     let (origin, dx) = if range.is_finite() && range > 0.0 {
         (min_val, range / (safe_n_splines - degree) as f64)
@@ -159,9 +159,9 @@ fn evaluate_basis_functions_into(
     // Standard de Boor–Cox recurrence (Piegl & Tiller, "The NURBS Book", Algorithm A2.2).
     //
     // At the start of outer iteration j, left[1..=j] and right[1..=j] must all be
-    // populated before the inner r-loop reads left[j-r] and right[r+1].  The fix is
-    // to compute left[j] and right[j] *once* here — outside the r-loop — so that
-    // slots written in previous j iterations remain valid when the inner loop reads them.
+    // populated before the inner r-loop reads left[j-r] and right[r+1]. So compute
+    // left[j] and right[j] *once* here, outside the r-loop. That keeps the slots
+    // written in previous j iterations valid when the inner loop reads them.
     //
     // Index safety (find_knot_span clamps i to [degree, n_splines-1]):
     //   knots[i+1-j]: j in 1..=degree → index ≥ i+1-degree ≥ 1 ≥ 0.
@@ -299,10 +299,10 @@ mod tests {
     ///         print(f"B[{j}]({x}) =", BSpline.basis_element(knots[j:j+5])(x))
     /// ```
     ///
-    /// The previous (buggy) implementation gave wrong interior basis values, e.g. at
+    /// The previous (buggy) implementation gave wrong interior basis values. At
     /// x=0.5 it returned [0, 1/48, **2/3, 7/24**, 1/48, 0] instead of the correct
-    /// [0, 1/48, **23/48, 23/48**, 1/48, 0].  Both sum to 1, so partition-of-unity
-    /// tests did not catch the error.
+    /// [0, 1/48, **23/48, 23/48**, 1/48, 0]. Both sum to 1, so the partition-of-unity
+    /// tests waved it right through.
     #[test]
     fn bspline_basis_golden_values_degree3() {
         let x = Array1::from_vec(vec![0.0, 0.25, 0.5, 0.75, 1.0]);

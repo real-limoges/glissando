@@ -1,9 +1,10 @@
-//! WebAssembly bindings via wasm-bindgen for browser-based GAMLSS fitting and prediction.
+//! WebAssembly bindings via wasm-bindgen: fit and predict GAMLSS right in the browser.
 //!
-//! Provides [`WasmGamlssModel`] with JSON-based I/O for use from JavaScript.
-//! Feature-gated behind the `wasm` feature flag. This is a thin marshalling
-//! shim over [`crate::json`]; the wire formats and distribution dispatch are
-//! documented there.
+//! [`WasmGamlssModel`] is the whole surface, with JSON in and JSON out so
+//! JavaScript can drive it. Gated behind the `wasm` feature flag. It's a thin
+//! marshaling shim over [`crate::json`], and nothing more; the wire formats and
+//! distribution dispatch are all written up there, so this file doesn't repeat
+//! them.
 
 use wasm_bindgen::prelude::*;
 
@@ -17,8 +18,9 @@ fn to_js_err(e: impl std::fmt::Display) -> JsError {
 
 /// WASM wrapper for GAMLSS models.
 ///
-/// Supports both fitting models in the browser and loading pre-fitted models
-/// serialized via `GamlssModel::to_json()`.
+/// Two ways in: fit a fresh model in the browser, or load one someone already fit
+/// and serialized with `GamlssModel::to_json()`. Either way you get the same
+/// object back.
 #[wasm_bindgen]
 pub struct WasmGamlssModel {
     model: GamlssModel,
@@ -27,10 +29,11 @@ pub struct WasmGamlssModel {
 
 #[wasm_bindgen]
 impl WasmGamlssModel {
-    /// Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
+    /// Fit a GAMLSS model. The wire formats live on [`crate::json`].
     ///
     /// `weights_json` is an optional JSON array of per-observation prior weights,
-    /// e.g. `"[0.5, 1.0, 1.5]"`.  Pass `null` / `undefined` for unweighted fitting.
+    /// e.g. `"[0.5, 1.0, 1.5]"`. Leave it `null` / `undefined` and you get an
+    /// unweighted fit.
     pub fn fit(
         y_json: &str,
         data_json: &str,
@@ -50,9 +53,10 @@ impl WasmGamlssModel {
         Ok(WasmGamlssModel { model, family })
     }
 
-    /// Fit with an explicit config JSON. Beyond the algorithm knobs, `config_json`
-    /// accepts `"links"` to override a parameter's link by name, e.g.
-    /// `{"links": {"mu": "probit"}}` (see [`crate::json`] for the accepted names).
+    /// Fit with an explicit config JSON. Past the usual algorithm knobs,
+    /// `config_json` also takes `"links"` to override a parameter's link by name,
+    /// e.g. `{"links": {"mu": "probit"}}` (the accepted names are listed on
+    /// [`crate::json`]).
     #[wasm_bindgen(js_name = "fitWithConfig")]
     pub fn fit_with_config(
         y_json: &str,

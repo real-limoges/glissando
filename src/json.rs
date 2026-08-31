@@ -1,26 +1,26 @@
-//! JSON marshalling facade for embedding glissando behind your own FFI.
+//! JSON marshaling facade for embedding glissando behind your own FFI.
 //!
-//! glissando's typed Rust API ([`crate::GamlssModel`], [`crate::DataSet`],
-//! [`crate::Formula`]) is the right surface for in-process Rust callers. But an
-//! embedder behind a *different* boundary — a Rustler NIF, a C ABI, a JSON
-//! microservice — usually wants to hand glissando strings and get strings back,
-//! without depending on `ndarray` types or re-deriving the wire format. This
-//! module is that contract: the same tested JSON marshalling the WASM bindings
-//! use, exposed for any embedder.
+//! If you're calling glissando in-process from Rust, the typed API
+//! ([`crate::GamlssModel`], [`crate::DataSet`], [`crate::Formula`]) is the surface
+//! you want. But an embedder sitting behind a *different* boundary (a Rustler NIF,
+//! a C ABI, a JSON microservice) usually just wants to throw glissando strings and
+//! get strings back, without taking a dependency on `ndarray` types or reverse-
+//! engineering the wire format. That's what this module is: the exact same tested
+//! JSON marshaling the WASM bindings run on, opened up for any embedder to use.
 //!
 //! Gated behind the `serialization` feature.
 //!
 //! # Wire formats
 //!
-//! - **response** (`parse_response`): a JSON array of numbers — `[1.0, 2.0, 3.0]`.
-//! - **data** (`parse_data`): an object of equal-length columns —
+//! - **response** (`parse_response`): a JSON array of numbers: `[1.0, 2.0, 3.0]`.
+//! - **data** (`parse_data`): an object of equal-length columns:
 //!   `{"x": [1.0, 2.0], "z": [3.0, 4.0]}`.
-//! - **formula** (`parse_formula`): parameter name → term list —
+//! - **formula** (`parse_formula`): parameter name → term list:
 //!   `{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}], "sigma": [{"Intercept": null}]}`.
 //! - **config** (`parse_config`): `{"max_iterations": 200, "tolerance": 0.001, "criterion": "reml"}`
 //!   (`criterion` is `"reml"`, `"gcv"`, or `"fellner_schall"`; all fields optional).
 //!   Add `"links"` to override a parameter's link by name, e.g.
-//!   `{"links": {"mu": "probit"}}` — accepted names: `"identity"`, `"log"`, `"logit"`,
+//!   `{"links": {"mu": "probit"}}`: accepted names: `"identity"`, `"log"`, `"logit"`,
 //!   `"probit"`, `"cloglog"`, `"inverse"`, `"inverse_square"`, `"sqrt"`, `"cauchit"`.
 //! - **predictions** (`serialize_predictions`): `{"mu": [..], "sigma": [..]}`.
 //! - **predictions with SE** (`serialize_predictions_with_se`):
@@ -32,8 +32,8 @@
 //! [`fit`] and [`load`] resolve a distribution by name via
 //! [`crate::distributions::from_name`], which covers `Gaussian`, `Poisson`,
 //! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `BCCG`, `BCT`, and `BCPE`.
-//! `Binomial` is excluded because it needs `n_trials` state that a name cannot
-//! carry — construct it through the typed API instead.
+//! `Binomial` sits this one out: it needs `n_trials` state, and a bare name has
+//! nowhere to carry that, so build it through the typed API instead.
 //!
 //! # Example
 //!
@@ -98,9 +98,9 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
 
 /// Parse a formula from JSON, accepting either spelling (DATA-5):
 ///
-/// - **term-list** — the structured `{ "mu": [ {"Linear": {"col_name": "x"}}, … ] }`
+/// - **term-list**: the structured `{ "mu": [ {"Linear": {"col_name": "x"}}, … ] }`
 ///   form matching the [`Term`](crate::Term) schema; or
-/// - **string formula** — the ergonomic `{ "mu": "y ~ s(x) + z", "sigma": "~ 1" }`
+/// - **string formula**: the ergonomic `{ "mu": "y ~ s(x) + z", "sigma": "~ 1" }`
 ///   form, where each value is an R/mgcv-style formula string.
 ///
 /// The two are disambiguated by value type (string vs array), so existing
@@ -110,9 +110,10 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
 /// Returns [`GamlssError::Input`] if the JSON matches neither schema or a string
 /// formula is malformed.
 pub fn parse_formula(json: &str) -> Result<Formula, GamlssError> {
-    // Try the ergonomic string-map form first: `{param: "y ~ ..."}`. This only
-    // succeeds when every value is a JSON string, so a term-list payload (values
-    // are arrays) falls through to the structured deserializer below.
+    // Try the ergonomic string-map form first: `{param: "y ~ ..."}`. It only
+    // parses when every value is a JSON string, so a term-list payload (whose
+    // values are arrays) misses cleanly and drops through to the structured
+    // deserializer below. No ambiguity, the value type decides.
     if let Ok(string_map) = serde_json::from_str::<HashMap<String, String>>(json) {
         return Formula::from_strings(string_map.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     }
@@ -136,9 +137,9 @@ pub fn parse_config(json: &str) -> Result<FitConfig, GamlssError> {
 pub fn serialize_predictions(
     predictions: &HashMap<String, Array1<f64>>,
 ) -> Result<String, GamlssError> {
-    // BTreeMap so the emitted key order is deterministic (sorted) rather than
-    // HashMap's per-call random order — embedders get stable output and two
-    // predict calls compare equal byte-for-byte.
+    // BTreeMap so the keys come out sorted and deterministic, not in HashMap's
+    // roll-the-dice order. Embedders get stable output, and two predict calls
+    // compare equal byte for byte instead of only sometimes.
     let result: BTreeMap<&str, Vec<f64>> = predictions
         .iter()
         .map(|(k, v)| (k.as_str(), v.to_vec()))
@@ -412,7 +413,7 @@ pub fn gaic(
     serde_json::to_string(&out).map_err(json_err)
 }
 
-/// Information-criterion comparison table over labelled models, serialized as a
+/// Information-criterion comparison table over labeled models, serialized as a
 /// JSON array of `{label, edf, global_deviance, gaic}` rows in input order.
 ///
 /// # Errors
@@ -481,7 +482,8 @@ pub fn step_gaic(
 
     let result = run_step_gaic(&data, &y, family.as_ref(), start, &scope, k, dir, config)?;
 
-    // Embed the selected model as a nested object in the same shape `load` reads.
+    // Nest the selected model as an object in the exact shape `load` reads back,
+    // so the caller can round-trip it straight through without reshaping anything.
     let model_wire: serde_json::Value =
         serde_json::from_str(&result.model.to_json(family.as_ref())?).map_err(json_err)?;
     let out = serde_json::json!({

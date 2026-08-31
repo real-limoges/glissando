@@ -1,17 +1,17 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking.
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
-//! Closed-form anchors. These tests assert that the iterative fitter recovers
-//! the exact analytic solution on problems where one exists — independent of
-//! snapshot/regression comparisons against past runs.
+//! Closed-form anchors. I want these to prove the iterative fitter recovers the
+//! exact analytic solution on problems where one exists, independent of any
+//! snapshot or regression comparison against past runs.
 
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
-/// Tight closed-form anchor: simple linear regression has an analytic least-squares
-/// solution. With `Gaussian + Linear + Intercept` on data with a known true linear
-/// relationship plus tiny jitter (so sigma doesn't collapse to 0 and destabilize
-/// the IRLS loop), the fitter must recover `(α, β)` to high precision.
+/// Tight closed-form anchor. Simple linear regression has an analytic least-squares
+/// solution, so with `Gaussian + Linear + Intercept` on data with a known true linear
+/// relationship plus tiny jitter (the jitter keeps sigma off 0, which would destabilize
+/// the IRLS loop), the fitter has to recover `(α, β)` to high precision.
 #[test]
 fn gaussian_linear_recovers_ols_to_floating_point() {
     let n = 50;
@@ -19,7 +19,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     let true_beta = -1.75;
 
     let x: Array1<f64> = Array1::from_iter((0..n).map(|i| i as f64 / 10.0));
-    // Pseudo-random jitter (deterministic — based on index) to keep sigma > 0.
+    // Pseudo-random jitter, deterministic off the index, just to keep sigma > 0.
     let y: Array1<f64> = (0..n)
         .map(|i| {
             let jitter = ((i as f64 * 0.731).sin()) * 1e-3;
@@ -44,9 +44,9 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Compute the analytic OLS solution on the *same* y (with jitter) and verify
-    // the fitter matches it — this is the true closed-form anchor, independent
-    // of whether the RS outer loop's eps-criterion flagged "converged".
+    // Compute the analytic OLS solution on the *same* y (jitter and all) and check
+    // the fitter matches it. That match is the real closed-form anchor, and it
+    // holds regardless of whether the RS outer loop's eps-criterion flagged "converged".
     let x_bar = x.mean().unwrap();
     let y_bar = y.mean().unwrap();
     let sxx: f64 = x.iter().map(|xi| (xi - x_bar).powi(2)).sum();
@@ -73,7 +73,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     );
 }
 
-/// Intercept-only Gaussian = sample mean. Exact closed form.
+/// Intercept-only Gaussian is just the sample mean. Exact closed form, no wiggle room.
 #[test]
 fn gaussian_intercept_only_recovers_sample_mean() {
     let y = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
@@ -84,8 +84,8 @@ fn gaussian_intercept_only_recovers_sample_mean() {
         .with_terms("mu", vec![Term::Intercept])
         .with_terms("sigma", vec![Term::Intercept]);
 
-    // intercept-only models can be fit without data columns; supply a dummy
-    // column to satisfy n_obs detection.
+    // intercept-only models fit fine with no data columns. The dummy column is
+    // only here so n_obs detection has something to count.
     let mut data = data;
     data.insert_column("_unused", Array1::ones(y.len()));
 

@@ -5,6 +5,7 @@ benchmark/output/
 benchmark/target/
 .idea/
 CLAUDE.md
+.claude
 
 .venv-prepush/
 *.pyc
@@ -22,3 +23,4 @@ docs/planning/*.md
 # Accidental root-level npm scaffolding — the published npm package is pkg/.
 /package.json
 /package-lock.json
+

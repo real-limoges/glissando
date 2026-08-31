@@ -1,17 +1,17 @@
-// REML smoothing-parameter selection — integration tests.
+// REML smoothing-parameter selection: integration tests.
 //
-// Validates the end-to-end behaviour of `SmoothingCriterion::Reml` on Gaussian
+// Validates the end-to-end behavior of `SmoothingCriterion::Reml` on Gaussian
 // and Poisson P-spline models:
 //
 //   - Default `FitConfig` uses REML.
 //   - REML fits converge and produce finite, well-conditioned output.
 //   - EDF lands in the interior of the feasible range (not pinned at 0 or p).
-//   - REML and GCV agree closely on well-identified data — they shouldn't be
+//   - REML and GCV agree closely on well-identified data. They shouldn't be
 //     identical (different criteria), but the difference should be modest.
 //
 // Golden-value comparison vs `mgcv::gam(method="REML")` is handled by the
 // existing benchmark harness (`benchmark/run_comparison.sh` + the ignored
-// `tests/mgcv_reference.rs`); duplicating that here would re-implement the
+// `tests/mgcv_reference.rs`); duplicating that here would just re-implement the
 // same workflow.
 #![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
@@ -28,7 +28,7 @@ use ndarray::Array1;
 /// Wiggly sinusoidal Gaussian data: a regime where the basis is genuinely needed
 /// and REML/GCV pick comparable smoothing. Linear-trend data lives in the order-2
 /// penalty's null space, so on such data REML correctly drives λ to ∞ (EDF ≈ 2)
-/// while GCV undersmooths — the criteria *should* disagree there.
+/// while GCV undersmooths; the criteria *should* disagree there.
 fn sinusoidal_gaussian(n: usize, noise: f64, seed: u64) -> (Array1<f64>, DataSet) {
     use rand::{rngs::StdRng, SeedableRng};
     use rand_distr::{Distribution, Normal};
@@ -57,9 +57,9 @@ fn default_fit_config_uses_reml() {
 fn reml_fits_gaussian_pspline_end_to_end() {
     // Sinusoidal (not linear) truth: the smooth is genuinely identified, so REML
     // settles on an interior λ and EDF lands in (1, p). Linear-trend data lives in
-    // the order-2 penalty's null space, leaving the REML objective flat in λ — the
-    // smoothing parameter is then unidentified and the outer loop's convergence
-    // becomes BLAS-dependent. (The intended null-space behaviour is covered by
+    // the order-2 penalty's null space, which leaves the REML objective flat in λ.
+    // The smoothing parameter is then unidentified and the outer loop's convergence
+    // goes BLAS-dependent. (The intended null-space behavior is covered by
     // `reml_correctly_smooths_linear_trend_to_null_space`.)
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
@@ -117,7 +117,7 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
     // Order-2 P-spline penalty has a 2-dim null space (constants + linear).
     // When the truth is linear, REML correctly drives λ very high so the fit
     // collapses to its null space, giving EDF ≈ 2.  GCV is documented to
-    // undersmooth in this regime — we don't assert anything about GCV here,
+    // undersmooth in this regime; we don't assert anything about GCV here,
     // only that REML lands at the principled solution.
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(150, 1.0, 5.0, 1.0);
@@ -209,7 +209,7 @@ fn fellner_schall_fits_gaussian_pspline_end_to_end() {
     // Sinusoidal truth so F-S has a finite interior optimum.  On linear-trend
     // data, the order-2 P-spline penalty's null space already captures the
     // truth, and any LAML-target optimizer (REML or F-S) will legitimately
-    // drive λ to its ceiling — that's covered by REML's own null-space test.
+    // drive λ to its ceiling; that's covered by REML's own null-space test.
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
@@ -262,8 +262,8 @@ fn fellner_schall_fits_poisson_pspline_end_to_end() {
 fn fellner_schall_and_reml_converge_to_similar_lambda() {
     // F-S and REML optimize the *same* objective (LAML); on a well-behaved
     // wiggly truth they should land within ~one order of magnitude in λ and
-    // within ~1 EDF.  Tighter agreement than REML/GCV because the target
-    // is identical, only the optimizer differs.
+    // within ~1 EDF.  Tighter agreement than REML/GCV, because the target
+    // is identical and only the optimizer differs.
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
@@ -315,7 +315,7 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
 
 #[test]
 fn fellner_schall_dispatch_is_distinct_from_gcv() {
-    // Proves the F-S match arm is wired (not aliased to GCV).
+    // Proves the F-S match arm is actually wired, not aliased to GCV.
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);
     let formula = Formula::new()
@@ -355,7 +355,7 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
 
 #[test]
 fn criterion_dispatch_is_observable() {
-    // Sanity: changing the criterion should affect *something* — either λ or
+    // Sanity: changing the criterion should move *something*, either λ or the
     // iteration count. If they're byte-for-byte identical the dispatch is dead.
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);

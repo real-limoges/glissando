@@ -38,8 +38,8 @@ impl Distribution for Gamma {
     /// Gamma σ is the coefficient of variation `CV = SD(Y)/E(Y)`, not the raw SD.
     /// The default `initial_value` returns `y.std()`, which is wildly wrong for
     /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
-    /// A bad σ_init causes REML to over-penalize the σ smooth on the first RS
-    /// iteration and warm-start into a full-collapse trap.
+    /// A bad σ_init makes REML over-penalize the σ smooth on the first RS
+    /// iteration and warm-start straight into a full-collapse trap.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => y.mean().expect("validate_inputs rejects empty y"),
@@ -65,19 +65,19 @@ impl Distribution for Gamma {
         //   μ: ∂l/∂μ = (y−μ)/(μ²σ²),   i_μ = 1/(μ²σ²).
         //   σ: ∂l/∂σ = (2/σ³)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1],
         //      i_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴.
-        // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
-        // the previous η-scale pairs exactly. Weights are returned unfloored.
+        // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers the
+        // old η-scale pairs exactly off these. Weights come back unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
         // **Every guard here is on a denominator or a Gamma-function argument, never
-        // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`,
-        // which the folded η-scale form could afford and the un-folded one cannot:
+        // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`.
+        // The folded η-scale form could afford that; the un-folded one can't.
         // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
-        // anything clamped here, so a clamp that binds breaks the telescoping. It
+        // anything clamped here, so a clamp that binds breaks the telescoping. And it
         // binds at reachable parameters: `exp(MIN_ETA) ≈ 9.4e-14` is already below
         // `MIN_POSITIVE`, and the newly-gated `inverse`/`sqrt` links on μ reach
-        // further still. See the same argument spelled out at length in `binomial.rs`.
+        // further still. Same argument spelled out at length in `binomial.rs`.
         let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));
         let sigma_guarded = sigma.mapv(|s| s.max(DENOM_FLOOR));
         // α = 1/σ² is a Gamma-function argument rather than a factor of the answer,
@@ -85,18 +85,18 @@ impl Distribution for Gamma {
         // ψ' ≈ 1e-300) where a raw 1/0 would hand them +∞.
         let alpha = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
-        // Guard each reciprocal at the power it is used at: raising an
-        // already-guarded reciprocal to a power would overflow to infinity for a
-        // parameter the log link can still underflow to, and `inf · 0` is NaN. σ⁶ is
-        // why this matters more here than elsewhere; it underflows around σ ≈ 1e-50,
-        // where the σ⁴ form reaches to σ ≈ 1e-75.
+        // Guard each reciprocal at the power it's actually used at. Take an
+        // already-guarded reciprocal and raise it to a power and it overflows to
+        // infinity for a parameter the log link can still underflow to. And inf · 0
+        // is NaN. σ⁶ is why this bites harder here than elsewhere: it underflows
+        // around σ ≈ 1e-50, where the σ⁴ form reaches to σ ≈ 1e-75.
         let inv_mu_sq_sigma_sq =
             par_zip_map(mu, sigma, |m, s| 1.0 / (m * m * s * s).max(DENOM_FLOOR));
         let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
         let inv_sigma_4 = sigma.mapv(|s| 1.0 / (s * s * s * s).max(DENOM_FLOOR));
         let inv_sigma_6 = sigma.mapv(|s| 1.0 / (s * s * s * s * s * s).max(DENOM_FLOOR));
 
-        // Clamp y to the support, mirroring loglik_pointwise: a zero/negative row
+        // Clamp y to the support, same as loglik_pointwise. A zero or negative row
         // would otherwise send ln(y/μ) to −∞/NaN and poison the whole PWLS solve.
         let y_safe = y.mapv(|yi| yi.max(MIN_POSITIVE));
 
@@ -112,10 +112,10 @@ impl Distribution for Gamma {
             * (&psi_alpha + 2.0 * &log_sigma - &log_y_over_mu + &y_over_mu - 1.0);
 
         // Fisher info for σ on its own scale: I_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴. Matches
-        // gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²) and the Monte-Carlo check
-        // E[u_η²] once chained. Since ψ'(1/σ²) > σ² for all σ > 0 the expression is
-        // strictly positive; the surviving MIN_WEIGHT floor in `scoring::step`
-        // guards round-off only.
+        // gamlss GA's d2ldd2 = (4/σ⁴) − (4/σ⁶)·ψ'(1/σ²), and the Monte-Carlo check
+        // E[u_η²] once chained. ψ'(1/σ²) > σ² for all σ > 0, so the expression is
+        // strictly positive. The MIN_WEIGHT floor left in `scoring::step` only
+        // guards round-off.
         let psi_prime_alpha = trigamma_batch(&alpha);
         let i_sigma = 4.0 * &inv_sigma_6 * &psi_prime_alpha - 4.0 * &inv_sigma_4;
 
@@ -182,8 +182,8 @@ impl Distribution for Gamma {
         // The caller chains to η. Under the default log link mu_eta = mu_eta2 = μ,
         // which recovers the previous η-scale pair exactly:
         // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
-        // σ enters both α and x; its CDF derivative needs ∂P/∂α (non-elementary)
-        // and is left to the wrapper's numeric fallback.
+        // σ enters both α and x, so its CDF derivative needs ∂P/∂α (non-elementary).
+        // I leave that one to the wrapper's numeric fallback.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let mut d1 = Array1::<f64>::zeros(y.len());
@@ -198,12 +198,12 @@ impl Distribution for Gamma {
             // γ-density mass at x: xᵅ·e⁻ˣ / Γ(α) = exp(α·ln x − x − lnΓ(α)).
             let mass = (alpha * x.ln() - x - ln_gamma(alpha)).exp();
             // Un-folding puts μ in a denominator for the first time, so it gets a
-            // `DENOM_FLOOR` guard rather than the `MIN_POSITIVE` clamp `x` uses:
-            // the caller multiplies by a `mu_eta` computed from η independently of
+            // `DENOM_FLOOR` guard rather than the `MIN_POSITIVE` clamp `x` uses.
+            // The caller multiplies by a `mu_eta` computed from η independently of
             // anything clamped here, and `MIN_POSITIVE = 1e-10` sits *above* the
-            // log link's own floor (`exp(MIN_ETA) ≈ 9.4e-14`), so a clamp that
-            // binds would break the telescoping. Each power is guarded where it is
-            // used: `μ²` can underflow to zero for a μ that `μ` alone survives.
+            // log link's own floor (`exp(MIN_ETA) ≈ 9.4e-14`), so a clamp that binds
+            // would break the telescoping. Each power is guarded where it's used:
+            // `μ²` can underflow to zero for a μ that `μ` alone survives.
             let denom1 = mu[i].max(DENOM_FLOOR);
             let denom2 = (mu[i] * mu[i]).max(DENOM_FLOOR);
             d1[i] = -mass / denom1;
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
         // Un-folding introduces `1/(μ²σ²)`, `1/σ³`, `1/σ⁴` and `1/σ⁶`, all of which
-        // the previous η-scale forms cancelled down to at most `1/σ⁴`. σ⁶ is the
+        // the previous η-scale forms canceled down to at most `1/σ⁴`. σ⁶ is the
         // first to underflow, so this fixture is the one that pins the guard.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn cdf_theta_derivatives_stay_finite_at_a_saturated_mu() {
         // Un-folding put μ and μ² in denominators that the η-scale form (`−mass`,
-        // `(x−α)·−mass`) had cancelled away entirely, which is why each power gets
+        // `(x−α)·−mass`) had canceled away entirely, which is why each power gets
         // its own `DENOM_FLOOR`: μ² underflows to exactly zero for a μ that μ alone
         // survives, and `inf · 0` is NaN.
         let y = array![1.0, 2.0, 0.5, 3.0];

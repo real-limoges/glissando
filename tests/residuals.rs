@@ -1,7 +1,7 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking.
+// Integration tests can't run under the `python` feature; PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
-//! INFER-1 — randomized normalized quantile residuals.
+//! INFER-1: randomized normalized quantile residuals.
 
 mod common;
 
@@ -22,7 +22,7 @@ fn variance(v: &Array1<f64>) -> f64 {
 }
 
 /// Pearson correlation of sorted residuals against standard-normal order
-/// statistics — the Filliben / Q-Q correlation (≈1 when residuals are normal).
+/// statistics: the Filliben / Q-Q correlation (≈1 when residuals are normal).
 fn filliben_correlation(resid: &Array1<f64>) -> f64 {
     use statrs::function::erf::erf_inv;
     let n = resid.len();
@@ -57,7 +57,7 @@ fn quantile_residuals_gaussian_are_standard_normal() {
     let formula = linear_intercepts("x", &["mu", "sigma"]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Continuous family: seed is ignored; residuals are u = Φ⁻¹(F(y)).
+    // Continuous family, so the seed is ignored; residuals are u = Φ⁻¹(F(y)).
     let resid = model
         .quantile_residuals(&Gaussian::new(), &y, None)
         .unwrap();
@@ -117,7 +117,7 @@ fn quantile_residuals_continuous_ignore_seed() {
     let c = model
         .quantile_residuals(&Gaussian::new(), &y, None)
         .unwrap();
-    // u = F(y) is deterministic for a continuous family — seed has no effect.
+    // u = F(y) is deterministic for a continuous family, so the seed does nothing.
     for i in 0..y.len() {
         assert!((a[i] - b[i]).abs() < 1e-15);
         assert!((a[i] - c[i]).abs() < 1e-15);

@@ -6,17 +6,17 @@
 //! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0)   base, zero-TRUNCATED
 //! ```
 //!
-//! This is a clean generalization of zero-inflation. Contrast with
+//! I think of this as a clean generalization of zero-inflation. Contrast it with
 //! zero-*inflation* (DIST-5), where the base can still emit zero
 //! (`P(Y=0) = π + (1−π)·g(0)`): a hurdle's positive process is structurally
-//! separate from the zero process; reach for it when the zero-generating
-//! mechanism is distinct (a true two-part model), and for zero-inflation when
-//! zeros are a contamination of one process.
+//! separate from the zero process. I reach for a hurdle when the zero-generating
+//! mechanism is genuinely distinct (a true two-part model), and for zero-inflation
+//! when the zeros are a contamination of one process.
 //!
 //! The wrapper adds one fitted parameter `xi` (the zero probability, logit link)
-//! on top of the base family's parameters; the positive part reuses the
-//! zero-truncation machinery (STRUCT-2). Like the other structural wrappers it is
-//! excluded from [`from_name`](super::from_name).
+//! on top of the base family's parameters, and the positive part reuses the
+//! zero-truncation machinery (STRUCT-2) rather than reinventing it. Like the other
+//! structural wrappers it is excluded from [`from_name`](super::from_name).
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
@@ -67,11 +67,11 @@ impl Distribution for Hurdle {
         }
     }
 
-    /// Hand-written rather than delegated: `xi` is the wrapper's own parameter
-    /// and is not in `base.parameters()`, so asking the base about it would let
-    /// a base that refuses every name (Ocat) veto a parameter it has never heard
-    /// of. `xi`'s atom goes through `chain_to_eta` like any plain family, so it
-    /// accepts any link.
+    /// Hand-written rather than delegated. `xi` is the wrapper's own parameter and
+    /// is not in `base.parameters()`, so asking the base about it would let a base
+    /// that refuses every name (Ocat) veto a parameter it has never heard of. The
+    /// `xi` atom goes through `chain_to_eta` like any plain family, so it accepts
+    /// any link.
     fn allows_link_override(&self, param: &str) -> bool {
         param == "xi" || self.base.allows_link_override(param)
     }
@@ -194,8 +194,8 @@ impl Distribution for Hurdle {
     }
 
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        // Reports the untruncated base variance (the zero atom and truncation are
-        // not folded in; a known diagnostic approximation, as for Truncated).
+        // Reports the untruncated base variance. The zero atom and the truncation
+        // are not folded in. Its a known diagnostic approximation, same as Truncated.
         self.base.variance(params)
     }
 

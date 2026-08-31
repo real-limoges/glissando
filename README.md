@@ -2,7 +2,9 @@
 
 A Rust implementation of Generalized Additive Models for Location, Scale, and Shape (GAMLSS).
 
-GAMLSS extends traditional regression by modeling not just the mean, but also variance and other distribution parameters as functions of predictors. This enables flexible modeling of heteroskedastic data, heavy-tailed distributions, and other complex data structures.
+Ordinary regression models the mean and stops there.
+GAMLSS keeps going: the variance, the skew, and the tail weight each get their own regression, every one a function of your predictors.
+That is what lets it handle heteroskedastic data, heavy tails, and the other awkward shapes real data shows up in.
 
 ## Features
 
@@ -20,14 +22,15 @@ GAMLSS extends traditional regression by modeling not just the mean, but also va
 
 ## Installation
 
-The friendliest first build uses the **pure-Rust** backend — no system libraries, works on a clean machine and in WASM:
+The easiest first build uses the **pure-Rust** backend: no system libraries, and it works on a clean machine and in WASM.
 
 ```toml
 [dependencies]
 glissando = { git = "https://github.com/real-limoges/glissando", default-features = false, features = ["pure-rust", "serialization"] }
 ```
 
-For maximum performance, opt into the OpenBLAS backend instead (this is the default feature set, but it links a system OpenBLAS — see [Requirements](#requirements)):
+For maximum performance, reach for the OpenBLAS backend instead.
+It is the default feature set, but it links against a system OpenBLAS (see [Requirements](#requirements)):
 
 ```toml
 [dependencies]
@@ -129,13 +132,11 @@ let beta = Beta::new();                   // Proportions/rates in (0, 1)
 
 *(Rust API — these wrappers are not yet exposed on the WASM/Python surfaces.)*
 
-Censoring, truncation, and hurdle structure are **transformations of a base
-family's likelihood** given extra per-observation information. Each is a wrapper
-that holds a boxed base `Distribution` and fits the base family's parameters
-through the standard RS loop.
+Censoring, truncation, and hurdle structure are all the same trick: a **transformation of a base family's likelihood**, given a bit of extra per-observation information.
+Each one is a wrapper that holds a boxed base `Distribution` and fits the base family's parameters through the standard RS loop.
 
-**Censoring** — each row is observed exactly (`Event`), or known only to lie
-below (`Left`), above (`Right`, survival), or within an interval (`Interval`):
+**Censoring.**
+Each row is either observed exactly (`Event`) or known only to lie below (`Left`), above (`Right`, the survival case), or within an interval (`Interval`):
 
 ```rust
 use glissando::distributions::{Gaussian, Censored, CensorStatus};
@@ -150,8 +151,9 @@ let model = GamlssModel::fit(&data, &y, &formula, &family)?;
 // Interval censoring: Censored::with_upper(base, status, upper_bounds)
 ```
 
-**Truncation** — the response is only observed within `(lo, hi)`; out-of-range
-values are absent, not censored. Use `±∞` for an open side:
+**Truncation.**
+The response is only observed within `(lo, hi)`; out-of-range values are gone entirely, not censored.
+Use `±∞` for an open side:
 
 ```rust
 use glissando::distributions::{Gaussian, Truncated};
@@ -163,9 +165,9 @@ let family = Truncated::new(Box::new(Gaussian::new()), lower, upper);
 let model = GamlssModel::fit(&data, &y, &formula, &family)?;
 ```
 
-**Hurdle** — a point mass at zero plus a zero-truncated base for the positive
-part. Adds a logit-linked parameter `xi = P(Y = 0)`, so the formula needs an
-`"xi"` block:
+**Hurdle.**
+A point mass at zero, plus a zero-truncated base family for the positive part.
+It adds a logit-linked parameter `xi = P(Y = 0)`, so the formula needs an `"xi"` block:
 
 ```rust
 use glissando::distributions::{Gamma, Hurdle};
@@ -178,14 +180,11 @@ let family = Hurdle::new(Box::new(Gamma::new()));
 let model = GamlssModel::fit(&data, &y, &formula, &family)?;
 ```
 
-Censoring/truncation derivatives are analytic for the location/scale parameters
-of Gaussian, Student-t, and Gamma (via the `cdf_eta_derivatives` trait hook) and
-fall back to a central difference for shape parameters.
+The censoring and truncation derivatives are analytic for the location and scale parameters of Gaussian, Student-t, and Gamma (through the `cdf_eta_derivatives` trait hook); shape parameters fall back to a central difference.
 
 ## Finite Mixtures
 
-*(Rust API.)* Fit a `K`-component mixture `f(y) = Σ_k w_k g_k(y)` by EM — an
-outer loop over the existing prior-weighted RS fit:
+*(Rust API.)* Fit a `K`-component mixture `f(y) = Σ_k w_k g_k(y)` by EM: an outer loop wrapped around the existing prior-weighted RS fit.
 
 ```rust
 use glissando::{fit_mixture, FitConfig};
@@ -577,12 +576,9 @@ match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
 
 ## Embedding glissando behind your own FFI
 
-glissando ships three faces — the typed Rust API, the WASM bindings, and the
-Python extension. If you are embedding the crate behind a *different* boundary
-(a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON
-service), you do not need to re-implement the wire format: the `glissando::json`
-module (enabled by the `serialization` feature) is the same tested JSON
-marshalling the WASM bindings use, exposed for any embedder.
+glissando ships three faces: the typed Rust API, the WASM bindings, and the Python extension.
+If you are embedding the crate behind some *other* boundary (a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON service), you do not have to re-implement the wire format.
+The `glissando::json` module (enabled by the `serialization` feature) is the same tested JSON marshalling the WASM bindings use, exposed for any embedder to lean on.
 
 ```rust
 use glissando::json;
@@ -611,13 +607,12 @@ let (restored, family) = json::load(&blob)?;
 # Ok::<(), glissando::GamlssError>(())
 ```
 
-If you need typed dispatch instead of the string facade,
+Want typed dispatch instead of the string facade?
 `glissando::distributions::from_name("Gaussian") -> Box<dyn Distribution>`
 resolves any stateless family by name (every distribution except `Binomial`,
-which needs `n_trials` state — construct that one through the typed API). The
-`json` parsing/serialization helpers (`parse_data`, `parse_formula`,
-`serialize_predictions`, …) are also public if you want to mix glissando's wire
-format with your own fitting flow.
+which carries `n_trials` state; build that one through the typed API).
+The `json` parsing and serialization helpers (`parse_data`, `parse_formula`,
+`serialize_predictions`, and friends) are public too, if you want to mix glissando's wire format into your own fitting flow.
 
 ## Serialization & WASM
 

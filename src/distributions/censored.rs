@@ -58,8 +58,8 @@ pub struct Censored {
     /// [`CensorStatus::Interval`] rows.
     upper: Array1<f64>,
     /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
-    /// immutable after construction, so this is computed once here instead of
-    /// rescanned on every `loglik_pointwise` / `theta_derivatives` call (i.e. every
+    /// immutable after construction, so I compute this once here rather than
+    /// rescan it on every `loglik_pointwise` / `theta_derivatives` call (i.e. every
     /// IRLS iteration).
     has_interval: bool,
 }
@@ -163,9 +163,9 @@ impl Distribution for Censored {
         true
     }
 
-    /// Overrides the η-scale adapter directly: the censored rows carry *observed*
-    /// information, which is not link-invariant, so there is no natural-scale
-    /// `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
+    /// I override the η-scale adapter directly here. The censored rows carry
+    /// *observed* information, which is not link-invariant, so there is no
+    /// natural-scale `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
     /// [`Link::mu_eta2`].
     fn eta_derivatives(
         &self,
@@ -174,8 +174,8 @@ impl Distribution for Censored {
         ctx: &LinkContext,
     ) -> DerivativesResult {
         self.check_len(y.len())?;
-        // Event rows keep the base score / Fisher weight; censored rows are
-        // overwritten with the survival / interval score and observed-information
+        // Event rows keep the base score / Fisher weight. Censored rows get
+        // overwritten with the survival / interval score and the observed-information
         // weight built from F, F', F''.
         let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let f_y = self.base.cdf(y, params)?;
@@ -373,13 +373,13 @@ mod tests {
     fn score_matches_finite_diff_under_a_non_default_link() {
         // Altitude #1 Phase 3 acceptance gate. Before the CDF derivatives moved to
         // the natural scale, `cdf_eta_grads` chained through Gaussian's *default*
-        // links no matter what the fit resolved, so this score was wrong by a
+        // links no matter what the fit resolved, so this score came out wrong by a
         // factor of `mu_eta_default / mu_eta_actual` on every censored row.
         //
         // σ goes on `sqrt` rather than the usual suspects because η = √σ keeps the
-        // fixture's positive σ in the link's domain. μ deliberately stays on
-        // identity: this fixture has μ < 0, which `sqrt` and `inverse_square`
-        // cannot represent.
+        // fixture's positive σ in the link's domain. μ stays on identity on purpose:
+        // this fixture has μ < 0, and `sqrt` and `inverse_square` can't represent
+        // that.
         let y = array![0.0, -0.5, 0.3, 1.0];
         let upper = array![1.0, 0.5, 1.2, 2.0];
         let owned = gaussian_owned();
@@ -395,13 +395,13 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
-        // Altitude #1 Phase 3, gate (d). Two things changed under this test: the
+        // Altitude #1 Phase 3, gate (d). Two things changed under this test. The
         // base's CDF derivatives are now un-folded (new divisions by σ and σ²), and
         // the family-level `.max(MIN_WEIGHT)` that used to launder every censored
         // row's weight is gone. A saturating F drives `clamp_prob` to both of its
-        // rails, so `d1/F` and `d2/F` are evaluated at `PROB_EPS`.
+        // rails, so `d1/F` and `d2/F` land at `PROB_EPS`.
         //
-        // Weights are checked for finiteness only, not for sign: these rows carry
+        // I check the weights for finiteness only, not sign: these rows carry
         // observed information, which is legitimately negative in places (see
         // `derivative_keys_match_parameters_observed_info`).
         let y = array![-40.0, 40.0, 0.0, 0.0];

@@ -5,11 +5,11 @@ use crate::GamlssError;
 use ndarray::Array1;
 use std::collections::HashMap;
 
-/// Computes Pearson residuals via the family's marginal moments:
+/// Pearson residuals, built from the family's marginal moments:
 /// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.
 ///
-/// Variance is floored at `MIN_POSITIVE = 1e-10` before the square-root to
-/// keep residuals finite when the fitted variance is degenerate.
+/// The variance gets floored at `MIN_POSITIVE = 1e-10` before the square root, so a
+/// degenerate fitted variance can't send the residuals off to infinity.
 pub fn pearson_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,

@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking.
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -11,9 +11,9 @@ use rand_distr::{Distribution, Normal};
 
 #[test]
 fn random_effect_recovers_group_means() {
-    // y = grand_mean + group_offset[g_i] + ε where group_offset has 4 levels.
-    // Fit `Intercept + RandomEffect(group)` on Gaussian; the fitted η for each
-    // observation should track the true per-group mean within noise tolerance.
+    // y = grand_mean + group_offset[g_i] + ε, with group_offset carrying 4 levels.
+    // Fit `Intercept + RandomEffect(group)` on Gaussian. The fitted η for each
+    // observation should track the true per-group mean, inside noise tolerance.
     let mut gen = Generator::new(2024);
 
     let grand_mean = 5.0;
@@ -42,11 +42,11 @@ fn random_effect_recovers_group_means() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     assert!(model.converged());
 
-    // The fitted η_i for an obs in group g should be near grand_mean + offset[g].
+    // The fitted η_i for an obs in group g should land near grand_mean + offset[g].
     let mu_fitted = &model.models["mu"].fitted_values;
     for (g_idx, off) in group_offsets.iter().enumerate() {
         let expected = grand_mean + off;
-        // pick the first observation in this group
+        // grab the first observation in this group
         let i = g_idx * n_per_group;
         let diff = (mu_fitted[i] - expected).abs();
         assert!(
@@ -59,9 +59,9 @@ fn random_effect_recovers_group_means() {
         );
     }
 
-    // EDF should reflect the random effect's contribution above an intercept-only fit.
+    // EDF should reflect the random effect buying us something above an intercept-only fit.
     // With strong group separation and 4 groups (3 free degrees of freedom after the
-    // sum-to-zero constraint), we expect EDF clearly above 1.
+    // sum-to-zero constraint), EDF has to sit clearly above 1.
     let edf = model.models["mu"].edf;
     assert!(
         edf > 1.5,
@@ -72,7 +72,7 @@ fn random_effect_recovers_group_means() {
 
 #[test]
 fn random_effect_with_few_groups_runs() {
-    // Smoke test: 2-group case (the minimum where sum-to-zero kicks in).
+    // Smoke test. 2-group case, the smallest one where sum-to-zero actually kicks in.
     let mut rng = rand::rng();
     let n_per_group = 20;
     let mut y_vals: Vec<f64> = Vec::new();

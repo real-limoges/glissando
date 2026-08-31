@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// These can't run under the `python` feature. PyO3's extension-module linking won't have it.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -33,7 +33,7 @@ fn test_poisson_recovery() {
 
     let coeffs = &model.models["mu"].coefficients;
 
-    // Recovery assertions
+    // Did we get the truth back?
     assert!(
         (coeffs[0] - true_int).abs() < 0.1,
         "Intercept recovery failed"
@@ -75,11 +75,11 @@ fn test_heteroskedastic_gaussian_recovery() {
     let mu = &model.models["mu"].coefficients;
     let sigma = &model.models["sigma"].coefficients;
 
-    // Mu recovery (Truth: 10.0, 2.0)
+    // Mu recovery (truth: 10.0, 2.0)
     assert!((mu[0] - 10.0).abs() < 0.15);
     assert!((mu[1] - 2.0).abs() < 0.15);
 
-    // Sigma recovery (Truth: -1.0, 0.5)
+    // Sigma recovery (truth: -1.0, 0.5)
     assert!((sigma[0] - (-1.0)).abs() < 0.2);
     assert!((sigma[1] - 0.5).abs() < 0.2);
 }
@@ -111,10 +111,10 @@ fn test_tensor_product_complexity() {
 
     let edf = model.models["mu"].edf;
 
-    // check that smoothing actually happened
-    // should neither be a flat plane (EDF ~3) nor unpenalized (EDF 25)
-    // REML picks slightly less aggressive smoothing than GCV on this surface;
-    // the upper bound is loose to accept either criterion.
+    // Check that smoothing actually happened.
+    // Shouldn't be a flat plane (EDF ~3), shouldn't be unpenalized (EDF 25).
+    // REML smooths a touch less aggressively than GCV on this surface, so the
+    // upper bound is loose enough to accept either criterion.
 
     assert!(edf > 4.0, "Model is over-smoothed (EDF: {})", edf);
     assert!(edf < 23.0, "Model is under-smoothed (EDF: {})", edf);
@@ -139,7 +139,7 @@ fn test_model_convergence_invariants() {
 
     let model_1 = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
-    // Create shuffled copies of y and data
+    // Make shuffled copies of y and data.
     let n = y.len();
     let mut indices: Vec<usize> = (0..n).collect();
     indices.shuffle(&mut rand_gen.rng);
@@ -156,7 +156,7 @@ fn test_model_convergence_invariants() {
     let model_2 =
         GamlssModel::fit(&data_shuffled, &y_shuffled, &formulas, &Gaussian::new()).unwrap();
 
-    // verify coefficients are identical regardless of row order
+    // Row order shouldn't matter: coefficients must come out identical.
     let b1 = &model_1.models["mu"].coefficients;
     let b2 = &model_2.models["mu"].coefficients;
 

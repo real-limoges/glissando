@@ -3,8 +3,8 @@
 //! All three transform a positive response `y > 0` to a standardized residual `z`
 //! via the same Box-Cox power transform; they differ only in the distribution `z`
 //! follows (standard normal, Student-t, power-exponential) and the extra shape
-//! parameter that distribution carries. This module owns the transform, its `ν`
-//! derivative, and the inverse used by the quantile.
+//! parameter that distribution carries. I keep the transform, its `ν` derivative,
+//! and the inverse used by the quantile all in this one module.
 
 use super::MIN_POSITIVE;
 use crate::math::{median, median_abs_deviation};
@@ -15,9 +15,9 @@ use ndarray::Array1;
 const NU_EPS: f64 = 1e-6;
 
 /// Box-Cox z-score `((y/μ)^ν − 1)/(νσ)`, with the `ν → 0` log-normal limit
-/// `log(y/μ)/σ`. Evaluated as `expm1(νL)/(νσ)` so it is accurate (no cancellation)
-/// and smooth through `ν = 0` — the branch is only at *exactly* `ν = 0`. Assumes
-/// `y, μ, σ > 0` (callers clamp).
+/// `log(y/μ)/σ`. I evaluate it as `expm1(νL)/(νσ)` so it stays accurate (no
+/// cancellation) and smooth through `ν = 0`; the branch is only at *exactly*
+/// `ν = 0`. Assumes `y, μ, σ > 0` (callers clamp).
 #[inline]
 pub(super) fn boxcox_z(y: f64, mu: f64, sigma: f64, nu: f64) -> f64 {
     let l = (y / mu).ln();
@@ -44,8 +44,8 @@ pub(super) fn boxcox_z_dz_dnu(y: f64, mu: f64, sigma: f64, nu: f64) -> (f64, f64
 }
 
 /// Invert the transform for the quantile: `y = μ·(1 + νσz)^{1/ν}` (`ν = 0` →
-/// `μ·e^{σz}`). `z` is the standardized residual at the requested probability; the
-/// base is clamped off 0 (the truncated tail).
+/// `μ·e^{σz}`). `z` is the standardized residual at the requested probability; I
+/// clamp the base off 0 (the truncated tail).
 #[inline]
 pub(super) fn boxcox_inv(mu: f64, sigma: f64, nu: f64, z: f64) -> f64 {
     if nu.abs() < NU_EPS {

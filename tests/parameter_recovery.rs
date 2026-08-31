@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way. No way around it.
 #![cfg(not(feature = "python"))]
 
 use glissando::{distributions::StudentT, DataSet, Formula, GamlssModel, Term};
@@ -11,7 +11,7 @@ fn test_student_t_recovery() {
     let n = 2_000;
     let mut rng = StdRng::seed_from_u64(42);
 
-    // expected
+    // what we planted
     // log(sigma) = -0.7 + 0.0 * x  => sigma = exp(-0.7) approx 0.5
     // log(nu)    =  1.6 + 0.0 * x  => nu = exp(1.6) approx 4.95
     let true_mu_intercept: f64 = 10.0;
@@ -20,7 +20,7 @@ fn test_student_t_recovery() {
     let true_sigma_log: f64 = -0.7; // exp(-0.7) ~ 0.496
     let true_nu_log: f64 = 1.6; // exp(1.6) ~ 4.953
 
-    // actuals
+    // now build the real thing
     let t_dist = StudentTDist::new(true_nu_log.exp()).unwrap();
 
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 10.0).collect();
@@ -30,7 +30,7 @@ fn test_student_t_recovery() {
             let mu = true_mu_intercept + true_mu_slope * x;
             let sigma = true_sigma_log.exp();
 
-            // this is actually students t noise
+            // real Student's t noise, not Gaussian dressed up as it
             let noise = t_dist.sample(&mut rng);
             mu + sigma * noise
         })
@@ -56,7 +56,7 @@ fn test_student_t_recovery() {
 
     let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new()).expect("Fit failed");
 
-    // assertions
+    // now the checks
     let mu_coeffs = &model.models["mu"].coefficients;
     let sigma_coeffs = &model.models["sigma"].coefficients;
     let nu_coeffs = &model.models["nu"].coefficients;
@@ -67,7 +67,7 @@ fn test_student_t_recovery() {
 
     let tolerance = 0.2;
 
-    // check params (mu is linear)
+    // mu is linear, so both the intercept and the slope have to come back
     assert!(
         (mu_coeffs[0] - true_mu_intercept).abs() < tolerance,
         "Mu Intercept failed"
@@ -77,14 +77,14 @@ fn test_student_t_recovery() {
         "Mu Slope failed"
     );
 
-    // check sigma (Log Link)
+    // sigma, on the log link
     assert!(
         (sigma_coeffs[0] - true_sigma_log).abs() < tolerance,
         "Sigma Intercept failed"
     );
 
-    // check nu (Log Link)
-    // nu gets more slack because it's pretty hard to estimate
+    // nu, also on the log link
+    // nu gets more slack. It's genuinely hard to estimate.
     assert!(
         (nu_coeffs[0] - true_nu_log).abs() < 0.7,
         "Nu Intercept failed"

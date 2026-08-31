@@ -1,28 +1,28 @@
 // Golden characterization tables for `Distribution::theta_derivatives`.
 //
 // PURPOSE. These snapshots freeze the exact `(score, weight)` arrays every
-// family returns today, per parameter, at a fixed fixture. They exist to gate
-// the generic-link-chain-rule refactor (Altitude #1): that refactor moves the
+// family returns today, per parameter, at a fixed fixture. They're here to gate
+// the generic-link-chain-rule refactor (Altitude #1): that refactor hauls the
 // `dμ/dη` chain rule out of each family and into `fitting/scoring.rs`, and it
-// is *required* to leave the default-link numbers unchanged. Any drift here is
-// therefore a defect, not a snapshot to re-accept.
+// is *required* to leave the default-link numbers untouched. So any drift here
+// is a defect, not a snapshot to re-accept.
 //
 // WHY SNAPSHOTS RATHER THAN A FINITE-DIFFERENCE ORACLE. The score `u` already
-// has finite-difference coverage in each family's unit tests, but the Fisher
-// weight `w` does not, and `w` is where the *squared* chain rule lives. `w`
-// cannot be finite-differenced generically: several families deliberately
+// has finite-difference coverage in each family's unit tests. The Fisher
+// weight `w` does not, and `w` is where the *squared* chain rule lives. You
+// can't finite-difference `w` generically: several families deliberately
 // return *expected* information (StudentT μ, `student_t.rs:102-110`) or a
 // squared-score surrogate (NegBinomial σ, `negative_binomial.rs:94-100`) rather
 // than the observed `−∂²l/∂η²`, so a second difference of `loglik_pointwise` is
-// simply a different quantity. Characterizing the current values sidesteps the
+// just a different quantity. Characterizing the current values sidesteps the
 // theory entirely and is exact.
 //
 // PRECISION. Values are formatted to 11 significant digits. The refactor
 // reassociates floating-point operations (`w_σ = 2.0` becomes `σ²·(2/σ²)`,
 // which is not bit-identical), so bit-exactness is the wrong bar.
 // Reassociation moves the last ~1-2 digits (~1e-16 relative); a wrong chain
-// rule moves the value by orders of magnitude. 11 digits sits far above the
-// noise and far below any real algebraic change.
+// rule moves the value by orders of magnitude. 11 digits sits well above the
+// noise and well below any real algebraic change.
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test derivative_golden`,
 // then `cargo insta accept`.
@@ -162,7 +162,7 @@ fn golden<D: Distribution + ?Sized>(
 #[test]
 fn golden_gaussian() {
     // Mixed residual signs and a spread of σ, so neither the score nor the
-    // constant σ-weight can be reproduced by accident.
+    // constant σ-weight can land by accident.
     let y = array![-1.5, 0.0, 1.0, 2.5, -0.25, 3.0];
     let owned = [
         ("mu", array![-0.5, 0.25, 0.5, 2.0, 0.0, 2.75]),
@@ -234,9 +234,9 @@ fn golden_student_t() {
 #[test]
 fn golden_student_t_at_nu_floor() {
     // Pins the aggregate KKT projection at the ν floor (`student_t.rs:147-161`):
-    // every row is pinned, so the frozen-vs-lift-off branch is what is being
-    // characterized. StudentT keeps this logic as an `eta_derivatives` override,
-    // so this table must stay bit-stable across the whole refactor.
+    // every row is pinned, so the frozen-vs-lift-off branch is what we're
+    // characterizing here. StudentT keeps this logic as an `eta_derivatives`
+    // override, so this table must stay bit-stable across the whole refactor.
     let y = array![-3.0, -1.0, 0.0, 1.0, 4.0, 0.5];
     let owned = [
         ("mu", array![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
@@ -323,7 +323,7 @@ fn golden_ocat_4_categories() {
 #[test]
 fn golden_ocat_5_categories() {
     // Closes the `delta_4` coverage gap: with only R=4 fixtures in the unit
-    // tests, the fourth threshold's log-link arm had no derivative test at all.
+    // tests, the fourth threshold's log-link arm never had a derivative test.
     let y = array![1.0, 2.0, 3.0, 4.0, 5.0, 3.0];
     let owned = [
         ("mu", array![-1.5, -0.5, 0.0, 0.75, 1.5, 0.25]),
@@ -355,8 +355,8 @@ fn golden_censored_all_statuses() {
     // Exercises all four `CensorStatus` arms in one table, including `Interval`,
     // which drives the `with_upper` path and the second-derivative difference.
     //
-    // This table was regenerated once, deliberately, in Altitude #1 Phase 3, and
-    // it is the only one of the 36 that moved across Phases 1-3. Two `sigma`
+    // This table was regenerated once, on purpose, in Altitude #1 Phase 3, and
+    // it is the only one of the 36 that budged across Phases 1-3. Two `sigma`
     // weights read `1.0000000000e-6`, `MIN_WEIGHT` exactly, because `censored.rs`
     // pre-floored them; they now read the unfloored observed information the
     // wrapper actually computes: `-1.1406392216e-1` on the right-censored row

@@ -1,4 +1,4 @@
-// Integration tests cannot run with the `python` feature due to PyO3's extension-module linking
+// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -13,7 +13,7 @@ use rand::RngExt;
 
 #[test]
 fn test_predict_on_training_data() {
-    // Predictions on training data should match fitted values
+    // Predict on training data and you'd better get the fitted values back, exactly.
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
@@ -21,10 +21,10 @@ fn test_predict_on_training_data() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Predict on the same data
+    // Predict on the same data we fit on
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
 
-    // Check that predictions match fitted values
+    // They have to match the fitted values
     let mu_pred = &predictions["mu"];
     let mu_fitted = &model.models["mu"].fitted_values;
 
@@ -42,7 +42,7 @@ fn test_predict_on_training_data() {
 
 #[test]
 fn test_predict_on_new_data() {
-    // Test prediction on new data points
+    // Now the real test: prediction on data points the fit never saw.
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(200, 2.0, 5.0, 1.0);
 
@@ -50,15 +50,14 @@ fn test_predict_on_new_data() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Create new data
+    // Fresh data, points well outside the training grid
     let mut new_data = DataSet::new();
     new_data.insert_column("x", Array1::from_vec(vec![0.0, 50.0, 100.0, 150.0, 200.0]));
 
     let predictions = model.predict(&new_data, &Gaussian::new()).unwrap();
     let mu_pred = &predictions["mu"];
 
-    // For linear model: mu = intercept + slope * x
-    // Predictions should follow this pattern
+    // Linear model, so mu = intercept + slope * x. The predictions have to trace that line.
     let coeffs = &model.models["mu"].coefficients.0;
     let intercept = coeffs[0];
     let slope = coeffs[1];
@@ -89,7 +88,7 @@ fn test_predict_with_se() {
 
     let mu_result = &results["mu"];
 
-    // Check that standard errors are positive
+    // Standard errors can't go negative
     for i in 0..mu_result.se_eta.len() {
         assert!(
             mu_result.se_eta[i] >= 0.0,
@@ -98,7 +97,7 @@ fn test_predict_with_se() {
         );
     }
 
-    // For Gaussian with identity link, fitted should equal eta
+    // Gaussian with an identity link, so fitted is just eta, nothing to invert
     for i in 0..mu_result.fitted.len() {
         let diff = (mu_result.fitted[i] - mu_result.eta[i]).abs();
         assert!(diff < 1e-10, "For identity link, fitted should equal eta");
@@ -132,7 +131,7 @@ fn test_predict_poisson() {
     let predictions = model.predict(&data, &Poisson::new()).unwrap();
     let mu_pred = &predictions["mu"];
 
-    // All predictions should be positive (Poisson has log link)
+    // Every prediction has to be positive. Poisson rides a log link, so that's guaranteed.
     for i in 0..mu_pred.len() {
         assert!(
             mu_pred[i] > 0.0,
@@ -152,17 +151,18 @@ fn test_posterior_samples() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Get posterior samples for mu
+    // Draw posterior samples for mu
     let samples = model.posterior_samples("mu", 100, None).unwrap();
 
     assert_eq!(samples.len(), 100, "Should have 100 samples");
 
-    // Each sample should have 2 coefficients (intercept + slope)
+    // Each sample carries 2 coefficients: intercept + slope
+    // (nothing more, nothing less)
     for (i, sample) in samples.iter().enumerate() {
         assert_eq!(sample.0.len(), 2, "Sample {} should have 2 coefficients", i);
     }
 
-    // Sample mean should be close to fitted coefficients
+    // Average the samples and you should land back near the fitted coefficients
     let fitted_coeffs = &model.models["mu"].coefficients.0;
     let mut mean_intercept = 0.0;
     let mut mean_slope = 0.0;
@@ -192,16 +192,16 @@ fn test_predict_samples() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Get prediction samples
+    // Draw prediction samples
     let pred_samples = model
         .predict_samples(&data, &Gaussian::new(), 50, None)
         .unwrap();
 
-    // Check mu predictions
+    // mu predictions first
     let mu_samples = &pred_samples["mu"];
     assert_eq!(mu_samples.len(), 50, "Should have 50 prediction samples");
 
-    // Each sample should have predictions for all observations
+    // Every sample covers all the observations, no gaps
     for sample in mu_samples {
         assert_eq!(sample.len(), 50, "Each sample should have 50 predictions");
     }
@@ -232,27 +232,27 @@ fn test_predict_with_smooth() {
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
     let mu_pred = &predictions["mu"];
 
-    // Predictions should capture the sinusoidal pattern
-    // Check that predictions at 0, pi, 2*pi are roughly 0, 0, 0 (sin values)
+    // The predictions have to trace the sine wave. sin is 0 at 0, pi, and 2*pi,
+    // so the predictions there should sit near 0 too.
     let idx_0 = 0;
     let idx_pi = n / 2;
     let idx_2pi = n - 1;
 
-    // At x=0, sin(0) = 0
+    // x=0, sin(0) = 0
     assert!(
         mu_pred[idx_0].abs() < 0.5,
         "Prediction at x=0 should be near 0, got {}",
         mu_pred[idx_0]
     );
 
-    // At x=pi, sin(pi) = 0
+    // x=pi, sin(pi) = 0
     assert!(
         mu_pred[idx_pi].abs() < 0.5,
         "Prediction at x=pi should be near 0, got {}",
         mu_pred[idx_pi]
     );
 
-    // At x=2*pi, sin(2*pi) = 0
+    // x=2*pi, sin(2*pi) = 0
     assert!(
         mu_pred[idx_2pi].abs() < 0.5,
         "Prediction at x=2*pi should be near 0, got {}",
@@ -261,14 +261,14 @@ fn test_predict_with_smooth() {
 }
 
 // ----------------------------------------------------------------------------
-// Phase F.3 — predict_with_se / predict_samples coverage for non-Gaussian link
+// Phase F.3: predict_with_se / predict_samples coverage for non-Gaussian link
 // ----------------------------------------------------------------------------
 
 #[test]
 fn predict_with_se_for_poisson_log_link() {
-    // Poisson uses log link, so fitted (response scale) ≠ eta (link scale).
-    // Verifies both the SE calculation and the inv_link composition on a
-    // distribution where they differ.
+    // Poisson uses a log link, so fitted (response scale) ≠ eta (link scale).
+    // This exercises both the SE calculation and the inv_link composition on a
+    // distribution where the two scales actually come apart.
     let mut rng = Generator::new(202);
     let n = 200;
     let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 2.0).collect();
@@ -292,18 +292,18 @@ fn predict_with_se_for_poisson_log_link() {
     assert_eq!(mu.eta.len(), n);
     assert_eq!(mu.se_eta.len(), n);
     for i in 0..n {
-        // fitted = exp(eta) for log link, so fitted > 0 and finite.
+        // fitted = exp(eta) under a log link, so it's positive and finite.
         assert!(mu.fitted[i] > 0.0 && mu.fitted[i].is_finite());
-        // se_eta should be strictly positive (covariance is PD).
+        // se_eta has to be strictly positive, since the covariance is PD.
         assert!(mu.se_eta[i] > 0.0, "se_eta[{}] = {} ≤ 0", i, mu.se_eta[i]);
-        // For log link, fitted ≠ eta.
+        // Log link, so fitted and eta must not coincide.
         assert!(
             (mu.fitted[i] - mu.eta[i]).abs() > 1e-6,
             "log link should make fitted ≠ eta, but at i={} both are {:.6}",
             i,
             mu.fitted[i]
         );
-        // fitted ≈ exp(eta) by construction.
+        // and fitted ≈ exp(eta) exactly, by construction.
         let expected = mu.eta[i].exp();
         assert!(
             (mu.fitted[i] - expected).abs() < 1e-10,
@@ -343,25 +343,26 @@ fn predict_samples_shape_matches_request_for_poisson() {
         assert_eq!(mu_samples.len(), n_samples, "outer dim should be n_samples");
         for s in mu_samples {
             assert_eq!(s.len(), n, "inner dim should be n_obs");
-            // Log link guarantees positive predictions.
+            // Log link, so every prediction comes out positive.
             assert!(s.iter().all(|v| *v > 0.0 && v.is_finite()));
         }
     }
 }
 
 // ============================================================================
-// Guide 1 — design_matrix / covariance_matrix / term_index_map / seed
+// Guide 1: design_matrix / covariance_matrix / term_index_map / seed
 // ============================================================================
 
-/// design_matrix identity: X · β must equal the fitted linear predictor on
-/// the training data (confirming the exported matrix is the fit-time one).
+/// design_matrix identity: X · β has to equal the fitted linear predictor on
+/// the training data. That's how I confirm the exported matrix really is the
+/// one used at fit time, not a look-alike rebuilt later.
 #[test]
 fn design_matrix_dot_beta_equals_eta() {
     let mut rng = Generator::new(77);
     let n = 80;
     let (y, data) = rng.linear_gaussian(n, 1.5, 3.0, 0.8);
 
-    // Intercept + CR spline (safe combination — no redundant linear term).
+    // Intercept + CR spline. Safe combination, no redundant linear term to fight over.
     let mut formula = Formula::new();
     formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 8)]);
     formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
@@ -387,9 +388,9 @@ fn design_matrix_dot_beta_equals_eta() {
 
 /// covariance_matrix is symmetric and positive-definite.
 ///
-/// Symmetry is checked directly. PD is confirmed indirectly: `posterior_samples`
-/// internally does a Cholesky factorization and returns `PosteriorNotPositiveDefinite`
-/// if it fails — so a successful call is our PD certificate.
+/// I check symmetry directly. PD I confirm the sneaky way: `posterior_samples`
+/// does a Cholesky factorization internally and returns `PosteriorNotPositiveDefinite`
+/// if it fails, so a successful call is my PD certificate.
 #[test]
 fn covariance_matrix_is_symmetric_and_psd() {
     let mut rng = Generator::new(88);
@@ -403,7 +404,7 @@ fn covariance_matrix_is_symmetric_and_psd() {
         let p = mat.nrows();
         assert_eq!(mat.ncols(), p, "covariance must be square for {param}");
 
-        // Symmetry: V[i,j] ≈ V[j,i]
+        // Symmetry: V[i,j] has to equal V[j,i]
         for i in 0..p {
             for j in 0..p {
                 let diff = (mat[[i, j]] - mat[[j, i]]).abs();
@@ -414,15 +415,15 @@ fn covariance_matrix_is_symmetric_and_psd() {
             }
         }
 
-        // PD: posterior_samples does Cholesky internally; success proves the matrix is PD.
+        // PD: posterior_samples does the Cholesky for us. If it succeeds, the matrix is PD.
         model
             .posterior_samples(param, 1, Some(0))
             .expect("covariance must be PD");
     }
 }
 
-/// term_index_map is non-overlapping, contiguous, starts at 0, and the total
-/// width equals the coefficient count and design-matrix column count.
+/// term_index_map has to be non-overlapping, contiguous, and start at 0, with the
+/// total width matching both the coefficient count and the design-matrix column count.
 #[test]
 fn term_index_map_is_contiguous_and_complete() {
     let mut rng = Generator::new(55);
@@ -443,12 +444,12 @@ fn term_index_map_is_contiguous_and_complete() {
             !blocks.is_empty(),
             "term_blocks must not be empty for {param}"
         );
-        // Starts at 0
+        // First block starts at 0
         assert_eq!(
             blocks[0].1, 0,
             "first block must start at col 0 for {param}"
         );
-        // Contiguous and non-overlapping
+        // Each block picks up exactly where the last one ended, no gaps, no overlap
         for i in 1..blocks.len() {
             assert_eq!(
                 blocks[i].1,
@@ -459,7 +460,7 @@ fn term_index_map_is_contiguous_and_complete() {
                 blocks[i - 1].2
             );
         }
-        // Total width == n_coeffs == design matrix column count
+        // Total width has to close the loop: == n_coeffs == design matrix column count
         let total: usize = blocks.iter().map(|(_, f, l)| l - f).sum();
         assert_eq!(
             total, n_coeffs,
@@ -473,8 +474,8 @@ fn term_index_map_is_contiguous_and_complete() {
 }
 
 /// Linear term name: `Term::Linear { col_name: "x" }` → `"x"`.
-/// (Tested separately since combining Linear + CrSpline on the same column
-/// causes collinearity in a real fit.)
+/// I test this on its own because combining Linear + CrSpline on the same column
+/// goes collinear in a real fit, so I can't check the name inside one.
 #[test]
 fn linear_term_name_is_col_name() {
     use glissando::Term;
@@ -493,7 +494,7 @@ fn term_name_strings_are_correct() {
     let n = 40;
     let (y, data) = rng.linear_gaussian(n, 1.0, 1.0, 0.5);
 
-    // Add a group column for random effect
+    // Bolt on a group column so we can hang a random effect off it
     let groups: Array1<f64> = Array1::from_iter((0..n).map(|i| (i % 5) as f64));
     let mut data2 = data.clone();
     data2.insert_column("group", groups);
@@ -523,7 +524,7 @@ fn term_name_strings_are_correct() {
     assert_eq!(sigma_blocks[0].0, "(intercept)");
 }
 
-/// Seeded posterior: same seed → identical samples. No seed → differs (probabilistically).
+/// Seeded posterior: same seed gives identical samples, no seed diverges (with overwhelming probability).
 #[test]
 fn seeded_predict_samples_are_reproducible() {
     let mut rng = Generator::new(321);
@@ -541,7 +542,7 @@ fn seeded_predict_samples_are_reproducible() {
         .predict_samples(&data, &Gaussian::new(), n_samples, seed)
         .unwrap();
 
-    // Same seed → identical arrays.
+    // Same seed, so the arrays have to come out bit-identical.
     for s in 0..n_samples {
         for v in 0..run1["mu"][s].len() {
             assert_eq!(
@@ -551,7 +552,7 @@ fn seeded_predict_samples_are_reproducible() {
         }
     }
 
-    // No seed → different (with overwhelming probability for 20 samples × 50 obs).
+    // No seed, so it should differ. 20 samples × 50 obs colliding by chance is not happening.
     let run_unseeded = model
         .predict_samples(&data, &Gaussian::new(), n_samples, None)
         .unwrap();
@@ -562,7 +563,7 @@ fn seeded_predict_samples_are_reproducible() {
     assert!(!all_equal, "unseeded run should differ from seeded run");
 }
 
-/// Same test through posterior_samples (coefficient-space samples).
+/// Same test, but through posterior_samples this time (coefficient-space samples).
 #[test]
 fn seeded_posterior_samples_are_reproducible() {
     let mut rng = Generator::new(444);
@@ -589,7 +590,7 @@ fn test_predict_missing_column_error() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Try to predict on data missing the 'x' column
+    // Hand it data with no 'x' column and watch it refuse
     let mut bad_data = DataSet::new();
     bad_data.insert_column("z", Array1::from_vec(vec![1.0, 2.0, 3.0]));
 
@@ -597,15 +598,15 @@ fn test_predict_missing_column_error() {
     assert!(result.is_err(), "Should error when column is missing");
 }
 
-/// CrSpline1D knot-persistence: predicting on data with different quantiles must
-/// reproduce training fitted values exactly when the training rows are included.
+/// CrSpline1D knot-persistence: predict on data with different quantiles and the
+/// training rows inside it still have to reproduce their fitted values exactly.
 ///
-/// If the knots were recomputed from `new_data` instead of being stored from
-/// training, the basis would silently differ and in-sample predictions would
-/// deviate from fitted values — this test catches that.
+/// If the knots got recomputed from `new_data` instead of being carried over from
+/// training, the basis would quietly shift and the in-sample predictions would drift
+/// off their fitted values. This test is here to catch exactly that.
 #[test]
 fn cr_spline_prediction_reuses_training_knots() {
-    // Training data on [1, 10]
+    // Train on [1, 10]
     let n_train = 40;
     let x_train: Array1<f64> = Array1::linspace(1.0, 10.0, n_train);
     let y_train: Array1<f64> = x_train.mapv(|x| 3.0 * x.sin() + 0.5 * x);
@@ -620,8 +621,8 @@ fn cr_spline_prediction_reuses_training_knots() {
     let model = GamlssModel::fit(&train_data, &y_train, &formula, &Gaussian::new())
         .expect("CrSpline1D fit should succeed");
 
-    // new_data has DIFFERENT range ([5, 25]) — quantiles differ from training.
-    // The training rows [1,10] are appended at the end so we can check them.
+    // new_data lives on a DIFFERENT range ([5, 25]), so its quantiles don't match training.
+    // I append the training rows [1,10] at the end so I've got something to check.
     let n_extra = 10;
     let x_extra: Array1<f64> = Array1::linspace(5.0, 25.0, n_extra);
     let x_combined: Array1<f64> = Array1::from_iter(x_extra.iter().chain(x_train.iter()).copied());
@@ -631,8 +632,8 @@ fn cr_spline_prediction_reuses_training_knots() {
     let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
     let mu_pred = &preds["mu"];
 
-    // The last n_train entries of mu_pred correspond to x_train — they must match
-    // the model's fitted values (which were computed with the stored training knots).
+    // The last n_train entries of mu_pred are the x_train rows, so they have to match
+    // the model's fitted values, which were computed with the stored training knots.
     let mu_fitted = &model.models["mu"].fitted_values;
     let offset = n_extra;
     for i in 0..n_train {
@@ -659,7 +660,7 @@ fn centiles_median_equals_fitted_mu_for_gaussian() {
 
     let centiles = model.centiles(&data, &Gaussian::new(), &[50.0]).unwrap();
     let fitted = model.predict(&data, &Gaussian::new()).unwrap();
-    // For a symmetric family the 50th centile is the fitted mean.
+    // Symmetric family, so the 50th centile just is the fitted mean.
     let c50 = &centiles["C50"];
     let mu = &fitted["mu"];
     for (i, (&c, &m)) in c50.iter().zip(mu.iter()).enumerate() {
@@ -676,7 +677,7 @@ fn centiles_are_strictly_increasing_in_level() {
 
     let levels = [2.0, 10.0, 25.0, 50.0, 75.0, 90.0, 98.0];
     let centiles = model.centiles(&data, &Gaussian::new(), &levels).unwrap();
-    // At every row the quantile is monotone increasing in the centile level.
+    // At every row the quantile has to climb monotonically with the centile level.
     for w in levels.windows(2) {
         let lo_curve = &centiles[&format!("C{}", w[0])];
         let hi_curve = &centiles[&format!("C{}", w[1])];
@@ -696,8 +697,8 @@ fn centiles_are_strictly_increasing_in_level() {
 
 #[test]
 fn centiles_have_nominal_coverage() {
-    // Empirical fraction of y below C_α should be ≈ α (the residual property
-    // checked from the centile side).
+    // The empirical fraction of y below C_α should land near α. Same residual
+    // property as ever, just checked from the centile side.
     let mut rng = Generator::new(2024);
     let (y, data) = rng.linear_gaussian(2000, 1.0, 3.0, 1.0);
     let formula = linear_intercepts("x", &["mu", "sigma"]);
@@ -726,7 +727,7 @@ fn quantile_prediction_matches_per_row_levels() {
     let formula = linear_intercepts("x", &["mu", "sigma"]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // A constant 0.5 level reproduces the 50th centile (= fitted mu).
+    // A flat 0.5 level should reproduce the 50th centile, which is just the fitted mu.
     let p = Array1::from_elem(y.len(), 0.5);
     let q = model
         .quantile_prediction(&data, &Gaussian::new(), &p)
@@ -738,41 +739,41 @@ fn quantile_prediction_matches_per_row_levels() {
 }
 
 /// Regression guard for the `RandomEffect` legacy-compatibility fallback in
-/// `assemble_smooth` (src/fitting/assembler.rs): a model whose stored term has
+/// `assemble_smooth` (src/fitting/assembler.rs). A model whose stored term has
 /// empty `levels` (`#[serde(default)]`'s value when deserializing a pre-migration
-/// JSON blob that predates the field) must map groups to columns in
+/// JSON blob that predates the field) has to map groups to columns in
 /// first-occurrence order, matching the comment "Legacy models (empty `levels`,
 /// pre-dating the field) fall back to first-occurrence order to reproduce their
-/// fitted layout." `resolve_terms`'s own fallback (`sorted_levels`) resolves the
-/// *same* empty-`levels` case to *sorted* order instead — a different, incompatible
-/// convention. Routing predict through `resolve_terms` (as an earlier, reverted
-/// version of this fix did) would silently swap one for the other, misaligning a
-/// legacy model's coefficients with the wrong columns. This test fits fresh (so
-/// only the *layout*, not real recovery, is at stake), then clears the resolved
-/// `levels` on the stored term to reproduce the legacy shape, and checks the
-/// column layout directly.
+/// fitted layout." Here's the trap: `resolve_terms`'s own fallback (`sorted_levels`)
+/// resolves that *same* empty-`levels` case to *sorted* order instead, a different
+/// and incompatible convention. Routing predict through `resolve_terms` (which an
+/// earlier, reverted version of this fix did) would quietly swap one for the other
+/// and line a legacy model's coefficients up against the wrong columns. So I fit
+/// fresh (only the *layout* is at stake here, not real recovery), clear the resolved
+/// `levels` on the stored term to reproduce the legacy shape, and check the column
+/// layout directly.
 #[test]
 fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
-    // Group codes visited in this row order: 3, 1, 2, 1, 3. First-occurrence
-    // order is [3, 1, 2]; sorted order is [1, 2, 3] — deliberately different so
-    // a regression (silently switching to sorted order) is observable.
+    // Group codes show up in row order 3, 1, 2, 1, 3. First-occurrence order is
+    // [3, 1, 2]; sorted order is [1, 2, 3]. I picked them to disagree on purpose, so
+    // a regression that quietly switches to sorted order actually shows up here.
     let g: Vec<f64> = vec![3.0, 1.0, 2.0, 1.0, 3.0];
     let y: Vec<f64> = vec![10.0, 20.0, 30.0, 21.0, 11.0];
     let mut data = DataSet::new();
     data.insert_column("g", Array1::from_vec(g));
     let y = Array1::from_vec(y);
 
-    // No Intercept on "mu": with one absent, `apply_constraint` is false, so the
-    // RandomEffect basis stays the raw one-hot indicator matrix this test checks
-    // column-by-column, rather than the sum-to-zero-reparameterized version.
+    // No Intercept on "mu" on purpose: with it absent, `apply_constraint` is false, so
+    // the RandomEffect basis stays the raw one-hot indicator matrix I check column-by-column
+    // here, instead of the sum-to-zero-reparameterized version.
     let mut formula = Formula::new();
     formula.add_terms("mu", vec![random("g")]);
     formula.add_terms("sigma", vec![Term::Intercept]);
 
     let mut model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // Simulate a model serialized before `RandomEffect::levels` existed: clear
-    // the levels `resolve_terms` filled in at fit time.
+    // Fake up a model serialized before `RandomEffect::levels` existed: wipe the
+    // levels that `resolve_terms` filled in at fit time.
     for term in &mut model.models.get_mut("mu").unwrap().terms {
         if let Term::Smooth(Smooth::RandomEffect { levels, .. }) = term {
             levels.clear();
@@ -786,7 +787,7 @@ fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
         "3 distinct groups should produce 3 ridge-indicator columns"
     );
 
-    // Expected one-hot column per row under first-occurrence order [3, 1, 2].
+    // The one-hot column each row should light up, under first-occurrence order [3, 1, 2].
     let expected_col = [0usize, 1, 2, 1, 0];
     for (i, &col) in expected_col.iter().enumerate() {
         for j in 0..design.ncols() {
@@ -801,11 +802,11 @@ fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
     }
 }
 
-// A model fit with Gaussian's default identity link for "mu" must reject a
-// predict-time family swap to Poisson (whose default link for "mu" is log) —
-// both families have a "mu" parameter, so nothing but the family-identity
-// check catches this; without it, predict would silently apply exp(eta) to
-// coefficients fit under the identity link.
+// A model fit with Gaussian's default identity link for "mu" has to reject a
+// predict-time family swap to Poisson (whose default link for "mu" is log).
+// Both families carry a "mu" parameter, so nothing but the family-identity check
+// catches this. Without it, predict would quietly apply exp(eta) to coefficients
+// that were fit under the identity link. Nasty, silent, wrong.
 #[test]
 fn predict_rejects_mismatched_family() {
     let mut rng = Generator::new(7);
@@ -851,12 +852,12 @@ fn predict_samples_rejects_mismatched_family() {
 }
 
 // A model with no stored family descriptor (the pre-this-feature state, or any
-// GamlssModel value hand-built without going through fit/from_json) must skip
+// GamlssModel value hand-built without going through fit/from_json) has to skip
 // the check entirely rather than reject every family, matching the
-// `FittedParameter::link` backward-compat precedent. Uses Gamma (also
-// ["mu", "sigma"], but LogLink for "mu" instead of Gaussian's IdentityLink) so
-// a real mismatch is exercised, not just a same-family self-check — Poisson
-// (only "mu") would fail on the missing "sigma" parameter instead, which
+// `FittedParameter::link` backward-compat precedent. I use Gamma here (also
+// ["mu", "sigma"], but LogLink for "mu" instead of Gaussian's IdentityLink) so a
+// real mismatch gets exercised, not just a same-family self-check. Poisson
+// (only "mu") would trip on the missing "sigma" parameter instead, which
 // wouldn't isolate what this test is actually about.
 #[test]
 fn model_with_no_family_skips_validation() {
@@ -895,7 +896,7 @@ fn json_roundtrip_backfills_family_and_still_predicts() {
     // The correct family still predicts fine...
     let preds = reloaded.predict(&data, &family).unwrap();
     assert!(preds.contains_key("mu"));
-    // ...and a mismatched one is now rejected, exactly as for a freshly-fit model.
+    // ...and a mismatched one gets rejected, exactly like a freshly-fit model would.
     let err = reloaded.predict(&data, &Poisson::new()).unwrap_err();
     assert!(matches!(err, GamlssError::FamilyMismatch { .. }));
 }

@@ -47,17 +47,17 @@ impl Distribution for Gaussian {
         // Full derivation in docs/math/mathematics.md.
         //
         // `chain_to_eta` recovers the classic η-scale pairs under the default
-        // links: μ is identity (`mu_eta = 1`, so its entries pass through
+        // links. μ is identity (`mu_eta = 1`, so its entries pass through
         // untouched), and σ is log (`mu_eta = σ`), giving `u_η = ((y−μ)²−σ²)/σ²`
-        // and `w_η = σ²·(2/σ²) = 2`. The weights are returned unfloored.
+        // and `w_η = σ²·(2/σ²) = 2`. Weights come back unfloored.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
         let sigma_sq = sigma.mapv(|s| s * s);
-        // Guard each reciprocal at its own power of σ rather than clamping σ, so
-        // the value `chain_to_eta` multiplies back in stays exactly the caller's σ.
-        // Guarding σ instead and then cubing would overflow to infinity for a σ the
-        // log link can still underflow to, and `inf · 0` is NaN.
+        // Guard each reciprocal at its own power of σ rather than clamping σ, so the
+        // value `chain_to_eta` multiplies back in stays exactly the caller's σ. Guard
+        // σ instead and then cube it and it overflows to infinity for a σ the log
+        // link can still underflow to. And inf · 0 is NaN.
         let inv_sigma_sq = sigma_sq.mapv(|s2| 1.0 / s2.max(DENOM_FLOOR));
         let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
         let residual = y - mu;
@@ -136,13 +136,13 @@ impl Distribution for Gaussian {
             let s = sigma[i].max(MIN_POSITIVE);
             let z = (y[i] - mu[i]) / s;
             // φ decays like e^{−z²/2}, so φ·z^k → 0 for every k and every derivative
-            // below has limit 0 as |z| → ∞. Take that limit explicitly rather than
-            // evaluating the formulas: z overflows to infinity once the bound and σ
+            // below has limit 0 as |z| → ∞. Take that limit explicitly instead of
+            // evaluating the formulas. z overflows to infinity once the bound and σ
             // are far enough apart (σ on its `MIN_POSITIVE` floor against a 1e300
             // censoring bound), long after φ has underflowed to exactly 0, and
             // `∞ · 0` is NaN, which `chain_cdf_to_eta` then spreads into every
-            // censored or truncated row's score and weight. This mirrors the ±∞-bound
-            // arm above and leaves every in-range value untouched.
+            // censored or truncated row's score and weight. Same shape as the ±∞-bound
+            // arm above, and it leaves every in-range value untouched.
             if !z.is_finite() {
                 continue;
             }
@@ -203,7 +203,7 @@ mod tests {
         // a σ on its floor sends `z = (bound − μ)/σ` past f64. φ has long since
         // underflowed to exactly 0, so `−z·φ` and `z²·φ` are `∞ · 0` = NaN, and
         // `chain_cdf_to_eta` spreads that into every censored row's score and weight.
-        // Row 2 is the milder case where z is finite but z² is not.
+        // Row 2 is the milder case: z is finite but z² is not.
         let bounds = array![1e300, -1e300, 1e200];
         let owned = [
             ("mu", array![0.0, 0.0, 0.0]),
@@ -252,12 +252,12 @@ mod tests {
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
         // The Altitude #1 gate. Gaussian μ is identity-linked, so a default-link
-        // finite difference cannot distinguish `∂l/∂μ` from `∂l/∂η` at all; a log
-        // link on μ is what makes the check bite. This replaces
+        // finite difference can't tell `∂l/∂μ` from `∂l/∂η` at all. A log link on μ
+        // is what makes the check bite. This replaces
         // `identity_link_parameters_are_only_checked_vacuously_today`, the Phase 0
         // characterization test that asserted the opposite.
         //
-        // μ is positive throughout the fixture so the log and sqrt links are
+        // μ stays positive throughout the fixture so the log and sqrt links are
         // well defined on it.
         let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
         let owned = [
@@ -272,9 +272,9 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_sigma() {
-        // Un-folding introduces `1/σ²` and `1/σ³` that the old `w_σ = 2` cancelled.
-        // Both have to stay finite where the log link can still land, including
-        // where σ has underflowed to exactly zero.
+        // Un-folding brings back the `1/σ²` and `1/σ³` that the old `w_σ = 2`
+        // canceled. Both have to stay finite where the log link can still land,
+        // σ underflowed to exactly zero included.
         let y = array![0.0, 1.0, 2.0];
         let owned = [
             ("mu", array![0.0, 0.0, 0.0]),

@@ -1,5 +1,5 @@
-//! SER-1 integration tests: structural wrappers (and a finite mixture) survive a
-//! `to_json → from_json → build()` round-trip and predict identically.
+//! SER-1 integration tests: structural wrappers (and a finite mixture) come
+//! through a `to_json → from_json → build()` round-trip and predict identically.
 
 #![cfg(all(feature = "serialization", not(feature = "python")))]
 
@@ -48,7 +48,7 @@ fn censored_descriptor_round_trips() {
     let json = model.to_json(&family).unwrap();
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
     assert_eq!(desc.build().unwrap().name(), "Censored");
-    // The descriptor preserves the per-row status (so the base is Gaussian).
+    // The descriptor holds onto the per-row status, so the base stays Gaussian.
     match &desc {
         FamilyDescriptor::Censored {
             base, status: s, ..
@@ -59,7 +59,7 @@ fn censored_descriptor_round_trips() {
         other => panic!("expected Censored descriptor, got {other:?}"),
     }
 
-    // Predictions survive the round-trip (use the rebuilt family).
+    // Predictions come through the round-trip (using the rebuilt family).
     let rebuilt = desc.build().unwrap();
     let p1 = model.predict(&dummy_data(n), &family).unwrap();
     let p2 = reloaded.predict(&dummy_data(n), rebuilt.as_ref()).unwrap();
@@ -81,10 +81,10 @@ fn truncated_descriptor_round_trips_with_infinite_bounds() {
 
     let json = model.to_json(&family).unwrap();
     let (_, desc) = GamlssModel::from_json(&json).unwrap();
-    // The +∞ upper bound survives via the sentinel encode/decode.
+    // The +∞ upper bound makes it through via the sentinel encode/decode.
     let rebuilt = desc.build().unwrap();
     assert_eq!(rebuilt.name(), "Truncated");
-    // Confirm the rebuilt loglik equals the original on the data (so bounds match).
+    // Rebuilt loglik equals the original on the data, which means the bounds match.
     let owned = [
         ("mu", model.models["mu"].fitted_values.clone()),
         ("sigma", model.models["sigma"].fitted_values.clone()),
@@ -110,7 +110,7 @@ fn hurdle_descriptor_round_trips() {
 
 #[test]
 fn mixture_round_trips() {
-    // Two clusters at 0 and 6.
+    // Two clusters, at 0 and 6.
     let mut vals: Vec<f64> = (0..40).map(|i| -1.0 + 2.0 * i as f64 / 39.0).collect();
     vals.extend((0..40).map(|i| 5.0 + 2.0 * i as f64 / 39.0));
     let y = Array1::from_vec(vals);

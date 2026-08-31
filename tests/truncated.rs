@@ -1,6 +1,6 @@
-//! STRUCT-2 integration tests: a `Truncated` wrapper fits end-to-end, recovers
-//! the parameters of a left-truncated Gaussian, and reduces to the base family
-//! over the full range.
+//! STRUCT-2 integration tests. I want a `Truncated` wrapper to fit end-to-end,
+//! recover the parameters of a left-truncated Gaussian, and collapse back to the
+//! base family once the range is unbounded.
 
 #![cfg(not(feature = "python"))]
 
@@ -21,7 +21,7 @@ fn dummy_data(n: usize) -> DataSet {
 }
 
 /// Ideal order statistics of a Gaussian left-truncated at `lo`, i.e. samples from
-/// `N(mu, sigma) | Y > lo`, built deterministically.
+/// `N(mu, sigma) | Y > lo`. I build them deterministically so nothing wobbles run to run.
 fn truncated_latent(mu: f64, sigma: f64, lo: f64, n: usize) -> Array1<f64> {
     let owned = [
         ("mu", Array1::from_elem(n, mu)),
@@ -32,7 +32,7 @@ fn truncated_latent(mu: f64, sigma: f64, lo: f64, n: usize) -> Array1<f64> {
         .cdf(&Array1::from_elem(n, lo), &view)
         .unwrap()
         .to_vec();
-    // p mapped into the truncated tail: F(lo) + u·(1 − F(lo)).
+    // p mapped up into the truncated tail: F(lo) + u·(1 − F(lo)).
     let p = Array1::from_iter((0..n).map(|i| {
         let u = (i as f64 + 0.5) / n as f64;
         f_lo[i] + u * (1.0 - f_lo[i])
@@ -70,7 +70,7 @@ fn full_range_matches_plain_gaussian_fit() {
 
 #[test]
 fn left_truncation_recovers_parameters() {
-    // True N(2, 1.5) observed only above lo = 1.0.
+    // True N(2, 1.5), but we only ever observe it above lo = 1.0.
     let n = 300;
     let (true_mu, true_sigma, lo) = (2.0, 1.5, 1.0);
     let y = truncated_latent(true_mu, true_sigma, lo, n);
@@ -93,8 +93,8 @@ fn left_truncation_recovers_parameters() {
         (sigma_hat - true_sigma).abs() < 0.4,
         "truncated MLE sigma {sigma_hat} should recover ≈ {true_sigma}"
     );
-    // The truncated sample mean is biased high (the low tail is missing); the
-    // wrapper corrects for it.
+    // The truncated sample mean runs biased high, since the low tail is simply gone.
+    // The wrapper is what corrects for it.
     let naive_mean = y.mean().unwrap();
     assert!(
         naive_mean > true_mu + 0.2,

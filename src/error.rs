@@ -12,13 +12,16 @@ pub enum GamlssError {
     #[error("Optimization failed: {0}")]
     Optimization(String),
 
-    /// Payload is stringified at the backend boundary so pattern matching is
-    /// identical under both `openblas` and `pure-rust`.
+    /// The payload is stringified at the backend boundary on purpose, so a
+    /// `match` on this variant reads the same under both `openblas` and
+    /// `pure-rust`. The two backends raise different concrete error types; only
+    /// the string survives to here.
     #[error("Linear algebra error: {0}")]
     Linalg(String),
 
-    /// Cholesky factorization of the posterior covariance failed — typically a
-    /// rank-deficient design or a parameter at the boundary of its support.
+    /// Cholesky factorization of the posterior covariance failed. Usually that
+    /// means a rank-deficient design, or a parameter sitting right at the
+    /// boundary of its support.
     #[error("Posterior covariance is not positive definite (Cholesky failed)")]
     PosteriorNotPositiveDefinite,
 
@@ -37,7 +40,7 @@ pub enum GamlssError {
     #[error("Family mismatch: model was fit with {expected} but predict was called with a different family ({actual})")]
     FamilyMismatch { expected: String, actual: String },
 
-    /// Indicates a bug in the library, not a user error.
+    /// This one is on us, not you. It means a bug in the library, not bad input.
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -56,9 +59,10 @@ pub enum GamlssError {
 
 impl From<argmin::core::Error> for GamlssError {
     fn from(e: argmin::core::Error) -> Self {
-        // `argmin::core::Error` is `anyhow::Error`; `{:#}` walks the full source chain
-        // (e.g. "L-BFGS step failed: line search did not converge"), which `.to_string()`
-        // alone would truncate to just the top-level message.
+        // `argmin::core::Error` is really `anyhow::Error`. `{:#}` walks the full source
+        // chain (e.g. "L-BFGS step failed: line search did not converge"). Plain
+        // `.to_string()` gives you the top-level message and throws the rest away, which
+        // is exactly the part you needed.
         GamlssError::Optimization(format!("{:#}", e))
     }
 }
@@ -149,7 +153,7 @@ mod tests {
 
     #[test]
     fn from_shape_error() {
-        // Trigger a real ShapeError by reshaping incompatibly.
+        // Force a real ShapeError by reshaping to a size that can't fit.
         let res: Result<_, _> = Array2::<f64>::zeros((2, 3)).into_shape_with_order((4, 4));
         let err = res.unwrap_err();
         let g: GamlssError = err.into();

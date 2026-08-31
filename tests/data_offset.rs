@@ -1,11 +1,11 @@
-//! DATA-3 offsets — public-API integration tests.
+//! DATA-3 offsets, tested through the public API.
 //!
 //! An offset enters the linear predictor as `η = X·β + offset` with a fixed
 //! coefficient of 1. The load-bearing correctness check is a closed-form
-//! equivalence: for a Gaussian identity-link model `μ = X·β + o`, fitting `y`
-//! with offset `o` is exactly fitting `(y − o)` with no offset.
+//! equivalence I like: for a Gaussian identity-link model `μ = X·β + o`, fitting
+//! `y` with offset `o` is exactly fitting `(y − o)` with no offset.
 
-// Integration tests cannot run with the `python` feature (PyO3 linking).
+// Can't run under the `python` feature (PyO3 linking).
 #![cfg(not(feature = "python"))]
 
 use glissando::distributions::{Gaussian, Poisson};
@@ -22,14 +22,15 @@ fn gaussian_two_param(with_offset: bool) -> Formula {
         .with_terms("sigma", vec![Term::Intercept])
 }
 
-/// Gaussian identity link: fit with an offset == fit on the offset-subtracted
-/// response, coefficient-for-coefficient and fitted-value-for-fitted-value.
+/// Gaussian identity link: fitting with an offset equals fitting on the
+/// offset-subtracted response, coefficient for coefficient and fitted value for
+/// fitted value.
 #[test]
 fn gaussian_offset_equals_folding_into_response() {
     let n = 200;
     let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64 * 3.0).collect();
-    // A deterministic per-row offset and a noiseless-ish response so the two fits
-    // are comparable to tight tolerance.
+    // A deterministic per-row offset and a nearly noiseless response so the two
+    // fits line up to tight tolerance.
     let o: Vec<f64> = x.iter().map(|&xi| 0.5 + 0.3 * (xi * 1.7).sin()).collect();
     let y: Vec<f64> = x
         .iter()
@@ -85,7 +86,7 @@ fn gaussian_offset_equals_folding_into_response() {
     }
 }
 
-/// An offset is not silently dropped: removing it materially moves the fit.
+/// An offset never gets silently dropped: pull it out and the fit moves for real.
 #[test]
 fn offset_changes_the_fit() {
     let n = 150;
@@ -114,16 +115,16 @@ fn offset_changes_the_fit() {
 }
 
 /// Poisson rate model: `log(exposure)` as an offset is the canonical use. With
-/// the offset present the intercept recovers the underlying log-rate; doubling
-/// every exposure (offset += log 2) drops the fitted intercept by ~log 2 while
-/// leaving the fitted counts' rate interpretation intact.
+/// the offset present the intercept recovers the underlying log-rate. Double
+/// every exposure (offset += log 2) and the fitted intercept drops by ~log 2,
+/// while the fitted counts' rate interpretation stays intact.
 #[test]
 fn poisson_offset_recovers_rate_intercept() {
     let n = 400;
     let log_rate: f64 = -1.0; // true intercept on the rate
     let exposure: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
-    // Expected count μ = exposure · exp(log_rate); generate near-expectation
-    // counts deterministically (round) so the test is noise-free and stable.
+    // Expected count μ = exposure · exp(log_rate). Generate near-expectation
+    // counts deterministically (round) so the test stays noise-free and stable.
     let y: Vec<f64> = exposure
         .iter()
         .map(|&e| (e * log_rate.exp()).round().max(0.0))

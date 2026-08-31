@@ -29,7 +29,7 @@ def test_fit_string_formula_matches_term_list(synthetic_gaussian, gaussian_formu
         glissando.Gaussian(),
     )
     assert m_str.converged()
-    # Same fitted values to tight tolerance (same design, same solve).
+    # same fitted values to tight tolerance: same design, same solve.
     p_list = m_list.predict(data)
     p_str = m_str.predict(data)
     assert np.allclose(p_list["mu"], p_str["mu"], atol=1e-10)
@@ -64,7 +64,7 @@ def test_fit_poisson(synthetic_poisson, poisson_formula):
 def test_intercept_only_gaussian_recovers_mean(rng):
     n = 500
     y = rng.normal(7.0, 1.5, size=n)
-    data = {"x": np.zeros(n)}  # unused but DataSet needs columns referenced by formula; none here.
+    data = {"x": np.zeros(n)}  # unused, but DataSet insists on columns; the formula references none.
     formula = {
         "mu": [("intercept",)],
         "sigma": [("intercept",)],

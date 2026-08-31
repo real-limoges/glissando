@@ -1,11 +1,11 @@
-//! DATA-5 string formula parser — public-API integration tests.
+//! DATA-5 string formula parser, tested through the public API.
 //!
-//! The parser is a front-end over `Vec<Term>`: a formula built from a string must
-//! fit *identically* to the same formula built with the constructor DSL. A
+//! The parser is a front-end over `Vec<Term>`: a formula built from a string has
+//! to fit *identically* to the same formula built with the constructor DSL. A
 //! proptest checks that rendering a parsed formula and reparsing it is a fixed
-//! point (no drift across the parse ⇄ Display boundary).
+//! point, so nothing drifts across the parse ⇄ Display boundary.
 
-// Integration tests cannot run with the `python` feature (PyO3 linking).
+// Can't run under the `python` feature (PyO3 linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -39,7 +39,7 @@ fn parsed_formula_fits_identically_to_builder() {
     }
 }
 
-/// A smooth parsed from `s(x)` matches the `Smooth::ps` builder, fitting to the
+/// A smooth parsed from `s(x)` matches the `Smooth::ps` builder and fits to the
 /// same curve.
 #[test]
 fn parsed_smooth_matches_builder_smooth() {
@@ -61,7 +61,7 @@ fn parsed_smooth_matches_builder_smooth() {
     }
 }
 
-/// The whole-stack ergonomics target: a single rich string with a factor and an
+/// The whole-stack ergonomics target: one rich string with a factor and an
 /// interaction parses, fits, and predicts.
 #[test]
 fn rich_string_formula_fits_end_to_end() {
@@ -89,7 +89,7 @@ fn rich_string_formula_fits_end_to_end() {
     }
 }
 
-// Property-based round-trip — proptest is non-wasm only.
+// Property-based round-trip. proptest is non-wasm only.
 #[cfg(not(target_arch = "wasm32"))]
 mod prop {
     use glissando::parse_formula_string;
@@ -114,8 +114,8 @@ mod prop {
     }
 
     proptest! {
-        /// Parsing, rendering each term via `Display`, and reparsing is a fixed
-        /// point: the term spellings are identical the second time around.
+        /// Parse, render each term via `Display`, reparse: a fixed point. The
+        /// term spellings come out identical the second time around.
         #[test]
         fn parse_render_reparse_is_stable(
             atoms in proptest::collection::vec(atom(), 1..6),

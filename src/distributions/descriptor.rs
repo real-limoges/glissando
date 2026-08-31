@@ -1,4 +1,4 @@
-//! [`FamilyDescriptor`] — a serializable description of a distribution family,
+//! [`FamilyDescriptor`] is a serializable description of a distribution family,
 //! the descriptor-aware successor to [`from_name`](super::from_name) (SER-1).
 //!
 //! A bare name round-trips the stateless families, but [`Binomial`] / [`Ocat`]
@@ -23,7 +23,7 @@ pub enum FamilyDescriptor {
     /// [`Ocat`] with its category count.
     Ocat { n_categories: usize },
     /// [`Censored`] over a base family, with per-row status and interval upper
-    /// bounds (infinite bounds are sentinel-encoded; see [`encode_bound`]).
+    /// bounds (infinite bounds are sentinel-encoded; see `encode_bound`).
     Censored {
         base: Box<FamilyDescriptor>,
         status: Vec<CensorStatus>,

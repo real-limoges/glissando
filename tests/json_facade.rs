@@ -1,10 +1,10 @@
-// The JSON facade lives behind the `serialization` feature; exclude `python`
+// The JSON facade sits behind the `serialization` feature. We exclude `python`
 // for the usual PyO3 extension-module linking reason.
 #![cfg(all(feature = "serialization", not(feature = "python")))]
 
-//! Native round-trip of the embedding contract (`glissando::json`), exercising
-//! the public facade the way a non-WASM/non-Python embedder would — without a
-//! wasm build. Mirrors the coverage in `tests/wasm.rs`.
+//! Native round-trip of the embedding contract (`glissando::json`). I exercise
+//! the public facade the way a non-WASM, non-Python embedder would, with no wasm
+//! build in the loop. This mirrors the coverage in `tests/wasm.rs`.
 
 use glissando::json;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ fn fit_then_predict_round_trip() {
     let preds: HashMap<String, Vec<f64>> = serde_json::from_str(&preds_json).unwrap();
     assert_eq!(preds["mu"].len(), 3);
     assert_eq!(preds["sigma"].len(), 3);
-    // Linear mean: predictions should be increasing in x.
+    // Linear mean, so predictions climb with x. Simple as that.
     assert!(preds["mu"][0] < preds["mu"][1] && preds["mu"][1] < preds["mu"][2]);
 }
 
@@ -39,7 +39,7 @@ fn fit_with_config_json() {
 
 #[test]
 fn config_json_defaults_step_halving_and_gd_tolerance() {
-    // Omitted FIT-1/FIT-2 keys fall back to the documented defaults via serde.
+    // Leave the FIT-1/FIT-2 keys out and serde falls back to the documented defaults.
     let parsed = json::parse_config("{}").expect("parse empty config");
     assert!(parsed.step_halving, "step_halving should default to true");
     assert_eq!(parsed.gd_tolerance, 1e-3);
@@ -52,7 +52,7 @@ fn config_json_round_trips_step_halving_and_gd_tolerance() {
     let parsed = json::parse_config(cfg).expect("parse config");
     assert!(!parsed.step_halving);
     assert_eq!(parsed.gd_tolerance, 5e-4);
-    // Untouched fields keep their defaults.
+    // Fields we didn't touch keep their defaults.
     assert_eq!(parsed.tolerance, 1e-3);
 }
 
@@ -61,7 +61,7 @@ fn diagnostics_json_exposes_final_deviance() {
     let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let diag_json = json::diagnostics(&model).expect("diagnostics");
     let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
-    // FIT-2 surfaces the converged global deviance through the JSON facade.
+    // FIT-2 surfaces the converged global deviance through the JSON facade. Check it's there.
     assert!(diag["final_deviance"].is_number());
 }
 
@@ -83,7 +83,7 @@ fn diagnostics_expose_per_term_edf_and_warnings_field() {
     let diag_json = json::diagnostics(&model).expect("diagnostics");
     let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
     assert!(diag["converged"].as_bool().unwrap());
-    // The warnings field is always present (empty on a clean fit).
+    // The warnings field is always there; empty on a clean fit.
     assert!(diag["warnings"].is_array());
     assert!(diag["param_diagnostics"].is_object());
 }
@@ -104,11 +104,11 @@ fn save_then_load_preserves_predictions() {
 fn errors_surface_as_gamlss_error() {
     assert!(json::fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
     assert!(json::fit("not json", DATA, FORMULA, "Gaussian", None, None).is_err());
-    assert!(json::parse_data(r#"{"x": [1.0], "z": [1.0, 2.0]}"#).is_err()); // ragged columns
+    assert!(json::parse_data(r#"{"x": [1.0], "z": [1.0, 2.0]}"#).is_err()); // ragged columns, no good
 }
 
 // ============================================================================
-// Guide 1 — design_matrix / covariance_matrix / term_index_map / seed
+// Guide 1: design_matrix / covariance_matrix / term_index_map / seed
 // ============================================================================
 
 #[test]
@@ -120,7 +120,7 @@ fn design_matrix_json_shape_matches_data_and_coefficients() {
 
     // n_rows = number of observations in DATA (10)
     assert_eq!(dm.len(), 10, "one row per observation");
-    // n_cols = number of mu coefficients (intercept + linear = 2)
+    // n_cols = number of mu coefficients: intercept + linear = 2
     let n_coeffs = model.models["mu"].coefficients.0.len();
     for (i, row) in dm.iter().enumerate() {
         assert_eq!(
@@ -131,7 +131,7 @@ fn design_matrix_json_shape_matches_data_and_coefficients() {
         );
     }
 
-    // Unknown param errors
+    // Unknown param should error out.
     assert!(json::design_matrix(&model, DATA, "nonexistent").is_err());
 }
 
@@ -145,7 +145,7 @@ fn covariance_matrix_json_is_square_and_symmetric() {
     for row in &cv {
         assert_eq!(row.len(), p, "covariance must be square");
     }
-    // Symmetry: V[i][j] ≈ V[j][i]
+    // Symmetry: V[i][j] ≈ V[j][i], both ways.
     for (i, row) in cv.iter().enumerate() {
         for (j, &v_ij) in row.iter().enumerate() {
             let diff = (v_ij - cv[j][i]).abs();
@@ -165,7 +165,7 @@ fn term_index_map_json_is_contiguous_and_sums_to_n_coeffs() {
     let total: usize = map.values().map(|[f, l]| l - f).sum();
     assert_eq!(total, n_coeffs, "total block width must equal n_coeffs");
 
-    // Standard formula: (intercept) + x => 2 blocks
+    // Standard formula: (intercept) + x, so 2 blocks.
     assert!(map.contains_key("(intercept)"), "must have intercept block");
     assert!(map.contains_key("x"), "must have linear x block");
 }
@@ -180,8 +180,8 @@ fn predict_samples_seeded_json_is_reproducible() {
     assert_eq!(run1, run2, "seeded runs must be byte-identical");
 
     let run_unseeded = json::predict_samples(&model, family.as_ref(), new_x, 10, None).unwrap();
-    // Unseeded output almost certainly differs (would need 10 × 3 = 30 exact
-    // float matches to coincide by chance).
+    // Unseeded output almost certainly differs. It would take 10 × 3 = 30 exact
+    // float matches to collide by chance, which isn't happening.
     assert_ne!(run1, run_unseeded, "unseeded run should differ from seeded");
 }
 
@@ -203,9 +203,9 @@ fn gaic_json_is_finite_and_monotone_in_k() {
     };
     let g2 = read(2.0);
     let g_bic = read((10.0_f64).ln());
-    // -2·ll can be negative for a tight Gaussian fit, so only require finiteness…
+    // -2·ll can go negative for a tight Gaussian fit, so all we require here is finiteness…
     assert!(g2.is_finite() && g_bic.is_finite());
-    // …and that a larger penalty raises GAIC (edf > 0).
+    // …and that a bigger penalty raises GAIC, since edf > 0.
     assert!(
         g_bic > g2,
         "BIC-penalty GAIC {} should exceed AIC-penalty {}",
@@ -229,7 +229,7 @@ fn ic_table_json_ranks_models() {
     let rows: serde_json::Value = serde_json::from_str(&table_json).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 2);
     assert_eq!(rows[0]["label"], "null");
-    // The model with x fits y (linear) better → lower deviance.
+    // The model with x fits linear y better, so lower deviance.
     let dev_null = rows[0]["global_deviance"].as_f64().unwrap();
     let dev_x = rows[1]["global_deviance"].as_f64().unwrap();
     assert!(dev_x < dev_null);
@@ -244,10 +244,10 @@ fn lr_test_json_detects_genuine_term() {
     let test: serde_json::Value = serde_json::from_str(&test_json).unwrap();
     assert!(test["lr_stat"].as_f64().unwrap() > 0.0);
     assert!(test["df"].as_f64().unwrap() > 0.0);
-    // y is strongly linear in x → tiny p-value.
+    // y is strongly linear in x, so the p-value is tiny.
     assert!(test["p_value"].as_f64().unwrap() < 0.05);
 
-    // Mis-ordered pair surfaces an error.
+    // Feed the pair in the wrong order and it errors.
     assert!(json::lr_test(&big, &small, family.as_ref(), Y).is_err());
 }
 
@@ -267,12 +267,12 @@ fn step_gaic_json_returns_trace_and_loadable_model() {
     .expect("step_gaic");
     let out: serde_json::Value = serde_json::from_str(&out_json).unwrap();
 
-    // The genuine linear term should have been added on mu.
+    // The genuine linear term should have landed on mu.
     let trace = out["trace"].as_array().unwrap();
     assert!(!trace.is_empty(), "expected at least one accepted move");
     assert!(out["formula"]["mu"].as_array().unwrap().len() >= 2);
 
-    // The embedded model round-trips through `load`.
+    // The embedded model round-trips back through `load`.
     let model_blob = serde_json::to_string(&out["model"]).unwrap();
     let (restored, restored_family) = json::load(&model_blob).expect("load selected model");
     assert_eq!(restored_family.name(), "Gaussian");
@@ -299,7 +299,7 @@ fn centiles_json_are_ordered_and_keyed() {
     let curves: std::collections::HashMap<String, Vec<f64>> =
         serde_json::from_str(&json_out).unwrap();
     assert_eq!(curves["C10"].len(), 10);
-    // Monotone in level at the first observation.
+    // Monotone in level at the first observation, low to high.
     assert!(curves["C10"][0] < curves["C50"][0]);
     assert!(curves["C50"][0] < curves["C90"][0]);
 }
@@ -311,7 +311,7 @@ fn quantile_prediction_json_constant_level() {
     let json_out = json::quantile_prediction(&model, family.as_ref(), DATA, p).expect("qpred");
     let predicted: Vec<f64> = serde_json::from_str(&json_out).unwrap();
     assert_eq!(predicted.len(), 10);
-    // 50th percentile equals fitted mu for a Gaussian.
+    // 50th percentile is just fitted mu for a Gaussian.
     let preds = json::predict(&model, family.as_ref(), DATA).unwrap();
     let parsed: std::collections::HashMap<String, Vec<f64>> = serde_json::from_str(&preds).unwrap();
     for i in 0..10 {
