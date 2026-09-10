@@ -1,19 +1,18 @@
 //! Penalized weighted least squares (PWLS) solver and GCV smoothing-parameter optimization.
 //!
-//! Two jobs live here. Cholesky decomposition solves the PWLS system itself, and L-BFGS
-//! (via argmin) sits on top, moving the smoothing parameters (lambda) around to minimize the
-//! GCV score. The rest of the file is mostly the bookkeeping that keeps those two cheap.
+//! Two jobs live here. Cholesky decomposition solves the PWLS system itself, and a hand-rolled
+//! L-BFGS with a strong-Wolfe line search sits on top, moving the smoothing parameters (lambda)
+//! around to minimize the GCV/REML score. The rest of the file is mostly the bookkeeping that
+//! keeps those two cheap.
 
 use super::{
     Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix,
     SmoothingCriterion,
 };
 use crate::linalg;
-use argmin::core::Gradient;
-use argmin::core::{CostFunction, Error, Executor};
-use argmin::solver::linesearch::MoreThuenteLineSearch;
-use argmin::solver::quasinewton::LBFGS;
+use argmin::core::{CostFunction, Error, Gradient};
 use ndarray::prelude::*;
+use std::collections::VecDeque;
 
 /// Minimum denominator value to prevent division by zero in GCV computation
 const MIN_DENOMINATOR: f64 = 1e-10;
@@ -160,69 +159,38 @@ pub(crate) struct GamlssCost<'a> {
     pub(crate) penalty_matrices: &'a [PenaltyMatrix],
 }
 
-impl<'a> CostFunction for GamlssCost<'a> {
-    type Param = LogLambdas;
-    type Output = f64;
-
-    /// Generalized Cross-Validation (GCV) score for smoothing-parameter selection.
+impl<'a> GamlssCost<'a> {
+    /// Generalized Cross-Validation (GCV) score and its gradient wrt ρ = log λ,
+    /// both from a single PWLS solve.
     ///
-    /// GCV is the trick that approximates leave-one-out CV without actually
-    /// refitting n times:
+    /// GCV approximates leave-one-out CV without refitting n times:
     ///   GCV(λ) = n * RSS / (n - EDF)²
-    ///
     /// where RSS is the weighted residual sum of squares and EDF the effective
     /// degrees of freedom. Minimizing it trades fit (low RSS) off against
-    /// complexity (high EDF). I optimize in log-space (log λ), which buys both
-    /// numerical stability and an unconstrained problem for free.
-    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
-        let lambdas = param.mapv(f64::exp);
-
-        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
-            .map_err(Error::new)?;
-
-        let n = self.nfo.n_obs as f64;
-
-        // Guard the divide-by-zero when EDF creeps up toward n (an overfit).
-        let denominator = (n - info.edf).powi(2);
-        if denominator.abs() < MIN_DENOMINATOR {
-            return Ok(f64::MAX);
-        }
-        let gcv_score = (n * info.rss) / denominator;
-
-        Ok(gcv_score)
-    }
-}
-
-impl<'a> Gradient for GamlssCost<'a> {
-    type Param = LogLambdas;
-    type Gradient = LogLambdas;
-
-    /// Gradient of GCV with respect to log(lambda), for the quasi-Newton solver.
+    /// complexity (high EDF). The optimization runs in log-space (ρ = log λ),
+    /// which buys numerical stability and an unconstrained problem for free.
     ///
-    /// The thing to hold onto: beta itself depends on lambda, through the
-    /// penalized normal equations, so the chain rule has more terms than it first
-    /// looks. See docs/math/mathematics.md for the full derivation of dRSS/dlambda
-    /// and dEDF/dlambda.
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
-        let lambdas = param.mapv(f64::exp);
+    /// The gradient carries the full chain rule: β itself depends on λ through
+    /// the penalized normal equations, so dRSS/dλ and dEDF/dλ each have more
+    /// terms than they first look. See docs/math/mathematics.md for the
+    /// derivation. Computing score and gradient together reuses one
+    /// `fit_pwls_with_grad_info` solve rather than paying for two.
+    fn objective_and_grad(&self, rho: &Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError> {
+        let lambdas = rho.mapv(f64::exp);
         let n_penalties = lambdas.len();
 
-        if n_penalties == 0 {
-            return Ok(LogLambdas(Array1::zeros(0)));
-        }
-
-        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
-            .map_err(Error::new)?;
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)?;
 
         let n = self.nfo.n_obs as f64;
         let denom = n - info.edf;
 
-        if denom.abs() < MIN_DENOMINATOR {
-            return Ok(LogLambdas(Array1::zeros(n_penalties)));
+        // Guard the divide-by-zero when EDF creeps up toward n (an overfit).
+        if denom.powi(2).abs() < MIN_DENOMINATOR {
+            return Ok((f64::MAX, Array1::zeros(n_penalties)));
         }
+        let gcv_score = (n * info.rss) / denom.powi(2);
 
         let mut grad_vec = Array1::zeros(n_penalties);
-
         for j in 0..n_penalties {
             let s_j = &self.penalty_matrices[j];
             let (start, end) = s_j.block_range();
@@ -252,7 +220,38 @@ impl<'a> Gradient for GamlssCost<'a> {
             grad_vec[j] = lambdas[j] * d_gcv;
         }
 
-        Ok(LogLambdas(grad_vec))
+        Ok((gcv_score, grad_vec))
+    }
+
+    /// GCV score alone (still one PWLS solve; the gradient loop it also runs is
+    /// O(p²) per penalty, negligible against the solve).
+    fn objective(&self, rho: &Array1<f64>) -> Result<f64, GamlssError> {
+        Ok(self.objective_and_grad(rho)?.0)
+    }
+
+    /// GCV gradient wrt ρ = log λ.
+    fn grad(&self, rho: &Array1<f64>) -> Result<Array1<f64>, GamlssError> {
+        Ok(self.objective_and_grad(rho)?.1)
+    }
+}
+
+// Thin argmin adapters over the inherent methods, which hold the real
+// implementation. Retained only while the `argmin` dependency remains.
+impl<'a> CostFunction for GamlssCost<'a> {
+    type Param = LogLambdas;
+    type Output = f64;
+
+    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
+        self.objective(&param.0).map_err(Error::new)
+    }
+}
+
+impl<'a> Gradient for GamlssCost<'a> {
+    type Param = LogLambdas;
+    type Gradient = LogLambdas;
+
+    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
+        self.grad(&param.0).map(LogLambdas).map_err(Error::new)
     }
 }
 
@@ -271,15 +270,29 @@ pub(crate) struct RemlCost<'a> {
     pub(crate) groups: &'a PenaltyGroups,
 }
 
-impl<'a> CostFunction for RemlCost<'a> {
-    type Param = LogLambdas;
-    type Output = f64;
+impl<'a> RemlCost<'a> {
+    /// LAML/REML objective `−V_r` and its analytic gradient wrt ρ = log λ, both
+    /// from a single PWLS solve plus one penalty eigendecomposition.
+    ///
+    /// V_r = ℓ − ½·βᵀS_λβ + ½·log|S_λ|_+ − ½·log|H+S_λ| + (M_p/2)·log(2π)
+    /// with ℓ = −½·RSS (constants in the working-likelihood independent of λ cancel).
+    ///
+    /// ∂V_r/∂ρ_j = −(λ_j/2)·β̂ᵀS_jβ̂ + (λ_j/2)·tr(S_λ⁺ S_j) − (λ_j/2)·tr(V S_j).
+    /// V, S_λ⁺, and S_j are symmetric, so each trace reduces to a Hadamard-sum.
+    fn objective_and_grad(&self, rho: &Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError> {
+        let lambdas = rho.mapv(f64::exp);
+        let n_penalties = lambdas.len();
 
-    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
-        let lambdas = param.mapv(f64::exp);
+        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)?;
 
-        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
-            .map_err(Error::new)?;
+        // No smoothing parameters: no penalty spectrum to form. `penalty_eigen`
+        // debug-asserts a non-empty penalty set, so short-circuit here.
+        if n_penalties == 0 {
+            let lhs = &self.nfo.x_t_w_x + &info.s_lambda;
+            let log_det_lhs = linalg::log_det_robust(&lhs)?;
+            let v_r = -0.5 * info.rss - 0.5 * log_det_lhs;
+            return Ok((-v_r, Array1::zeros(0)));
+        }
 
         let eig = penalty_eigen(
             self.nfo.x_t_w_x.nrows(),
@@ -287,51 +300,16 @@ impl<'a> CostFunction for RemlCost<'a> {
             &lambdas,
             REML_RANK_TOL_EPS,
             self.groups,
-        )
-        .map_err(Error::new)?;
+        )?;
 
         let lhs = &self.nfo.x_t_w_x + &info.s_lambda;
-        let log_det_lhs = linalg::log_det_robust(&lhs).map_err(Error::new)?;
+        let log_det_lhs = linalg::log_det_robust(&lhs)?;
 
         let beta_s_beta = info.beta.0.dot(&info.s_lambda.dot(&info.beta.0));
         let m_p = eig.null_dim as f64;
 
-        // V_r = ℓ − ½·βᵀS_λβ + ½·log|S_λ|_+ − ½·log|H+S_λ| + (M_p/2)·log(2π)
-        // ℓ_partial = −½·RSS (constants in the working-likelihood independent of λ cancel).
         let v_r = -0.5 * info.rss - 0.5 * beta_s_beta + 0.5 * eig.log_pdet - 0.5 * log_det_lhs
             + 0.5 * m_p * (2.0 * std::f64::consts::PI).ln();
-
-        Ok(-v_r)
-    }
-}
-
-impl<'a> Gradient for RemlCost<'a> {
-    type Param = LogLambdas;
-    type Gradient = LogLambdas;
-
-    /// Analytic gradient of −V_r with respect to ρ = log λ.
-    ///
-    /// ∂V_r/∂ρ_j = −(λ_j/2)·β̂ᵀS_jβ̂ + (λ_j/2)·tr(S_λ⁺ S_j) − (λ_j/2)·tr(V S_j)
-    ///
-    /// V, S_λ⁺, and S_j are symmetric, so each trace reduces to a Hadamard-sum.
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
-        let lambdas = param.mapv(f64::exp);
-        let n_penalties = lambdas.len();
-        if n_penalties == 0 {
-            return Ok(LogLambdas(Array1::zeros(0)));
-        }
-
-        let info = fit_pwls_with_grad_info(self.nfo, self.penalty_matrices, &lambdas)
-            .map_err(Error::new)?;
-
-        let eig = penalty_eigen(
-            self.nfo.x_t_w_x.nrows(),
-            self.penalty_matrices,
-            &lambdas,
-            REML_RANK_TOL_EPS,
-            self.groups,
-        )
-        .map_err(Error::new)?;
 
         let mut grad = Array1::<f64>::zeros(n_penalties);
         for j in 0..n_penalties {
@@ -346,7 +324,361 @@ impl<'a> Gradient for RemlCost<'a> {
             grad[j] = -dvr;
         }
 
-        Ok(LogLambdas(grad))
+        Ok((-v_r, grad))
+    }
+
+    /// LAML/REML objective `−V_r` alone.
+    fn objective(&self, rho: &Array1<f64>) -> Result<f64, GamlssError> {
+        Ok(self.objective_and_grad(rho)?.0)
+    }
+
+    /// Gradient of `−V_r` wrt ρ = log λ.
+    fn grad(&self, rho: &Array1<f64>) -> Result<Array1<f64>, GamlssError> {
+        Ok(self.objective_and_grad(rho)?.1)
+    }
+}
+
+// Thin argmin adapters over the inherent methods, which hold the real
+// implementation. Retained only while the `argmin` dependency remains.
+impl<'a> CostFunction for RemlCost<'a> {
+    type Param = LogLambdas;
+    type Output = f64;
+
+    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
+        self.objective(&param.0).map_err(Error::new)
+    }
+}
+
+impl<'a> Gradient for RemlCost<'a> {
+    type Param = LogLambdas;
+    type Gradient = LogLambdas;
+
+    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
+        self.grad(&param.0).map(LogLambdas).map_err(Error::new)
+    }
+}
+
+/// Tunables for the hand-rolled L-BFGS ([`lbfgs_minimize`]). One struct so every
+/// magic number sits in one place, like the Fellner-Schall constants above.
+struct LbfgsConfig {
+    /// History size (number of `(s, y)` pairs). Matches the old `LBFGS::new(_, 7)`.
+    m: usize,
+    /// Iteration cap. Matches the old `.max_iters(50)`.
+    max_iters: usize,
+    /// Convergence on the gradient ∞-norm (in ρ = log λ units). At 1e-5 the inner
+    /// λ-solve is 1-2 orders tighter than the outer RS tolerance (1e-3) and
+    /// `FS_TOL` (1e-4), so it never limits outer accuracy.
+    grad_tol: f64,
+    /// Secondary convergence on relative objective change `|Δf| / max(|f|, 1)`,
+    /// for flat-ridge cases where the gradient norm plateaus slowly but the
+    /// objective is already stationary.
+    rel_f_tol: f64,
+    /// Armijo (sufficient-decrease) constant.
+    c1: f64,
+    /// Strong-curvature constant. 0.9 is the textbook quasi-Newton value.
+    c2: f64,
+    /// Line-search iteration cap (shared by bracketing and zoom).
+    max_ls_iters: usize,
+}
+
+impl Default for LbfgsConfig {
+    fn default() -> Self {
+        Self {
+            m: 7,
+            max_iters: 50,
+            grad_tol: 1e-5,
+            rel_f_tol: 1e-9,
+            c1: 1e-4,
+            c2: 0.9,
+            max_ls_iters: 20,
+        }
+    }
+}
+
+#[inline]
+fn inf_norm(v: &Array1<f64>) -> f64 {
+    v.iter().fold(0.0_f64, |m, &x| m.max(x.abs()))
+}
+
+/// Hand-rolled L-BFGS with a strong-Wolfe line search, minimizing a smooth
+/// objective over ρ ∈ ℝⁿ. Replaces argmin's `LBFGS` + `MoreThuenteLineSearch`.
+///
+/// `eval` returns `(f, ∇f)` together, so one call is one PWLS solve (argmin
+/// called cost and gradient separately, paying two). The returned point is the
+/// lowest-objective point ever visited, so a failed line search or a numerical
+/// excursion can never regress the answer below the start.
+///
+/// Deterministic given a deterministic `eval`: no RNG, and the only reductions
+/// are dot products over the (single-threaded, per `.cargo/config.toml`) BLAS.
+fn lbfgs_minimize<FG>(
+    x0: Array1<f64>,
+    mut eval: FG,
+    cfg: &LbfgsConfig,
+) -> Result<Array1<f64>, GamlssError>
+where
+    FG: FnMut(&Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError>,
+{
+    let mut s_hist: VecDeque<Array1<f64>> = VecDeque::with_capacity(cfg.m);
+    let mut y_hist: VecDeque<Array1<f64>> = VecDeque::with_capacity(cfg.m);
+    let mut rho_hist: VecDeque<f64> = VecDeque::with_capacity(cfg.m);
+
+    let mut x = x0;
+    let (mut f, mut g) = eval(&x)?;
+
+    if !f.is_finite() {
+        return Err(GamlssError::Optimization(
+            "L-BFGS: non-finite objective at the initial point".to_string(),
+        ));
+    }
+
+    // Best-seen, seeded from the start so we can never return something worse.
+    let mut best_x = x.clone();
+    let mut best_f = f;
+
+    if inf_norm(&g) <= cfg.grad_tol {
+        return Ok(best_x);
+    }
+
+    for _iter in 0..cfg.max_iters {
+        // Two-loop recursion: r ≈ H_k · g.
+        let mut q = g.clone();
+        let mut alpha = vec![0.0_f64; s_hist.len()];
+        for i in (0..s_hist.len()).rev() {
+            let a = rho_hist[i] * s_hist[i].dot(&q);
+            alpha[i] = a;
+            q.scaled_add(-a, &y_hist[i]);
+        }
+        // Initial-Hessian scaling γ = (sᵀy)/(yᵀy) from the newest pair; γ = 1
+        // (H₀ = I) on the first iteration → scaled steepest descent.
+        let gamma = match y_hist.back() {
+            Some(y_last) => {
+                let s_last = s_hist.back().unwrap();
+                let yy = y_last.dot(y_last);
+                if yy > 0.0 {
+                    s_last.dot(y_last) / yy
+                } else {
+                    1.0
+                }
+            }
+            None => 1.0,
+        };
+        let mut r = q.mapv(|v| v * gamma);
+        for i in 0..s_hist.len() {
+            let b = rho_hist[i] * y_hist[i].dot(&r);
+            r.scaled_add(alpha[i] - b, &s_hist[i]);
+        }
+
+        // Search direction −r; fall back to steepest descent if it is not a
+        // descent direction (numerical trouble).
+        let mut d = r.mapv(|v| -v);
+        let mut gd = g.dot(&d);
+        if !gd.is_finite() || gd >= 0.0 {
+            d = g.mapv(|v| -v);
+            gd = g.dot(&d);
+            if gd >= 0.0 {
+                break; // g ≈ 0: stationary.
+            }
+        }
+
+        let ls = strong_wolfe(&mut eval, &x, f, &g, &d, cfg)?;
+        let (_alpha_k, x_new, f_new, g_new) = match ls {
+            Some(t) => t,
+            None => break, // line search gave up: keep best-so-far.
+        };
+
+        if f_new < best_f {
+            best_f = f_new;
+            best_x = x_new.clone();
+        }
+
+        // Curvature update: push (s, y) only when sᵀy is sufficiently positive
+        // (keeps the implicit Hessian PD); otherwise skip the pair.
+        let s = &x_new - &x;
+        let y = &g_new - &g;
+        let sy = s.dot(&y);
+        let curv_ok = sy > 1e-10 * s.dot(&s).sqrt() * y.dot(&y).sqrt();
+        if curv_ok {
+            if s_hist.len() == cfg.m {
+                s_hist.pop_front();
+                y_hist.pop_front();
+                rho_hist.pop_front();
+            }
+            rho_hist.push_back(1.0 / sy);
+            s_hist.push_back(s);
+            y_hist.push_back(y);
+        }
+
+        let f_prev = f;
+        x = x_new;
+        f = f_new;
+        g = g_new;
+
+        if inf_norm(&g) <= cfg.grad_tol {
+            break;
+        }
+        if (f_prev - f).abs() / f_prev.abs().max(1.0) <= cfg.rel_f_tol {
+            break;
+        }
+    }
+
+    Ok(best_x)
+}
+
+/// `(alpha, x_new, f_new, g_new)` from a successful line search.
+type LineSearchOut = (f64, Array1<f64>, f64, Array1<f64>);
+
+/// Evaluate φ(α) = f(x₀ + α·d): returns `(f, ∇f, φ'(α) = ∇f·d)`. A non-finite `f`
+/// yields a NaN slope so callers treat the step as "too long".
+fn eval_phi<FG>(
+    eval: &mut FG,
+    x0: &Array1<f64>,
+    d: &Array1<f64>,
+    a: f64,
+) -> Result<(f64, Array1<f64>, f64), GamlssError>
+where
+    FG: FnMut(&Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError>,
+{
+    let x = x0 + &d.mapv(|v| v * a);
+    let (f, g) = eval(&x)?;
+    let dphi = if f.is_finite() { g.dot(d) } else { f64::NAN };
+    Ok((f, g, dphi))
+}
+
+/// Strong-Wolfe line search (Nocedal & Wright Alg 3.5 bracketing + 3.6 zoom).
+///
+/// Enforces both Armijo `f(x+αd) ≤ f + c1·α·φ'(0)` and strong curvature
+/// `|φ'(α)| ≤ c2·|φ'(0)|`, which pins a well-determined step (this is what makes
+/// the landing point reproducible, unlike a bare-Armijo backtracker). Returns
+/// `None` when Wolfe cannot be met within the budget; the caller then keeps its
+/// best-so-far point. Non-finite objectives (including the GCV `f64::MAX`
+/// divide-by-zero sentinel) are treated as "step too long".
+fn strong_wolfe<FG>(
+    eval: &mut FG,
+    x0: &Array1<f64>,
+    f0: f64,
+    g0: &Array1<f64>,
+    d: &Array1<f64>,
+    cfg: &LbfgsConfig,
+) -> Result<Option<LineSearchOut>, GamlssError>
+where
+    FG: FnMut(&Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError>,
+{
+    let dphi0 = g0.dot(d); // < 0, guaranteed by the caller.
+    let a_max = 1e10;
+
+    let mut a_prev = 0.0;
+    let mut f_prev = f0;
+    let mut dphi_prev = dphi0;
+    let mut a_i = 1.0; // L-BFGS unit step.
+
+    for i in 0..cfg.max_ls_iters {
+        let (f_i, g_i, dphi_i) = eval_phi(eval, x0, d, a_i)?;
+
+        // Armijo violated, non-finite, or non-decreasing vs the previous trial.
+        if !f_i.is_finite() || f_i > f0 + cfg.c1 * a_i * dphi0 || (i > 0 && f_i >= f_prev) {
+            return zoom(
+                eval, x0, f0, dphi0, d, a_prev, f_prev, dphi_prev, a_i, f_i, dphi_i, cfg,
+            );
+        }
+        // Strong curvature satisfied: accept.
+        if dphi_i.abs() <= -cfg.c2 * dphi0 {
+            return Ok(Some((a_i, x0 + &d.mapv(|v| v * a_i), f_i, g_i)));
+        }
+        // Overshot the minimizer (slope turned non-negative): bracket is [i, prev].
+        if dphi_i >= 0.0 {
+            return zoom(
+                eval, x0, f0, dphi0, d, a_i, f_i, dphi_i, a_prev, f_prev, dphi_prev, cfg,
+            );
+        }
+
+        a_prev = a_i;
+        f_prev = f_i;
+        dphi_prev = dphi_i;
+        if a_i >= a_max {
+            return Ok(None);
+        }
+        a_i = (a_i * 2.0).min(a_max);
+    }
+
+    Ok(None)
+}
+
+/// The `zoom` half of the strong-Wolfe search: shrink `[a_lo, a_hi]` (either
+/// orientation) until a point satisfies both Wolfe conditions. `a_lo` always
+/// holds the lower objective among trials satisfying Armijo.
+#[allow(clippy::too_many_arguments)]
+fn zoom<FG>(
+    eval: &mut FG,
+    x0: &Array1<f64>,
+    f0: f64,
+    dphi0: f64,
+    d: &Array1<f64>,
+    mut a_lo: f64,
+    mut f_lo: f64,
+    mut dphi_lo: f64,
+    mut a_hi: f64,
+    mut f_hi: f64,
+    mut dphi_hi: f64,
+    cfg: &LbfgsConfig,
+) -> Result<Option<LineSearchOut>, GamlssError>
+where
+    FG: FnMut(&Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError>,
+{
+    for _ in 0..cfg.max_ls_iters {
+        let a_j = interp_safeguarded(a_lo, f_lo, dphi_lo, a_hi, f_hi, dphi_hi);
+        let (f_j, g_j, dphi_j) = eval_phi(eval, x0, d, a_j)?;
+
+        if !f_j.is_finite() || f_j > f0 + cfg.c1 * a_j * dphi0 || f_j >= f_lo {
+            a_hi = a_j;
+            f_hi = f_j;
+            dphi_hi = dphi_j;
+        } else {
+            if dphi_j.abs() <= -cfg.c2 * dphi0 {
+                return Ok(Some((a_j, x0 + &d.mapv(|v| v * a_j), f_j, g_j)));
+            }
+            if dphi_j * (a_hi - a_lo) >= 0.0 {
+                a_hi = a_lo;
+                f_hi = f_lo;
+                dphi_hi = dphi_lo;
+            }
+            a_lo = a_j;
+            f_lo = f_j;
+            dphi_lo = dphi_j;
+        }
+    }
+    Ok(None)
+}
+
+/// Cubic minimizer of the Hermite interpolant through `(a, fa, dfa)` and
+/// `(b, fb, dfb)` (Nocedal & Wright eq. 3.59). `None` when the cubic is
+/// degenerate or non-finite.
+fn cubic_min(a: f64, fa: f64, dfa: f64, b: f64, fb: f64, dfb: f64) -> Option<f64> {
+    let d1 = dfa + dfb - 3.0 * (fa - fb) / (a - b);
+    let disc = d1 * d1 - dfa * dfb;
+    if disc < 0.0 || !disc.is_finite() {
+        return None;
+    }
+    let d2 = (b - a).signum() * disc.sqrt();
+    let denom = dfb - dfa + 2.0 * d2;
+    if denom == 0.0 || !denom.is_finite() {
+        return None;
+    }
+    let a_new = b - (b - a) * (dfb + d2 - d1) / denom;
+    a_new.is_finite().then_some(a_new)
+}
+
+/// A trial α strictly inside the bracket: safeguarded cubic interpolation,
+/// falling back to bisection when the cubic minimizer lands outside the inner
+/// 80% of `[a_lo, a_hi]` (or is degenerate, e.g. a non-finite high endpoint).
+fn interp_safeguarded(a_lo: f64, f_lo: f64, dphi_lo: f64, a_hi: f64, f_hi: f64, dphi_hi: f64) -> f64 {
+    let lo = a_lo.min(a_hi);
+    let hi = a_lo.max(a_hi);
+    let width = hi - lo;
+    let safe_lo = lo + 0.1 * width;
+    let safe_hi = hi - 0.1 * width;
+    match cubic_min(a_lo, f_lo, dphi_lo, a_hi, f_hi, dphi_hi) {
+        Some(a) if a >= safe_lo && a <= safe_hi => a,
+        _ => 0.5 * (lo + hi),
     }
 }
 
@@ -367,40 +699,22 @@ pub(crate) fn run_optimization(
         return Ok(Array1::zeros(0));
     }
 
-    let cost_function = GamlssCost {
+    let cost = GamlssCost {
         nfo,
         penalty_matrices,
     };
 
     // Warm-start from the previous lambdas (in log-space) when we have them.
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => {
-            LogLambdas(prev.mapv(|l| l.max(MIN_LAMBDA).ln()))
-        }
-        _ => LogLambdas(Array1::<f64>::zeros(n_penalties)),
+        Some(prev) if prev.len() == n_penalties => prev.mapv(|l| l.max(MIN_LAMBDA).ln()),
+        _ => Array1::<f64>::zeros(n_penalties),
     };
 
-    let linesearch = MoreThuenteLineSearch::new();
-    let solver = LBFGS::new(linesearch, 7);
+    let cfg = LbfgsConfig::default();
+    let best_log_lambdas =
+        lbfgs_minimize(initial_log_lambdas, |rho| cost.objective_and_grad(rho), &cfg)?;
 
-    let res = Executor::new(cost_function, solver)
-        .configure(|state| {
-            // `target_cost` used to be MIN_DENOMINATOR, and that was a mistake. It
-            // stopped L-BFGS early any time RSS was tiny (say a log-scale sigma
-            // parameter with a near-perfect working model): the near-zero GCV cost
-            // read as "optimal" and λ got frozen for the rest of the fit. Gone now.
-            // L-BFGS converges in O(1) extra iterations from a good warm start, so
-            // the savings were nothing and the bias was real.
-            state.param(initial_log_lambdas).max_iters(50)
-        })
-        .run()?;
-
-    let best_log_lambdas = res.state.best_param.ok_or_else(|| {
-        GamlssError::Optimization("Optimizer failed to find best parameters".to_string())
-    })?;
-    let best_lambdas = best_log_lambdas.mapv(f64::exp);
-
-    Ok(best_lambdas)
+    Ok(best_log_lambdas.mapv(f64::exp))
 }
 
 /// REML/LAML analogue of `run_optimization`.
@@ -433,31 +747,25 @@ pub(crate) fn run_optimization_reml(
         return Ok(Array1::zeros(0));
     }
 
-    let cost_function = RemlCost {
+    let cost = RemlCost {
         nfo,
         penalty_matrices,
         groups,
     };
 
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => LogLambdas(prev.mapv(|l| {
+        Some(prev) if prev.len() == n_penalties => prev.mapv(|l| {
             l.max(MIN_LAMBDA)
                 .ln()
                 .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
-        })),
-        _ => LogLambdas(initial_log_lambda(x_model, penalty_matrices)),
+        }),
+        _ => initial_log_lambda(x_model, penalty_matrices),
     };
 
-    let linesearch = MoreThuenteLineSearch::new();
-    let solver = LBFGS::new(linesearch, 7);
+    let cfg = LbfgsConfig::default();
+    let best_log_lambdas =
+        lbfgs_minimize(initial_log_lambdas, |rho| cost.objective_and_grad(rho), &cfg)?;
 
-    let res = Executor::new(cost_function, solver)
-        .configure(|state| state.param(initial_log_lambdas).max_iters(50))
-        .run()?;
-
-    let best_log_lambdas = res.state.best_param.ok_or_else(|| {
-        GamlssError::Optimization("REML optimizer failed to find best parameters".to_string())
-    })?;
     let clamped = best_log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP));
     let lbfgs_lambdas = clamped.mapv(f64::exp);
 
@@ -465,45 +773,48 @@ pub(crate) fn run_optimization_reml(
         return Ok(lbfgs_lambdas);
     }
 
-    // Deterministic Fellner-Schall polish. L-BFGS + MoreThuente can stall at a
-    // non-stationary point that depends on the warm start whenever the LAML surface
-    // has flat ridges (say several smooths collapsing to their null space with λ at
-    // the clamp ceiling). The per-cycle λ jitter that comes out of that keeps the
-    // outer RS loop from ever seeing a stationary η. F-S iterates the same LAML
-    // target monotonically and settles on the same fixed point from either side of
-    // a ridge, so the per-cycle λ map becomes deterministic. Keep whichever λ
-    // scores better, so the polish can never make the fit worse than L-BFGS left it.
-    // Best-effort, too: a linear-algebra failure inside the polish (an eigensolver
-    // hiccup at a degenerate λ, say) just falls back to the L-BFGS result instead of
-    // taking the whole fit down with it.
-    let polished = match run_optimization_fellner_schall(
-        x_model,
-        nfo,
-        penalty_matrices,
-        groups,
-        Some(&lbfgs_lambdas),
-    ) {
-        Ok(p) => p,
-        Err(_) => return Ok(lbfgs_lambdas),
-    };
-    let lbfgs_cost = lambda_cost(
-        SmoothingCriterion::Reml,
-        nfo,
-        penalty_matrices,
-        groups,
-        &lbfgs_lambdas,
-    );
-    let polished_cost = lambda_cost(
-        SmoothingCriterion::Reml,
-        nfo,
-        penalty_matrices,
-        groups,
-        &polished,
-    );
-    match (lbfgs_cost, polished_cost) {
-        (Ok(lc), Ok(pc)) if pc <= lc => Ok(polished),
-        _ => Ok(lbfgs_lambdas),
+    // Fellner-Schall polish. L-BFGS can stall at a warm-start-dependent
+    // non-stationary point whenever the LAML surface has flat ridges (smooths
+    // collapsing to their null space with λ at the clamp ceiling). F-S iterates the
+    // same LAML target monotonically to a deterministic fixed point, ironing out
+    // that per-cycle λ jitter. Every candidate below is scored by REML cost and the
+    // lowest wins, with L-BFGS always in the running, so the polish can never make
+    // the fit worse than L-BFGS left it. Each F-S run is best-effort: a linear-
+    // algebra failure inside one (an eigensolver hiccup at a degenerate λ, say)
+    // just drops that candidate rather than taking the whole fit down.
+    let reml_cost =
+        |lams: &Array1<f64>| lambda_cost(SmoothingCriterion::Reml, nfo, penalty_matrices, groups, lams);
+
+    let mut best = lbfgs_lambdas;
+    let mut best_cost = reml_cost(&best).unwrap_or(f64::INFINITY);
+
+    let mut candidates: Vec<Array1<f64>> = Vec::new();
+    // Warm-started from the L-BFGS point.
+    if let Ok(p) = run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, Some(&best)) {
+        candidates.push(p);
     }
+    // Cold-started from the heuristic, multi-penalty only. Anisotropic tensor
+    // smooths grow corner basins where one margin's λ is driven very large but
+    // short of the clamp bound, so the collapse-guarded restart in `scoring::step`
+    // (which triggers only on a collapsed term or a bound-pinned λ) never fires,
+    // and both L-BFGS and a warm F-S stall there. A cold F-S ignores the corner
+    // warm start and descends into the interior optimum. Single-penalty problems
+    // are unimodal, so this is skipped and their result is untouched.
+    if n_penalties > 1 {
+        if let Ok(c) = run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, None) {
+            candidates.push(c);
+        }
+    }
+
+    for cand in candidates {
+        if let Ok(c) = reml_cost(&cand) {
+            if c <= best_cost {
+                best = cand;
+                best_cost = c;
+            }
+        }
+    }
+    Ok(best)
 }
 
 /// Fellner-Schall (Wood & Fasiolo 2017) multiplicative fixed-point optimizer
@@ -838,23 +1149,20 @@ pub(super) fn lambda_cost(
     groups: &PenaltyGroups,
     lambdas: &Array1<f64>,
 ) -> Result<f64, GamlssError> {
-    let log_lambdas = LogLambdas(lambdas.mapv(|l| l.max(MIN_LAMBDA).ln()));
-    let map_err = |e: Error| GamlssError::Optimization(e.to_string());
+    let rho = lambdas.mapv(|l| l.max(MIN_LAMBDA).ln());
     match criterion {
         SmoothingCriterion::Gcv => GamlssCost {
             nfo,
             penalty_matrices,
         }
-        .cost(&log_lambdas)
-        .map_err(map_err),
+        .objective(&rho),
         // REML and Fellner-Schall minimize the same LAML target (−V_r).
         SmoothingCriterion::Reml | SmoothingCriterion::FellnerSchall => RemlCost {
             nfo,
             penalty_matrices,
             groups,
         }
-        .cost(&log_lambdas)
-        .map_err(map_err),
+        .objective(&rho),
     }
 }
 
@@ -1148,6 +1456,88 @@ mod reml_tests {
                 rel_err
             );
         }
+    }
+
+    /// The hand-rolled L-BFGS must reach the same REML optimum the deterministic
+    /// Fellner-Schall optimizer settles on (same LAML target), with the analytic
+    /// gradient of −V_r effectively vanishing there. Run L-BFGS with the F-S
+    /// polish OFF so this exercises the L-BFGS landing point, not the polish.
+    #[test]
+    fn lbfgs_reaches_reml_optimum() {
+        let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let groups = group_penalties(&ps);
+
+        let lbfgs = run_optimization_reml(&x, &nfo, &ps, &groups, None, false).unwrap();
+        let fs = run_optimization_fellner_schall(&x, &nfo, &ps, &groups, None).unwrap();
+
+        for (a, b) in lbfgs.iter().zip(fs.iter()) {
+            assert!(
+                (a.ln() - b.ln()).abs() < 0.1,
+                "L-BFGS λ = {:e} disagrees with Fellner-Schall λ = {:e}",
+                a,
+                b
+            );
+        }
+
+        let cost = RemlCost {
+            nfo: &nfo,
+            penalty_matrices: &ps,
+            groups: &groups,
+        };
+        let rho = lbfgs.mapv(|l| l.max(MIN_LAMBDA).ln());
+        let g = cost.grad(&rho).unwrap();
+        assert!(
+            inf_norm(&g) < 1e-2,
+            "gradient ∞-norm {} too large at the L-BFGS optimum",
+            inf_norm(&g)
+        );
+    }
+
+    /// Determinism is a hard requirement: the same inputs must give a
+    /// bit-identical λ on every run (no RNG, no reduction-order dependence).
+    #[test]
+    fn lbfgs_is_deterministic() {
+        let (x, z, w, ps) = synthetic_pwls_problem();
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let groups = group_penalties(&ps);
+        let a = run_optimization_reml(&x, &nfo, &ps, &groups, None, false).unwrap();
+        let b = run_optimization_reml(&x, &nfo, &ps, &groups, None, false).unwrap();
+        assert_eq!(a, b, "L-BFGS is not deterministic across runs");
+    }
+
+    /// The strong-Wolfe line search must return a step satisfying both the Armijo
+    /// (sufficient-decrease) and strong-curvature conditions. Checked on a
+    /// 1-D quadratic whose exact line minimizer is the unit step.
+    #[test]
+    fn strong_wolfe_satisfies_wolfe_conditions() {
+        let cfg = LbfgsConfig::default();
+        // f(t) = ½·(t − 3)², minimizer at t = 3.
+        let mut eval = |x: &Array1<f64>| -> Result<(f64, Array1<f64>), GamlssError> {
+            let t = x[0];
+            Ok((0.5 * (t - 3.0).powi(2), arr1(&[t - 3.0])))
+        };
+        let x0 = arr1(&[0.0]);
+        let (f0, g0) = eval(&x0).unwrap();
+        let d = g0.mapv(|v| -v); // steepest descent
+        let dphi0 = g0.dot(&d);
+
+        let (alpha, x_new, f_new, g_new) = strong_wolfe(&mut eval, &x0, f0, &g0, &d, &cfg)
+            .unwrap()
+            .expect("line search should succeed on a convex quadratic");
+
+        assert!(
+            f_new <= f0 + cfg.c1 * alpha * dphi0 + 1e-12,
+            "Armijo condition violated"
+        );
+        assert!(
+            g_new.dot(&d).abs() <= -cfg.c2 * dphi0 + 1e-12,
+            "strong-curvature condition violated"
+        );
+        assert!(
+            (x_new[0] - alpha * d[0]).abs() < 1e-12,
+            "returned point is not x0 + alpha*d"
+        );
     }
 
     /// DIAGNOSTIC (Part 1, Q2 of the bistability investigation; `#[ignore]`d).
