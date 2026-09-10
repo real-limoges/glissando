@@ -57,15 +57,6 @@ pub enum GamlssError {
     EmptyData,
 }
 
-impl From<argmin::core::Error> for GamlssError {
-    fn from(e: argmin::core::Error) -> Self {
-        // `argmin::core::Error` is really `anyhow::Error`. `{:#}` walks the full source
-        // chain (e.g. "L-BFGS step failed: line search did not converge"). Plain
-        // `.to_string()` gives you the top-level message and throws the rest away, which
-        // is exactly the part you needed.
-        GamlssError::Optimization(format!("{:#}", e))
-    }
-}
 impl From<ShapeError> for GamlssError {
     fn from(err: ShapeError) -> Self {
         GamlssError::Shape(err.to_string())

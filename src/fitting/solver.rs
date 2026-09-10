@@ -6,11 +6,9 @@
 //! keeps those two cheap.
 
 use super::{
-    Coefficients, CovarianceMatrix, GamlssError, LogLambdas, ModelMatrix, PenaltyMatrix,
-    SmoothingCriterion,
+    Coefficients, CovarianceMatrix, GamlssError, ModelMatrix, PenaltyMatrix, SmoothingCriterion,
 };
 use crate::linalg;
-use argmin::core::{CostFunction, Error, Gradient};
 use ndarray::prelude::*;
 use std::collections::VecDeque;
 
@@ -228,31 +226,6 @@ impl<'a> GamlssCost<'a> {
     fn objective(&self, rho: &Array1<f64>) -> Result<f64, GamlssError> {
         Ok(self.objective_and_grad(rho)?.0)
     }
-
-    /// GCV gradient wrt ρ = log λ.
-    fn grad(&self, rho: &Array1<f64>) -> Result<Array1<f64>, GamlssError> {
-        Ok(self.objective_and_grad(rho)?.1)
-    }
-}
-
-// Thin argmin adapters over the inherent methods, which hold the real
-// implementation. Retained only while the `argmin` dependency remains.
-impl<'a> CostFunction for GamlssCost<'a> {
-    type Param = LogLambdas;
-    type Output = f64;
-
-    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
-        self.objective(&param.0).map_err(Error::new)
-    }
-}
-
-impl<'a> Gradient for GamlssCost<'a> {
-    type Param = LogLambdas;
-    type Gradient = LogLambdas;
-
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
-        self.grad(&param.0).map(LogLambdas).map_err(Error::new)
-    }
 }
 
 /// Laplace-Approximate Marginal Likelihood (LAML / REML) cost for smoothing-
@@ -331,39 +304,14 @@ impl<'a> RemlCost<'a> {
     fn objective(&self, rho: &Array1<f64>) -> Result<f64, GamlssError> {
         Ok(self.objective_and_grad(rho)?.0)
     }
-
-    /// Gradient of `−V_r` wrt ρ = log λ.
-    fn grad(&self, rho: &Array1<f64>) -> Result<Array1<f64>, GamlssError> {
-        Ok(self.objective_and_grad(rho)?.1)
-    }
-}
-
-// Thin argmin adapters over the inherent methods, which hold the real
-// implementation. Retained only while the `argmin` dependency remains.
-impl<'a> CostFunction for RemlCost<'a> {
-    type Param = LogLambdas;
-    type Output = f64;
-
-    fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
-        self.objective(&param.0).map_err(Error::new)
-    }
-}
-
-impl<'a> Gradient for RemlCost<'a> {
-    type Param = LogLambdas;
-    type Gradient = LogLambdas;
-
-    fn gradient(&self, param: &Self::Param) -> Result<Self::Param, Error> {
-        self.grad(&param.0).map(LogLambdas).map_err(Error::new)
-    }
 }
 
 /// Tunables for the hand-rolled L-BFGS ([`lbfgs_minimize`]). One struct so every
 /// magic number sits in one place, like the Fellner-Schall constants above.
 struct LbfgsConfig {
-    /// History size (number of `(s, y)` pairs). Matches the old `LBFGS::new(_, 7)`.
+    /// History size (number of `(s, y)` pairs).
     m: usize,
-    /// Iteration cap. Matches the old `.max_iters(50)`.
+    /// Iteration cap.
     max_iters: usize,
     /// Convergence on the gradient ∞-norm (in ρ = log λ units). At 1e-5 the inner
     /// λ-solve is 1-2 orders tighter than the outer RS tolerance (1e-3) and
@@ -400,13 +348,12 @@ fn inf_norm(v: &Array1<f64>) -> f64 {
     v.iter().fold(0.0_f64, |m, &x| m.max(x.abs()))
 }
 
-/// Hand-rolled L-BFGS with a strong-Wolfe line search, minimizing a smooth
-/// objective over ρ ∈ ℝⁿ. Replaces argmin's `LBFGS` + `MoreThuenteLineSearch`.
+/// L-BFGS with a strong-Wolfe line search, minimizing a smooth objective over
+/// ρ ∈ ℝⁿ. Drives the GCV/REML smoothing-parameter search.
 ///
-/// `eval` returns `(f, ∇f)` together, so one call is one PWLS solve (argmin
-/// called cost and gradient separately, paying two). The returned point is the
-/// lowest-objective point ever visited, so a failed line search or a numerical
-/// excursion can never regress the answer below the start.
+/// `eval` returns `(f, ∇f)` together, so one call is one PWLS solve. The returned
+/// point is the lowest-objective point ever visited, so a failed line search or a
+/// numerical excursion can never regress the answer below the start.
 ///
 /// Deterministic given a deterministic `eval`: no RNG, and the only reductions
 /// are dot products over the (single-threaded, per `.cargo/config.toml`) BLAS.
@@ -670,7 +617,14 @@ fn cubic_min(a: f64, fa: f64, dfa: f64, b: f64, fb: f64, dfb: f64) -> Option<f64
 /// A trial α strictly inside the bracket: safeguarded cubic interpolation,
 /// falling back to bisection when the cubic minimizer lands outside the inner
 /// 80% of `[a_lo, a_hi]` (or is degenerate, e.g. a non-finite high endpoint).
-fn interp_safeguarded(a_lo: f64, f_lo: f64, dphi_lo: f64, a_hi: f64, f_hi: f64, dphi_hi: f64) -> f64 {
+fn interp_safeguarded(
+    a_lo: f64,
+    f_lo: f64,
+    dphi_lo: f64,
+    a_hi: f64,
+    f_hi: f64,
+    dphi_hi: f64,
+) -> f64 {
     let lo = a_lo.min(a_hi);
     let hi = a_lo.max(a_hi);
     let width = hi - lo;
@@ -711,8 +665,11 @@ pub(crate) fn run_optimization(
     };
 
     let cfg = LbfgsConfig::default();
-    let best_log_lambdas =
-        lbfgs_minimize(initial_log_lambdas, |rho| cost.objective_and_grad(rho), &cfg)?;
+    let best_log_lambdas = lbfgs_minimize(
+        initial_log_lambdas,
+        |rho| cost.objective_and_grad(rho),
+        &cfg,
+    )?;
 
     Ok(best_log_lambdas.mapv(f64::exp))
 }
@@ -763,8 +720,11 @@ pub(crate) fn run_optimization_reml(
     };
 
     let cfg = LbfgsConfig::default();
-    let best_log_lambdas =
-        lbfgs_minimize(initial_log_lambdas, |rho| cost.objective_and_grad(rho), &cfg)?;
+    let best_log_lambdas = lbfgs_minimize(
+        initial_log_lambdas,
+        |rho| cost.objective_and_grad(rho),
+        &cfg,
+    )?;
 
     let clamped = best_log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP));
     let lbfgs_lambdas = clamped.mapv(f64::exp);
@@ -782,15 +742,24 @@ pub(crate) fn run_optimization_reml(
     // the fit worse than L-BFGS left it. Each F-S run is best-effort: a linear-
     // algebra failure inside one (an eigensolver hiccup at a degenerate λ, say)
     // just drops that candidate rather than taking the whole fit down.
-    let reml_cost =
-        |lams: &Array1<f64>| lambda_cost(SmoothingCriterion::Reml, nfo, penalty_matrices, groups, lams);
+    let reml_cost = |lams: &Array1<f64>| {
+        lambda_cost(
+            SmoothingCriterion::Reml,
+            nfo,
+            penalty_matrices,
+            groups,
+            lams,
+        )
+    };
 
     let mut best = lbfgs_lambdas;
     let mut best_cost = reml_cost(&best).unwrap_or(f64::INFINITY);
 
     let mut candidates: Vec<Array1<f64>> = Vec::new();
     // Warm-started from the L-BFGS point.
-    if let Ok(p) = run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, Some(&best)) {
+    if let Ok(p) =
+        run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, Some(&best))
+    {
         candidates.push(p);
     }
     // Cold-started from the heuristic, multi-penalty only. Anisotropic tensor
@@ -801,7 +770,8 @@ pub(crate) fn run_optimization_reml(
     // warm start and descends into the interior optimum. Single-penalty problems
     // are unimodal, so this is skipped and their result is untouched.
     if n_penalties > 1 {
-        if let Ok(c) = run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, None) {
+        if let Ok(c) = run_optimization_fellner_schall(x_model, nfo, penalty_matrices, groups, None)
+        {
             candidates.push(c);
         }
     }
@@ -1308,7 +1278,7 @@ mod reml_tests {
         };
         // Evaluate at several log-λ to catch obvious blow-ups.
         for log_lambda in [-5.0, -1.0, 0.0, 1.0, 5.0] {
-            let val = cost.cost(&LogLambdas(arr1(&[log_lambda]))).unwrap();
+            let val = cost.objective(&arr1(&[log_lambda])).unwrap();
             assert!(
                 val.is_finite(),
                 "REML cost not finite at log λ = {}: got {}",
@@ -1342,8 +1312,7 @@ mod reml_tests {
         let lambda_ceiling = LOG_LAMBDA_CLAMP.exp();
         let mut scores: Vec<f64> = Vec::new();
         for _iter in 0..20 {
-            let log_lambdas = LogLambdas(lambdas.mapv(f64::ln));
-            let score = cost.cost(&log_lambdas).unwrap();
+            let score = cost.objective(&lambdas.mapv(f64::ln)).unwrap();
             scores.push(score);
 
             let info = fit_pwls_with_grad_info(&nfo, &ps, &lambdas).unwrap();
@@ -1402,21 +1371,22 @@ mod reml_tests {
         let h = 1e-5;
         // Single-penalty case here; loop kept so the test extends easily.
         for &log_lambda in &[-2.0_f64, 0.0, 2.0] {
-            let p0 = LogLambdas(arr1(&[log_lambda]));
-            let analytic = cost.gradient(&p0).unwrap();
+            let p0 = arr1(&[log_lambda]);
+            let analytic = cost.objective_and_grad(&p0).unwrap().1;
 
             let mut p_plus = p0.clone();
-            p_plus.0[0] += h;
+            p_plus[0] += h;
             let mut p_minus = p0.clone();
-            p_minus.0[0] -= h;
-            let fd = (cost.cost(&p_plus).unwrap() - cost.cost(&p_minus).unwrap()) / (2.0 * h);
+            p_minus[0] -= h;
+            let fd =
+                (cost.objective(&p_plus).unwrap() - cost.objective(&p_minus).unwrap()) / (2.0 * h);
 
-            let rel_err = (analytic.0[0] - fd).abs() / fd.abs().max(1e-6);
+            let rel_err = (analytic[0] - fd).abs() / fd.abs().max(1e-6);
             assert!(
                 rel_err < 1e-4,
                 "gradient mismatch at log λ = {}: analytic = {}, fd = {}, rel_err = {}",
                 log_lambda,
-                analytic.0[0],
+                analytic[0],
                 fd,
                 rel_err
             );
@@ -1437,21 +1407,22 @@ mod reml_tests {
 
         let h = 1e-5;
         for &log_lambda in &[-2.0_f64, 0.0, 2.0] {
-            let p0 = LogLambdas(arr1(&[log_lambda]));
-            let analytic = cost.gradient(&p0).unwrap();
+            let p0 = arr1(&[log_lambda]);
+            let analytic = cost.objective_and_grad(&p0).unwrap().1;
 
             let mut p_plus = p0.clone();
-            p_plus.0[0] += h;
+            p_plus[0] += h;
             let mut p_minus = p0.clone();
-            p_minus.0[0] -= h;
-            let fd = (cost.cost(&p_plus).unwrap() - cost.cost(&p_minus).unwrap()) / (2.0 * h);
+            p_minus[0] -= h;
+            let fd =
+                (cost.objective(&p_plus).unwrap() - cost.objective(&p_minus).unwrap()) / (2.0 * h);
 
-            let rel_err = (analytic.0[0] - fd).abs() / fd.abs().max(1e-6);
+            let rel_err = (analytic[0] - fd).abs() / fd.abs().max(1e-6);
             assert!(
                 rel_err < 1e-4,
                 "GCV gradient mismatch at log λ = {}: analytic = {}, fd = {}, rel_err = {}",
                 log_lambda,
-                analytic.0[0],
+                analytic[0],
                 fd,
                 rel_err
             );
@@ -1486,7 +1457,7 @@ mod reml_tests {
             groups: &groups,
         };
         let rho = lbfgs.mapv(|l| l.max(MIN_LAMBDA).ln());
-        let g = cost.grad(&rho).unwrap();
+        let g = cost.objective_and_grad(&rho).unwrap().1;
         assert!(
             inf_norm(&g) < 1e-2,
             "gradient ∞-norm {} too large at the L-BFGS optimum",
@@ -1623,7 +1594,7 @@ mod reml_tests {
         while log_lambda <= 34.0 + 1e-9 {
             let lambdas = arr1(&[log_lambda.exp()]);
             let (_b, _v, edf, _e) = fit_pwls(&nfo, &penalties, &lambdas).unwrap();
-            let neg_vr = cost.cost(&LogLambdas(arr1(&[log_lambda]))).unwrap();
+            let neg_vr = cost.objective(&arr1(&[log_lambda])).unwrap();
             eprintln!("{log_lambda:>10.3}  {edf:>10.3}  {neg_vr:>16.4}");
             rows.push((log_lambda, edf, neg_vr));
             if neg_vr < best.0 {
