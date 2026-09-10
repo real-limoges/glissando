@@ -326,7 +326,7 @@ pub(crate) fn create_cr_penalty_matrix(knots: &[f64]) -> Array2<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::splines::test_support::{is_psd, is_symmetric, StdRngStub};
+    use crate::splines::test_support::{is_psd, is_symmetric};
     #[cfg(not(target_arch = "wasm32"))]
     use ndarray::Array;
     #[cfg(not(target_arch = "wasm32"))]
@@ -590,10 +590,12 @@ mod tests {
                 }
             }
             // PSD check
+            use rand::rngs::StdRng;
+            use rand::{RngExt, SeedableRng};
             let n = s.dim().0;
-            let mut rng = StdRngStub::new(99);
+            let mut rng = StdRng::seed_from_u64(99);
             for _ in 0..10 {
-                let v: Array1<f64> = Array::from_shape_fn(n, |_| rng.next() - 0.5);
+                let v: Array1<f64> = Array::from_shape_fn(n, |_| rng.random::<f64>() - 0.5);
                 let q = v.dot(&s.dot(&v));
                 prop_assert!(q >= -1e-8, "PSD violated: q = {}", q);
             }
