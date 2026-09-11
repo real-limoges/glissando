@@ -225,8 +225,8 @@ mod backend {
             // magnitude. This is the shape that trips LAPACK `*syev` on some CI
             // OpenBLAS builds (info = 8); Jacobi must return a clean spectrum.
             let lambda = 30.0_f64.exp(); // e³⁰ ≈ 1.07e13, the clamp ceiling.
-            // Order-1 difference penalty D'D on 4 coefficients: symmetric, null
-            // space of dim 1 (constants), well-known spectrum.
+                                         // Order-1 difference penalty D'D on 4 coefficients: symmetric, null
+                                         // space of dim 1 (constants), well-known spectrum.
             let base = array![
                 [1.0, -1.0, 0.0, 0.0],
                 [-1.0, 2.0, -1.0, 0.0],
