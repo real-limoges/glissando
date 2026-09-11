@@ -65,9 +65,193 @@ mod backend {
 
     /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
     /// such that `A = Q · diag(d) · Qᵀ`.
+    ///
+    /// The fast path is LAPACK `*syev`. That driver's implicit-QR sweep (`dsteqr`)
+    /// carries a fixed iteration budget and can exhaust it on a graded matrix whose
+    /// eigenvalues span many orders of magnitude, returning a positive `info`
+    /// ("`i` off-diagonal elements failed to converge"). We hit exactly that when a
+    /// smooth collapses to its penalty null space and `penalty_eigen` decomposes
+    /// `λ·S` with `λ ≈ e³⁰`: whether `dsteqr` converges is OpenBLAS-build-dependent,
+    /// so a fit that passes locally can die only on CI — the same CI-only-LAPACK
+    /// failure mode that [`super::solve_robust`] / [`super::inv_robust`] guard the
+    /// other backends against. Jacobi rotation is unconditionally convergent for
+    /// any real symmetric matrix and computes small eigenvalues to high relative
+    /// accuracy, so fall back to it rather than propagating the crash. It only runs
+    /// when `*syev` has actually failed, so the healthy path is untouched.
     pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
         // ndarray-linalg's `eigh` hands them back ascending already, so nothing to sort.
-        a.eigh(UPLO::Lower).map_err(lin)
+        match a.eigh(UPLO::Lower) {
+            Ok(res) => Ok(res),
+            Err(_) => jacobi_eigh(a),
+        }
+    }
+
+    /// Cyclic Jacobi eigensolver for a real symmetric matrix, the convergence-proof
+    /// fallback behind [`symmetric_eigh`]. Reads the full matrix (the callers here
+    /// only ever pass symmetric ones) and returns `(eigvals_ascending,
+    /// eigvecs_as_columns)` with `A = Q · diag(d) · Qᵀ`, matching `*syev`'s contract.
+    fn jacobi_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
+        let n = a.nrows();
+        if n == 0 {
+            return Ok((Array1::zeros(0), Array2::zeros((0, 0))));
+        }
+        // Symmetrize defensively: work on ½(A + Aᵀ) so any asymmetry from rounding
+        // can't bias the rotations.
+        let mut d = a.clone();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let m = 0.5 * (d[[i, j]] + d[[j, i]]);
+                d[[i, j]] = m;
+                d[[j, i]] = m;
+            }
+        }
+        let mut v = Array2::<f64>::eye(n);
+
+        // Sweep until the off-diagonal mass is negligible relative to the matrix
+        // scale. Classic cyclic Jacobi converges quadratically; ~10 sweeps is
+        // plenty even for the pathological graded inputs, but cap it so a
+        // degenerate case can't spin forever.
+        const MAX_SWEEPS: usize = 100;
+        for _sweep in 0..MAX_SWEEPS {
+            let mut off = 0.0_f64;
+            for p in 0..n {
+                for q in (p + 1)..n {
+                    off += d[[p, q]] * d[[p, q]];
+                }
+            }
+            let mut scale = 0.0_f64;
+            for i in 0..n {
+                scale += d[[i, i]] * d[[i, i]];
+            }
+            // Off-diagonal Frobenius norm below eps·(diagonal scale): converged.
+            if off <= (f64::EPSILON * f64::EPSILON) * scale.max(f64::MIN_POSITIVE) {
+                break;
+            }
+
+            for p in 0..n {
+                for q in (p + 1)..n {
+                    let apq = d[[p, q]];
+                    if apq == 0.0 {
+                        continue;
+                    }
+                    let app = d[[p, p]];
+                    let aqq = d[[q, q]];
+                    // Stable rotation angle (Golub & Van Loan §8.4): pick the
+                    // smaller-magnitude tangent to keep c, s well-conditioned.
+                    let theta = (aqq - app) / (2.0 * apq);
+                    let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+                    let c = 1.0 / (t * t + 1.0).sqrt();
+                    let s = t * c;
+
+                    // Rotate rows/columns p and q of the working matrix.
+                    for i in 0..n {
+                        if i == p || i == q {
+                            continue;
+                        }
+                        let dip = d[[i, p]];
+                        let diq = d[[i, q]];
+                        let new_ip = c * dip - s * diq;
+                        let new_iq = s * dip + c * diq;
+                        d[[i, p]] = new_ip;
+                        d[[p, i]] = new_ip;
+                        d[[i, q]] = new_iq;
+                        d[[q, i]] = new_iq;
+                    }
+                    d[[p, p]] = app - t * apq;
+                    d[[q, q]] = aqq + t * apq;
+                    d[[p, q]] = 0.0;
+                    d[[q, p]] = 0.0;
+
+                    // Accumulate the eigenvectors (columns of V).
+                    for i in 0..n {
+                        let vip = v[[i, p]];
+                        let viq = v[[i, q]];
+                        v[[i, p]] = c * vip - s * viq;
+                        v[[i, q]] = s * vip + c * viq;
+                    }
+                }
+            }
+        }
+
+        // Sort eigenvalues ascending, dragging their eigenvectors along, to match
+        // `*syev`'s contract.
+        let eigvals_unsorted: Vec<f64> = (0..n).map(|i| d[[i, i]]).collect();
+        let mut idx: Vec<usize> = (0..n).collect();
+        idx.sort_by(|&i, &j| {
+            eigvals_unsorted[i]
+                .partial_cmp(&eigvals_unsorted[j])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let eigvals = Array1::from_iter(idx.iter().map(|&i| eigvals_unsorted[i]));
+        let mut eigvecs = Array2::<f64>::zeros((n, n));
+        for (new_col, &old_col) in idx.iter().enumerate() {
+            for row in 0..n {
+                eigvecs[[row, new_col]] = v[[row, old_col]];
+            }
+        }
+        Ok((eigvals, eigvecs))
+    }
+
+    #[cfg(test)]
+    mod jacobi_tests {
+        use super::jacobi_eigh;
+        use ndarray::array;
+
+        #[test]
+        fn jacobi_matches_known_spectrum() {
+            // Eigenvalues {1, 4} of [[2.5,1.5],[1.5,2.5]].
+            let a = array![[2.5, 1.5], [1.5, 2.5]];
+            let (d, q) = jacobi_eigh(&a).unwrap();
+            assert!((d[0] - 1.0).abs() < 1e-12);
+            assert!((d[1] - 4.0).abs() < 1e-12);
+
+            // Q · diag(d) · Qᵀ ≈ A, and Q orthonormal.
+            let qd = &q * &d.view().insert_axis(ndarray::Axis(0));
+            let recon = qd.dot(&q.t());
+            let qtq = q.t().dot(&q);
+            for i in 0..2 {
+                for j in 0..2 {
+                    assert!((recon[[i, j]] - a[[i, j]]).abs() < 1e-12);
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!((qtq[[i, j]] - want).abs() < 1e-12);
+                }
+            }
+        }
+
+        #[test]
+        fn jacobi_handles_graded_rank_deficient_matrix() {
+            // Mimics `penalty_eigen`'s input on collapse: a rank-deficient symmetric
+            // matrix scaled by a huge λ, so its eigenvalues span many orders of
+            // magnitude. This is the shape that trips LAPACK `*syev` on some CI
+            // OpenBLAS builds (info = 8); Jacobi must return a clean spectrum.
+            let lambda = 30.0_f64.exp(); // e³⁰ ≈ 1.07e13, the clamp ceiling.
+            // Order-1 difference penalty D'D on 4 coefficients: symmetric, null
+            // space of dim 1 (constants), well-known spectrum.
+            let base = array![
+                [1.0, -1.0, 0.0, 0.0],
+                [-1.0, 2.0, -1.0, 0.0],
+                [0.0, -1.0, 2.0, -1.0],
+                [0.0, 0.0, -1.0, 1.0],
+            ];
+            let a = &base * lambda;
+            let (d, q) = jacobi_eigh(&a).unwrap();
+
+            assert!(d.iter().all(|v| v.is_finite()));
+            // One null direction (constant vector), so smallest eigenvalue ≈ 0
+            // relative to the λ scale.
+            assert!(d[0].abs() < 1e-6 * lambda, "got d[0] = {}", d[0]);
+            assert!(d[3] > 0.0);
+
+            // Reconstruction holds even at this magnitude.
+            let qd = &q * &d.view().insert_axis(ndarray::Axis(0));
+            let recon = qd.dot(&q.t());
+            for i in 0..4 {
+                for j in 0..4 {
+                    let rel = (recon[[i, j]] - a[[i, j]]).abs() / lambda;
+                    assert!(rel < 1e-10, "reconstruction off at ({},{}): {}", i, j, rel);
+                }
+            }
+        }
     }
 }
 
