@@ -2,18 +2,9 @@
 //! solver lean on: `Coefficients`, `CovarianceMatrix`, `ModelMatrix`, …
 //!
 //! Each wrapper carries an `Array1`/`Array2` and provides `Deref`, so callers can
-//! use it as if it were the bare ndarray type. `LogLambdas` additionally
-//! implements the suite of `argmin-math` traits L-BFGS needs for the
-//! smoothing-parameter optimization, defined once via the
-//! `impl_argmin_math_for_vector_wrapper!` macro. `Coefficients` is never used
-//! as an argmin `Param`/`Gradient` (only `LogLambdas` is), so it only gets the
-//! `Deref`/`DerefMut` half via `impl_deref_for_vector_wrapper!`.
+//! use it as if it were the bare ndarray type, granted once via the
+//! `impl_deref_for_vector_wrapper!` / `impl_deref_for_matrix_wrapper!` macros.
 
-use argmin_math::ArgminScaledSub;
-use argmin_math::{
-    ArgminAdd, ArgminDot, ArgminL1Norm, ArgminL2Norm, ArgminMinMax, ArgminMul, ArgminScaledAdd,
-    ArgminSignum, ArgminSub, ArgminZeroLike,
-};
 use ndarray::{Array1, Array2};
 use std::ops::{Deref, DerefMut};
 
@@ -22,110 +13,6 @@ use std::ops::{Deref, DerefMut};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Coefficients(pub Array1<f64>);
-
-/// Log-space smoothing parameters for L-BFGS optimization. Derefs to `Array1<f64>`.
-#[derive(Clone, Debug)]
-pub(crate) struct LogLambdas(pub Array1<f64>);
-
-macro_rules! impl_argmin_math_for_vector_wrapper {
-    ($t:ty) => {
-        impl ArgminAdd<Self, Self> for $t {
-            fn add(&self, other: &Self) -> Self {
-                Self(&self.0 + &other.0)
-            }
-        }
-
-        impl ArgminSub<Self, Self> for $t {
-            fn sub(&self, other: &Self) -> Self {
-                Self(&self.0 - &other.0)
-            }
-        }
-
-        impl ArgminMul<f64, Self> for $t {
-            fn mul(&self, scalar: &f64) -> Self {
-                Self(&self.0 * *scalar)
-            }
-        }
-
-        impl ArgminDot<Self, f64> for $t {
-            fn dot(&self, other: &Self) -> f64 {
-                self.0.dot(&other.0)
-            }
-        }
-
-        impl ArgminL1Norm<f64> for $t {
-            fn l1_norm(&self) -> f64 {
-                self.0.mapv(|x| x.abs()).sum()
-            }
-        }
-
-        impl ArgminL2Norm<f64> for $t {
-            fn l2_norm(&self) -> f64 {
-                self.0.mapv(|x| x * x).sum().sqrt()
-            }
-        }
-
-        impl ArgminSignum for $t {
-            fn signum(self) -> Self {
-                Self(self.0.mapv(|x| x.signum()))
-            }
-        }
-
-        impl ArgminMinMax for $t {
-            fn min(x: &Self, y: &Self) -> Self {
-                Self(
-                    ndarray::Zip::from(&x.0)
-                        .and(&y.0)
-                        .map_collect(|a, b| a.min(*b)),
-                )
-            }
-
-            fn max(x: &Self, y: &Self) -> Self {
-                Self(
-                    ndarray::Zip::from(&x.0)
-                        .and(&y.0)
-                        .map_collect(|a, b| a.max(*b)),
-                )
-            }
-        }
-
-        impl ArgminZeroLike for $t {
-            fn zero_like(&self) -> Self {
-                Self(Array1::zeros(self.0.len()))
-            }
-        }
-
-        impl ArgminScaledAdd<Self, f64, Self> for $t {
-            fn scaled_add(&self, alpha: &f64, y: &Self) -> Self {
-                Self(&self.0 + &(y.0.mapv(|yi| yi * alpha)))
-            }
-        }
-
-        impl ArgminScaledSub<Self, f64, Self> for $t {
-            fn scaled_sub(&self, alpha: &f64, y: &Self) -> Self {
-                Self(&self.0 - &(y.0.mapv(|yi| yi * alpha)))
-            }
-        }
-        impl ArgminAdd<f64, $t> for $t {
-            fn add(&self, scalar: &f64) -> $t {
-                Self(self.0.mapv(|a| a + scalar))
-            }
-        }
-
-        impl ArgminSub<f64, $t> for $t {
-            fn sub(&self, scalar: &f64) -> $t {
-                Self(self.0.mapv(|a| a - scalar))
-            }
-        }
-
-        impl ArgminMul<Self, Self> for $t {
-            fn mul(&self, other: &Self) -> Self {
-                // ndarray's * operator on two arrays is element-wise
-                Self(&self.0 * &other.0)
-            }
-        }
-    };
-}
 
 macro_rules! impl_deref_for_vector_wrapper {
     ($t:ty) => {
@@ -145,8 +32,6 @@ macro_rules! impl_deref_for_vector_wrapper {
 }
 
 impl_deref_for_vector_wrapper!(Coefficients);
-impl_deref_for_vector_wrapper!(LogLambdas);
-impl_argmin_math_for_vector_wrapper!(LogLambdas);
 
 /// Design matrix (n_obs x n_coeffs). Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
@@ -199,79 +84,6 @@ impl_deref_for_matrix_wrapper!(ModelMatrix);
 mod tests {
     use super::*;
     use ndarray::array;
-
-    // --- LogLambdas argmin-math impls ---
-    //
-    // Coefficients does not implement argmin-math traits: it is never used as an
-    // argmin `Param`/`Gradient` (only `LogLambdas` is, for the L-BFGS
-    // smoothing-parameter optimization), so it only gets Deref/DerefMut.
-
-    #[test]
-    fn loglambdas_argmin_add_sub() {
-        let a = LogLambdas(array![1.0, 2.0, 3.0]);
-        let b = LogLambdas(array![10.0, 20.0, 30.0]);
-        let s = ArgminAdd::add(&a, &b);
-        assert_eq!(s.0.to_vec(), vec![11.0, 22.0, 33.0]);
-        let d = ArgminSub::sub(&b, &a);
-        assert_eq!(d.0.to_vec(), vec![9.0, 18.0, 27.0]);
-    }
-
-    #[test]
-    fn loglambdas_scalar_ops() {
-        let a = LogLambdas(array![1.0, 2.0, 3.0]);
-        let m: LogLambdas = ArgminMul::mul(&a, &2.0);
-        assert_eq!(m.0.to_vec(), vec![2.0, 4.0, 6.0]);
-        let plus: LogLambdas = ArgminAdd::add(&a, &10.0);
-        assert_eq!(plus.0.to_vec(), vec![11.0, 12.0, 13.0]);
-        let minus: LogLambdas = ArgminSub::sub(&a, &1.0);
-        assert_eq!(minus.0.to_vec(), vec![0.0, 1.0, 2.0]);
-    }
-
-    #[test]
-    fn loglambdas_dot_l1_l2() {
-        let a = LogLambdas(array![3.0, 4.0]);
-        let b = LogLambdas(array![1.0, 2.0]);
-        assert_eq!(ArgminDot::dot(&a, &b), 11.0);
-        assert_eq!(ArgminL1Norm::l1_norm(&LogLambdas(array![-3.0, 4.0])), 7.0);
-        assert_eq!(ArgminL2Norm::l2_norm(&LogLambdas(array![3.0, 4.0])), 5.0);
-    }
-
-    #[test]
-    fn loglambdas_signum_and_zero_like() {
-        let a = LogLambdas(array![-1.0, -0.5, 2.0]);
-        let s = ArgminSignum::signum(a.clone());
-        assert_eq!(s.0.to_vec(), vec![-1.0, -1.0, 1.0]);
-        let z = ArgminZeroLike::zero_like(&a);
-        assert_eq!(z.0.to_vec(), vec![0.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn loglambdas_minmax_elementwise() {
-        let a = LogLambdas(array![1.0, 5.0, 3.0]);
-        let b = LogLambdas(array![2.0, 4.0, 3.0]);
-        let mn = ArgminMinMax::min(&a, &b);
-        let mx = ArgminMinMax::max(&a, &b);
-        assert_eq!(mn.0.to_vec(), vec![1.0, 4.0, 3.0]);
-        assert_eq!(mx.0.to_vec(), vec![2.0, 5.0, 3.0]);
-    }
-
-    #[test]
-    fn loglambdas_scaled_add_sub() {
-        let a = LogLambdas(array![1.0, 2.0, 3.0]);
-        let y = LogLambdas(array![10.0, 20.0, 30.0]);
-        let s = ArgminScaledAdd::scaled_add(&a, &0.1, &y);
-        assert_eq!(s.0.to_vec(), vec![2.0, 4.0, 6.0]);
-        let sd = ArgminScaledSub::scaled_sub(&a, &0.1, &y);
-        assert_eq!(sd.0.to_vec(), vec![0.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn loglambdas_elementwise_mul() {
-        let a = LogLambdas(array![1.0, 2.0, 3.0]);
-        let b = LogLambdas(array![10.0, 20.0, 30.0]);
-        let p: LogLambdas = ArgminMul::mul(&a, &b);
-        assert_eq!(p.0.to_vec(), vec![10.0, 40.0, 90.0]);
-    }
 
     #[test]
     fn coefficients_deref_to_array1() {

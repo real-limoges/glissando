@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: replaced the `argmin` L-BFGS with an in-house optimizer
+
+**No public API change, and single-smooth fits are unchanged.** The
+smoothing-parameter search (REML/GCV) now uses a hand-rolled L-BFGS with a
+strong-Wolfe line search rather than the `argmin` crate, which removes `argmin`
+and `argmin-math` from the dependency tree.
+That drops the duplicate `ndarray 0.16` / `ndarray-linalg 0.17` / `lax` /
+`lapack-sys` chain `argmin-math` pinned, and the `getrandom 0.3` wasm shim that
+`argmin`'s `rand 0.9` required.
+
+- The optimizer is deterministic across the `openblas` and `pure-rust` backends
+  and returns the best point it visits, so a failed line search never regresses
+  the result.
+- REML fits additionally screen a cold-start Fellner-Schall candidate on
+  multi-penalty (anisotropic tensor) terms, repairing a corner-basin case where
+  the previous optimizer could settle on an oversmoothed local optimum.
+- One characterization snapshot moved: a Gaussian P-spline that collapses to its
+  null space under GCV now reports a different smoothing parameter on the flat
+  high-λ shelf (`1.5e7` to `8.0e5`); its fitted values, EDF and log-likelihood
+  are unchanged.
+
 ### Fixed: non-default links now fit correctly
 
 **Refit any model fitted with a non-default link.** Its coefficients were

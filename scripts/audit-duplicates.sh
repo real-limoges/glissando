@@ -2,11 +2,11 @@
 # Audit Cargo dependency duplication.
 #
 # `cargo tree --duplicates` lists every crate compiled at more than one version.
-# Some duplication is unavoidable (rand/getrandom triple driven by upstream
-# version pins on statrs/argmin/our direct rand; argmin-math's older
-# ndarray/ndarray-linalg pin). This script enforces that only the documented
-# allowlist appears — new duplicates fail the audit so they get investigated
-# before merge.
+# The remaining duplication is the rand/getrandom chain driven by upstream version
+# pins: statrs 0.18 -> rand 0.8 -> getrandom 0.2, our direct rand 0.10 ->
+# getrandom 0.4, and the proptest dev-dependency -> rand 0.9 -> getrandom 0.3.
+# This script enforces that only the documented allowlist appears, so new
+# duplicates fail the audit and get investigated before merge.
 #
 # Run locally:
 #   ./scripts/audit-duplicates.sh
@@ -18,23 +18,18 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-# Crates known to coexist at multiple versions. See Cargo.toml comments for the
-# `rand`/`getrandom` triple and the `argmin-math` ndarray/ndarray-linalg
-# situation; the transitive duplicates (rand_core, rand_chacha, rand_distr,
-# lapack-sys, lax) follow mechanically from those root duplications.
+# Crates known to coexist at multiple versions. See the Cargo.toml comment for the
+# `rand`/`getrandom` split; the transitive duplicates (rand_core, rand_chacha,
+# rand_distr) follow mechanically from those root duplications.
 #
-# Platform-conditional entries — these only appear on Linux CI runners (not on
-# the macOS dev tree), pulled in via dev/test infrastructure crates that aren't
-# under our control:
+# Platform-conditional entries only appear on Linux CI runners (not on the macOS
+# dev tree), pulled in via dev/test infrastructure crates that aren't under our
+# control:
 #   - `rustix` — used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
 #     coverage/test scaffolding. Long-standing dual-version coexistence in the
 #     Rust ecosystem; benign for our purposes.
 ALLOWLIST=(
   getrandom
-  lapack-sys
-  lax
-  ndarray
-  ndarray-linalg
   rand
   rand_chacha
   rand_core
