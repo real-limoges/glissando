@@ -48,8 +48,8 @@ jobs:
 
   audit-duplicates:
     # Fails if `cargo tree --duplicates` lists a crate not on the documented
-    # allowlist (rand/getrandom triple + argmin-math's older ndarray/lapack
-    # chain). Forces investigation when a new transitive duplicate appears.
+    # allowlist (the rand/getrandom chain from upstream version pins). Forces
+    # investigation when a new transitive duplicate appears.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

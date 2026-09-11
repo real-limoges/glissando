@@ -39,32 +39,17 @@ pub(crate) mod test_support {
         // M = D'D is PSD by construction; I just check x'Mx >= 0 for a batch of random x.
         // Cheap stand-in for a real eigenvalue computation, and it needs no linalg backend.
         use ndarray::{Array, Array1};
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
         let n = m.dim().0;
-        let mut rng = StdRngStub::new(42);
+        let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..20 {
-            let v: Array1<f64> = Array::from_shape_fn(n, |_| rng.next() - 0.5);
+            let v: Array1<f64> = Array::from_shape_fn(n, |_| rng.random::<f64>() - 0.5);
             let q = v.dot(&m.dot(&v));
             if q < -1e-9 {
                 return false;
             }
         }
         true
-    }
-
-    /// Tiny LCG for test-only deterministic numbers (no rand dep needed in the test scope).
-    pub(crate) struct StdRngStub {
-        state: u64,
-    }
-    impl StdRngStub {
-        pub(crate) fn new(seed: u64) -> Self {
-            Self { state: seed.max(1) }
-        }
-        pub(crate) fn next(&mut self) -> f64 {
-            self.state = self
-                .state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((self.state >> 33) as f64) / (1u64 << 31) as f64
-        }
     }
 }

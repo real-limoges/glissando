@@ -749,7 +749,6 @@ Supported distribution classes mirror the WASM surface — `Gaussian`, `Poisson`
 
 **Core dependencies**:
 - [ndarray](https://crates.io/crates/ndarray) - N-dimensional arrays (v0.17)
-- [argmin](https://crates.io/crates/argmin) - L-BFGS optimization (v0.11)
 - [statrs](https://crates.io/crates/statrs) - Statistical functions (v0.18)
 - [rand](https://crates.io/crates/rand) - Random number generation (v0.10)
 
