@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import zlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -35,6 +37,12 @@ class Scenario:
     mgcv_capable: bool
     n_obs_override: Optional[int]
     generate: Callable[[np.random.Generator, int], dict[str, np.ndarray]]
+    # Per-scenario replicate cap (bounds nightly cost for expensive scenarios);
+    # None uses the run-wide --reps. Only ever reduces the count.
+    reps_override: Optional[int] = None
+
+    def reps(self, run_reps: int) -> int:
+        return min(run_reps, self.reps_override) if self.reps_override else run_reps
 
 
 # ─── Data generators ─────────────────────────────────────────────────────────
@@ -282,7 +290,7 @@ SCENARIOS: list[Scenario] = [
     Scenario("gaussian_heteroskedastic", False, True,  None,   gen_gaussian_heteroskedastic),
     Scenario("gaussian_smooth",          True,  True,  None,   gen_gaussian_smooth),
     Scenario("gaussian_multiple",        False, True,  None,   gen_gaussian_multiple),
-    Scenario("gaussian_large",           False, True,  10_000, gen_gaussian_linear),
+    Scenario("gaussian_large",           False, True,  10_000, gen_gaussian_linear, reps_override=5),
     Scenario("gaussian_quadratic",       True,  True,  None,   gen_gaussian_quadratic),
     Scenario("poisson_linear",           False, True,  None,   gen_poisson_linear),
     Scenario("poisson_smooth",           True,  True,  None,   gen_poisson_smooth),
@@ -325,6 +333,19 @@ def write_parquet(data: dict[str, np.ndarray], path: Path) -> None:
     df.write_parquet(path)
 
 
+def rep_salt(k: int) -> int:
+    # Rep 0 → salt 0, so rep 0 reproduces the historical single-seed data.
+    # crc32 for cross-session stability (hash() is randomized by PYTHONHASHSEED).
+    return 0 if k == 0 else (zlib.crc32(f"__rep{k}__".encode()) & 0xFFFFFFFF)
+
+
+def scenario_rng(sub_seed: int, name: str, rep: int) -> np.random.Generator:
+    # sub_seed is spawned once per scenario in iteration order (see main); folding
+    # the name hash and rep salt in here keeps every rep-0 draw independent.
+    name_hash = zlib.crc32(name.encode()) & 0xFFFFFFFF
+    return np.random.default_rng(int(sub_seed) ^ name_hash ^ rep_salt(rep))
+
+
 # Per-fit wall-clock budget. A well-behaved fit is done in seconds; a hung
 # solver (or R session) shouldn't get to stall the whole run. Kill it and mark
 # the scenario failed instead.
@@ -362,6 +383,11 @@ def main() -> None:
              "StudentT scenarios (same RS algorithm + μ/σ/ν parameterization).",
     )
     parser.add_argument("--generate-only", action="store_true")
+    parser.add_argument("--reps", type=int, default=25, help="Replicates per scenario")
+    parser.add_argument(
+        "--jobs", type=int, default=None,
+        help="Parallel fit workers (default: os.cpu_count())",
+    )
     parser.add_argument(
         "--scenarios", nargs="*", default=None,
         help="Subset of scenario names to run (default: all)",
@@ -371,95 +397,76 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     selected = set(args.scenarios) if args.scenarios else {s.name for s in SCENARIOS}
+    active = [s for s in SCENARIOS if s.name in selected]
 
-    # 1. Data generation. Each scenario gets its own sub-RNG, so adding one doesn't perturb the others.
+    def data_path(name: str, rep: int) -> Path:
+        return args.output_dir / f"data_{name}_rep{rep}.parquet"
+
+    # 1. Data generation. sub_seed is spawned once per scenario in iteration
+    # order (preserving historical seeds); rep 0 reproduces the old single draw.
     base = np.random.SeedSequence(args.seed)
-    for scenario in SCENARIOS:
-        if scenario.name not in selected:
-            continue
+    for scenario in active:
         n = scenario.n_obs_override or args.n_obs
         sub_seed = base.spawn(1)[0].generate_state(1)[0]
-        # zlib.crc32 is deterministic across Python sessions. hash() is not:
-        # PYTHONHASHSEED randomization would hand you different data every run.
-        name_hash = zlib.crc32(scenario.name.encode()) & 0xFFFFFFFF
-        sub_rng = np.random.default_rng(int(sub_seed) ^ name_hash)
-        data = scenario.generate(sub_rng, n)
-        path = args.output_dir / f"data_{scenario.name}.parquet"
-        write_parquet(data, path)
-        print(f"[gen] {scenario.name}: n={n} → {path.name}", flush=True)
+        reps = scenario.reps(args.reps)
+        for k in range(reps):
+            data = scenario.generate(scenario_rng(int(sub_seed), scenario.name, k), n)
+            write_parquet(data, data_path(scenario.name, k))
+        print(f"[gen] {scenario.name}: n={n} × {reps} reps", flush=True)
 
     if args.generate_only:
         return
 
-    # 2. Fit + merge.
+    # 2. Fit. One independent subprocess per (scenario, rep, engine); run them
+    # through a thread pool since each writes its own JSON.
+    def engine_cmd(engine: str, scenario: Scenario, rep: int, out: Path) -> Optional[list[str]]:
+        common = ["--data", str(data_path(scenario.name, rep)),
+                  "--scenario", scenario.name, "--output", str(out)]
+        if engine == "glissando" and args.rust_binary and args.rust_binary.exists():
+            return [str(args.rust_binary), *common]
+        if engine == "mgcv" and args.r_script and args.r_script.exists() and scenario.mgcv_capable:
+            return ["Rscript", str(args.r_script), *common]
+        if engine == "gamlss" and args.gamlss_script and args.gamlss_script.exists() and "studentt" in scenario.name:
+            return ["Rscript", str(args.gamlss_script), *common]
+        return None
+
+    jobs = []
+    for scenario in active:
+        for rep in range(scenario.reps(args.reps)):
+            for engine in ("glissando", "mgcv", "gamlss"):
+                out = args.output_dir / f"{engine}_{scenario.name}_rep{rep}.json"
+                cmd = engine_cmd(engine, scenario, rep, out)
+                if cmd is not None:
+                    jobs.append((scenario.name, rep, engine, cmd, out))
+
+    results: dict[tuple[str, int, str], Optional[dict]] = {}
+    with ThreadPoolExecutor(max_workers=args.jobs or os.cpu_count()) as pool:
+        futures = {
+            pool.submit(run_subprocess, cmd, out, f"{engine}:{name}#{rep}"): (name, rep, engine)
+            for name, rep, engine, cmd, out in jobs
+        }
+        for fut in as_completed(futures):
+            results[futures[fut]] = fut.result()
+
+    # 3. Merge into schema v2: per scenario, a list of per-rep engine fits.
     summary_scenarios = []
-    for scenario in SCENARIOS:
-        if scenario.name not in selected:
-            continue
-
-        data_path = args.output_dir / f"data_{scenario.name}.parquet"
-        rust_result = None
-        mgcv_result = None
-        gamlss_result = None
-
-        if args.rust_binary and args.rust_binary.exists():
-            output = args.output_dir / f"rust_{scenario.name}.json"
-            rust_result = run_subprocess(
-                [
-                    str(args.rust_binary),
-                    "--data", str(data_path),
-                    "--scenario", scenario.name,
-                    "--output", str(output),
-                ],
-                output,
-                f"rust:{scenario.name}",
-            )
-
-        if args.r_script and args.r_script.exists() and scenario.mgcv_capable:
-            output = args.output_dir / f"mgcv_{scenario.name}.json"
-            mgcv_result = run_subprocess(
-                [
-                    "Rscript", str(args.r_script),
-                    "--data", str(data_path),
-                    "--scenario", scenario.name,
-                    "--output", str(output),
-                ],
-                output,
-                f"mgcv:{scenario.name}",
-            )
-
-        # gamlss TF() is the real like-for-like reference for StudentT: same RS
-        # algorithm, same (μ, σ, ν) parameterization, so it exposes the σ/ν/EDF/SE
-        # that mgcv's scat() can't. scat() stays above only as a loose, mu-only
-        # cross-method (independent-algorithm) sanity check.
-        if (
-            args.gamlss_script
-            and args.gamlss_script.exists()
-            and "studentt" in scenario.name
-        ):
-            output = args.output_dir / f"gamlss_{scenario.name}.json"
-            gamlss_result = run_subprocess(
-                [
-                    "Rscript", str(args.gamlss_script),
-                    "--data", str(data_path),
-                    "--scenario", scenario.name,
-                    "--output", str(output),
-                ],
-                output,
-                f"gamlss:{scenario.name}",
-            )
-
-        summary_scenarios.append({
-            "name": scenario.name,
-            "smooth": scenario.smooth,
-            "glissando": rust_result,
-            "mgcv": mgcv_result,
-            "gamlss": gamlss_result,
-        })
+    for scenario in active:
+        reps = [
+            {
+                "rep": rep,
+                "glissando": results.get((scenario.name, rep, "glissando")),
+                "mgcv": results.get((scenario.name, rep, "mgcv")),
+                "gamlss": results.get((scenario.name, rep, "gamlss")),
+            }
+            for rep in range(scenario.reps(args.reps))
+        ]
+        summary_scenarios.append({"name": scenario.name, "smooth": scenario.smooth, "reps": reps})
 
     summary = {
+        "version": 2,
         "n_obs": args.n_obs,
         "seed": args.seed,
+        "reps": args.reps,
         "scenarios": summary_scenarios,
     }
     out_path = args.output_dir / "comparison_summary.json"
