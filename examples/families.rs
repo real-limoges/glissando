@@ -26,7 +26,11 @@ fn main() -> Result<(), GamlssError> {
     data.insert_column("x", Array1::from_vec(x.clone()));
 
     // Gaussian: symmetric continuous, mean varying smoothly with x.
-    let y = Array1::from_vec(x.iter().map(|&v| v.sin() + 0.3 * (unit(&mut s) - 0.5)).collect());
+    let y = Array1::from_vec(
+        x.iter()
+            .map(|&v| v.sin() + 0.3 * (unit(&mut s) - 0.5))
+            .collect(),
+    );
     let f = Formula::from_strings([("mu", "y ~ s(x)"), ("sigma", "~ 1")])?;
     let m = GamlssModel::fit(&data, &y, &f, &Gaussian::new())?;
     println!(
