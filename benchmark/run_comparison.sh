@@ -11,6 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 N_OBS=${N_OBS:-1000}
 SEED=${SEED:-42}
+REPS=${REPS:-25}
 
 echo "========================================"
 echo "GAMLSS Comparison Framework"
@@ -18,6 +19,7 @@ echo "========================================"
 echo "Output directory: ${OUTPUT_DIR}"
 echo "Observations: ${N_OBS}"
 echo "Seed: ${SEED}"
+echo "Replicates: ${REPS}"
 echo ""
 
 # Step 1: Build Rust binary
@@ -58,12 +60,13 @@ uv run --project "${SCRIPT_DIR}" python3 "${SCRIPT_DIR}/orchestrate.py" \
     --generate-only \
     --output-dir "${OUTPUT_DIR}" \
     --n-obs "${N_OBS}" \
-    --seed "${SEED}"
+    --seed "${SEED}" \
+    --reps "${REPS}"
 
 # Step 4: Run comparison
 echo "[4/4] Running comparison..."
 
-ARGS="--output-dir ${OUTPUT_DIR} --n-obs ${N_OBS} --seed ${SEED}"
+ARGS="--output-dir ${OUTPUT_DIR} --n-obs ${N_OBS} --seed ${SEED} --reps ${REPS}"
 
 if [ -n "${R_SCRIPT}" ]; then
     ARGS="${ARGS} --r-script ${R_SCRIPT}"

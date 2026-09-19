@@ -57,7 +57,10 @@ gam_converged <- function(m) {
   if (!is.null(m$converged)) return(isTRUE(m$converged))
   if (!is.null(m$outer.info))
     return(grepl("full conv", m$outer.info$conv, ignore.case = TRUE))
-  TRUE  # assume converged when no flag is present
+  # Fail closed: a fit with no convergence flag is treated as non-converged.
+  fam <- tryCatch(m$family$family, error = function(e) "unknown")
+  message(sprintf("gam_converged: no convergence flag for family '%s'; treating as non-converged", fam))
+  FALSE
 }
 
 # Standard emit for single-predictor gam models.  Adds `sp` and `se_eta` to
