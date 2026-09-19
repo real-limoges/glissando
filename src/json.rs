@@ -29,11 +29,19 @@
 //!
 //! # Distribution dispatch
 //!
-//! [`fit`] and [`load`] resolve a distribution by name via
+//! A *fresh fit* ([`fit`]) resolves a distribution by name via
 //! [`crate::distributions::from_name`], which covers `Gaussian`, `Poisson`,
-//! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `BCCG`, `BCT`, and `BCPE`.
-//! `Binomial` sits this one out: it needs `n_trials` state, and a bare name has
-//! nowhere to carry that, so build it through the typed API instead.
+//! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, `BCCG`, `BCT`, and `BCPE`.
+//! Stateful families sit this path out: `Binomial` needs `n_trials` and `Ocat`
+//! needs `n_categories`, and a bare name has nowhere to carry that, so originate
+//! those fits through the typed API instead.
+//!
+//! *Round-tripping* a saved model ([`load`]) is different: it rebuilds the
+//! distribution from the [`crate::distributions::FamilyDescriptor`] serialized
+//! alongside the model, which does carry that state (n_trials, n_categories, and
+//! the structural wrappers' bounds). A `Binomial` or `Ocat` model therefore
+//! survives `to_json` / `load` intact; only fitting one from a name string is
+//! unavailable here.
 //!
 //! # Example
 //!
