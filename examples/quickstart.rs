@@ -32,7 +32,10 @@ fn main() -> Result<(), GamlssError> {
     // predict on the response scale, keyed by parameter name
     let preds = model.predict(&data, &family)?;
     println!("mu[0..3]    = {:?}", &preds["mu"].as_slice().unwrap()[..3]);
-    println!("sigma[0..3] = {:?}", &preds["sigma"].as_slice().unwrap()[..3]);
+    println!(
+        "sigma[0..3] = {:?}",
+        &preds["sigma"].as_slice().unwrap()[..3]
+    );
 
     // randomized quantile residuals are the GAMLSS default residual
     let resid = model.quantile_residuals(&family, &y, Some(42))?;

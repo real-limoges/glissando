@@ -128,7 +128,10 @@ fn ocat_descriptor_round_trips() {
     // eta is constant for this intercept-only case, so the category
     // probabilities are fixed; compute them once, then just draw per row.
     let thresholds = [-1.0_f64, 0.0, 1.2];
-    let cum: Vec<f64> = thresholds.iter().map(|&t| 1.0 / (1.0 + (-t).exp())).collect();
+    let cum: Vec<f64> = thresholds
+        .iter()
+        .map(|&t| 1.0 / (1.0 + (-t).exp()))
+        .collect();
     let p = [cum[0], cum[1] - cum[0], cum[2] - cum[1], 1.0 - cum[2]];
     let y: Array1<f64> = (0..n)
         .map(|_| {
@@ -153,7 +156,11 @@ fn ocat_descriptor_round_trips() {
     // Guard the data itself: all four categories must be present, or this would
     // silently fit a 4-category Ocat on degenerate data and prove nothing.
     let present: std::collections::BTreeSet<i64> = y.iter().map(|&v| v as i64).collect();
-    assert_eq!(present.len(), n_categories, "all {n_categories} categories must be sampled");
+    assert_eq!(
+        present.len(),
+        n_categories,
+        "all {n_categories} categories must be sampled"
+    );
 
     let family = Ocat::new(n_categories);
     let model = GamlssModel::fit(&dummy_data(n), &y, &formula, &family).unwrap();

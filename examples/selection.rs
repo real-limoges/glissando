@@ -41,7 +41,10 @@ fn main() -> Result<(), GamlssError> {
 
     // Likelihood-ratio test (small model first, then the larger nested model).
     let lr = lr_test(&m_null, &m_x, &family, &y)?;
-    println!("LR test: stat={:.2}  df={:.0}  p={:.4}", lr.lr_stat, lr.df, lr.p_value);
+    println!(
+        "LR test: stat={:.2}  df={:.0}  p={:.4}",
+        lr.lr_stat, lr.df, lr.p_value
+    );
 
     // Forward stepwise over candidate linear terms {x, z} on mu.
     let scope = vec![StepScope {
