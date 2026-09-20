@@ -118,5 +118,43 @@ mod tests {
                 }
             }
         }
+
+        /// The difference penalty `S = D'D` is PSD by construction, over arbitrary
+        /// order and basis size.
+        #[test]
+        fn penalty_matrix_always_psd(
+            n_splines in 4usize..20,
+            order in 1usize..=4,
+        ) {
+            let p = create_penalty_matrix(n_splines, order);
+            prop_assert!(is_psd(&p));
+        }
+
+        /// An order-`d` difference penalty annihilates every polynomial of degree
+        /// `< d`: `v'Sv = 0` for `v` a monomial sequence `(i^p)_i`, `p < order`.
+        /// That is what fixes the penalty's null-space dimension at `order` (hence
+        /// its rank at `n_splines - order`), the property REML/GCV lean on.
+        #[test]
+        fn penalty_null_space_contains_low_degree_polynomials(
+            n_splines in 6usize..20,
+            order in 1usize..=4,
+        ) {
+            let p = create_penalty_matrix(n_splines, order);
+            for deg in 0..order {
+                // Normalize the abscissa to [0, 1] so high powers stay well-scaled.
+                let v: Array1<f64> = Array1::from_iter(
+                    (0..n_splines).map(|i| {
+                        let t = i as f64 / (n_splines - 1) as f64;
+                        t.powi(deg as i32)
+                    })
+                );
+                let q = v.dot(&p.dot(&v));
+                prop_assert!(
+                    q.abs() < 1e-9,
+                    "degree-{} polynomial not in null space (order {}): q = {}",
+                    deg, order, q
+                );
+            }
+        }
     }
 }

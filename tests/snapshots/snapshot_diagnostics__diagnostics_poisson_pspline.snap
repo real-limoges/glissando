@@ -1,0 +1,22 @@
+---
+source: tests/snapshot_diagnostics.rs
+assertion_line: 110
+expression: snap
+---
+n_obs: 150
+total_edf: "2.00e0"
+log_likelihood: "-2.8176e2"
+aic: "5.6752e2"
+bic: "5.7354e2"
+gaic_k2: "5.6752e2"
+gaic_bic: "5.7354e2"
+pearson_residuals:
+  n: 150
+  std: "9.59e-1"
+  min: "-2.03e0"
+  max: "2.82e0"
+response_residuals:
+  n: 150
+  std: "1.70e0"
+  min: "-4.18e0"
+  max: "6.18e0"

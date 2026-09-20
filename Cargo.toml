@@ -102,3 +102,6 @@ harness = false
 
 [workspace]
 members = ["benchmark"]
+# `fuzz/` is its own cargo-fuzz workspace (nightly-only, libfuzzer); keep it out of
+# the main workspace so stable `cargo build`/`cargo test` never touch it.
+exclude = ["fuzz"]
