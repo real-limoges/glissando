@@ -188,6 +188,8 @@ fn evaluate_basis_functions_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use proptest::prelude::*;
 
     // --- create_basis_matrix ---
 
@@ -337,6 +339,54 @@ mod tests {
                     got
                 );
             }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest! {
+        /// The three structural invariants of a well-formed B-spline basis, over
+        /// arbitrary knot counts, degrees, and sample sizes: every entry is finite
+        /// and non-negative, and interior rows form a partition of unity (sum to 1).
+        /// Boundary rows are skipped because a point sitting exactly on the extreme
+        /// knot can lose a hair of mass to fp rounding, which the example tests
+        /// already pin at the endpoints via golden values.
+        #[test]
+        fn basis_is_finite_nonnegative_and_partitions_unity(
+            degree in 1usize..=3,
+            extra_splines in 2usize..14,
+            n_points in 40usize..120,
+        ) {
+            let n_splines = degree + extra_splines;
+            let x = Array1::linspace(0.0, 1.0, n_points);
+            let b = create_basis_matrix(&x, n_splines, degree);
+            prop_assert_eq!(b.dim(), (n_points, n_splines));
+
+            for &v in b.iter() {
+                prop_assert!(v.is_finite(), "basis entry {} not finite", v);
+                prop_assert!(v >= -1e-12, "basis entry {} negative beyond tolerance", v);
+            }
+
+            // Skip a 15% margin at each end where boundary effects apply.
+            let margin = (n_points as f64 * 0.15).ceil() as usize;
+            for row in b.outer_iter().skip(margin).take(n_points - 2 * margin) {
+                let s: f64 = row.iter().sum();
+                prop_assert!((s - 1.0).abs() < 1e-9, "interior row sum {} not ≈ 1", s);
+            }
+        }
+
+        /// Degenerate `n_splines <= degree` returns a correctly-shaped zero matrix
+        /// rather than panicking or producing NaN.
+        #[test]
+        fn degenerate_basis_is_zeros(
+            degree in 1usize..=5,
+            deficit in 0usize..=3,
+            n_points in 1usize..30,
+        ) {
+            let n_splines = degree.saturating_sub(deficit);
+            let x = Array1::linspace(0.0, 1.0, n_points);
+            let b = create_basis_matrix(&x, n_splines, degree);
+            prop_assert_eq!(b.dim(), (n_points, n_splines));
+            prop_assert!(b.iter().all(|&v| v == 0.0));
         }
     }
 }
