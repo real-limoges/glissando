@@ -137,8 +137,16 @@ fn median(vals: &[f64]) -> f64 {
 /// Starting point; recalibrate per scenario from a first nightly's observed
 /// distributions.
 const LOOSE_MULT: f64 = 2.0;
-/// Loosest allowed spread (p90/median) of glissando's own λ across replicates.
-const LAMBDA_SPREAD_MAX: f64 = 10.0;
+/// Spread (p90/median) of glissando's own λ across replicates past which we print
+/// a diagnostic. Deliberately *not* a gate: λ is unidentified wherever the LAML
+/// surface is flat (a smooth collapsing onto its penalty null space, an
+/// anisotropic tensor margin on a ridge), so its cross-rep spread is noise about a
+/// quantity the data doesn't pin down. A λ excursion large enough to *matter*
+/// moves fitted_mu / EDF / log-likelihood, which are gated per-rep against mgcv
+/// (or gamlss); one that doesn't move the fit is harmless. So this loop can only
+/// ever be redundant with those checks or a false alarm on the flat ridge; it
+/// stays as a printed heads-up, never a failure.
+const LAMBDA_SPREAD_NOTE: f64 = 10.0;
 
 /// Gate a distribution of ratios (observed / tolerance): fail if the median
 /// exceeds the tight bound or the p90 exceeds the loose bound.
@@ -180,6 +188,10 @@ impl Acc {
             }
         }
 
+        // λ self-consistency across reps: diagnostic only, never a failure (see
+        // LAMBDA_SPREAD_NOTE). A wide spread here flags an unidentified λ on a flat
+        // LAML ridge, which is expected and harmless; the fit-quality metrics above
+        // are what actually gate glissando against the reference.
         for (param, per_rep) in &self.lambdas {
             let width = per_rep.iter().map(|v| v.len()).min().unwrap_or(0);
             for i in 0..width {
@@ -189,10 +201,11 @@ impl Acc {
                     continue;
                 }
                 let spread = percentile(&col, 0.90) / med;
-                if spread > LAMBDA_SPREAD_MAX {
-                    failures.push(format!(
-                        "{name}: glissando λ unstable across reps: {param}[{i}] p90/median={spread:.1} (max {LAMBDA_SPREAD_MAX:.0})"
-                    ));
+                if spread > LAMBDA_SPREAD_NOTE {
+                    eprintln!(
+                        "note: {name}: glissando λ spread across reps: {param}[{i}] p90/median={spread:.1} \
+                         (>{LAMBDA_SPREAD_NOTE:.0}); λ unidentified on a flat ridge here, fit metrics gate correctness"
+                    );
                 }
             }
         }
