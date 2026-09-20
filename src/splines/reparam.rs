@@ -42,6 +42,8 @@ pub(crate) fn sum_to_zero_basis(k: usize) -> Array2<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use proptest::prelude::*;
 
     // --- sum_to_zero_basis ---
 
@@ -97,5 +99,37 @@ mod tests {
         let beta = z.dot(&gamma);
         let dot_with_ones: f64 = beta.iter().sum();
         assert!(dot_with_ones.abs() < 1e-12);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    proptest! {
+        /// For any `k >= 2` the reparameterization matrix is `k×(k-1)`, has
+        /// orthonormal columns (`Z'Z = I`), and spans the null-space of `1_k`
+        /// (`Z'·1_k = 0`, so every column sums to zero). These three together are
+        /// exactly what makes `B·Z` an identifiable sum-to-zero smooth.
+        #[test]
+        fn reparam_is_orthonormal_null_space_of_ones(k in 2usize..40) {
+            let z = sum_to_zero_basis(k);
+            prop_assert_eq!(z.dim(), (k, k - 1));
+
+            // Z'·1_k = 0: every column sums to zero.
+            for j in 0..(k - 1) {
+                let s: f64 = z.column(j).sum();
+                prop_assert!(s.abs() < 1e-10, "col {} sum {} not ≈ 0", j, s);
+            }
+
+            // Z'Z = I_{k-1}: columns orthonormal.
+            let zt_z = z.t().dot(&z);
+            for i in 0..(k - 1) {
+                for j in 0..(k - 1) {
+                    let expected = if i == j { 1.0 } else { 0.0 };
+                    prop_assert!(
+                        (zt_z[[i, j]] - expected).abs() < 1e-9,
+                        "Z'Z[{},{}] = {} (expected {})",
+                        i, j, zt_z[[i, j]], expected
+                    );
+                }
+            }
+        }
     }
 }
