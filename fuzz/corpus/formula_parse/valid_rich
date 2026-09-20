@@ -1,0 +1,1 @@
+y ~ s(x, k=12) + te(x, z) + offset(e)
