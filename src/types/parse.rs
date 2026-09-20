@@ -118,7 +118,17 @@ fn parse_interaction(s: &str) -> Result<Term, GamlssError> {
 
 /// Left-fold a non-empty list of terms into a chain of `Term::Interaction`s; a
 /// single term passes through unchanged.
+///
+/// Both callers build `atoms` from `split_top_level`, which always yields at least
+/// one (possibly empty) piece, and every piece is parsed into a term before we get
+/// here, so `atoms` is never empty in practice. The `debug_assert` pins that
+/// invariant: `remove(0)` on an empty vec would panic, and the parser must stay
+/// total (see `parse_never_panics_on_arbitrary_input` in `tests/formula_parse.rs`).
 fn fold_interaction(mut atoms: Vec<Term>) -> Term {
+    debug_assert!(
+        !atoms.is_empty(),
+        "fold_interaction requires a non-empty atom list"
+    );
     let mut acc = atoms.remove(0);
     for next in atoms {
         acc = Term::interaction(acc, next);

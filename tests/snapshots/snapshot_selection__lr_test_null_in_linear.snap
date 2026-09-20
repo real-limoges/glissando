@@ -1,0 +1,8 @@
+---
+source: tests/snapshot_selection.rs
+assertion_line: 94
+expression: lr_snap
+---
+lr_stat: "1.15e3"
+df: "1.00e0"
+p_value: "2.40e-251"

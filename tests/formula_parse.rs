@@ -95,7 +95,8 @@ mod prop {
     use glissando::parse_formula_string;
     use proptest::prelude::*;
 
-    /// A pool of atomic term spellings the parser supports.
+    /// A pool of atomic term spellings the parser supports, including `*` crossing
+    /// and nested interactions so the fold paths are exercised too.
     fn atom() -> impl Strategy<Value = &'static str> {
         proptest::sample::select(vec![
             "x",
@@ -109,6 +110,8 @@ mod prop {
             "factor(g, sum)",
             "offset(e)",
             "a:b",
+            "a:b:z",
+            "a*b",
             "factor(g):x",
         ])
     }
@@ -139,6 +142,35 @@ mod prop {
             let rerendered: Vec<String> = terms2.iter().map(|t| t.to_string()).collect();
 
             prop_assert_eq!(rendered, rerendered);
+        }
+
+        /// The parser is total: on *any* input it returns `Ok`/`Err`, never panics
+        /// (no `unwrap`, no out-of-bounds index, no `remove(0)` on an empty fold).
+        /// A successful parse always yields at least one term.
+        #[test]
+        fn parse_never_panics_on_arbitrary_input(s in ".*") {
+            if let Ok((_resp, terms)) = parse_formula_string(&s) {
+                prop_assert!(!terms.is_empty(), "Ok parse produced no terms for {:?}", s);
+            }
+        }
+
+        /// Same totality guarantee, but with inputs drawn from the formula alphabet
+        /// (operators, parentheses, quotes, `=`), which reaches the crossing /
+        /// interaction / call-argument branches far more often than random unicode.
+        #[test]
+        fn parse_never_panics_on_formula_alphabet(
+            s in proptest::collection::vec(
+                proptest::sample::select(vec![
+                    "x", "y", "z", "g", "e", "a", "b", "1", "0", "-1", "12",
+                    "s", "te", "factor", "offset", "bs", "k", "sum", "cr", "re",
+                    "+", ":", "*", "(", ")", ",", "=", "\"", " ", "~",
+                ]),
+                0..14,
+            ).prop_map(|parts| parts.concat()),
+        ) {
+            if let Ok((_resp, terms)) = parse_formula_string(&s) {
+                prop_assert!(!terms.is_empty(), "Ok parse produced no terms for {:?}", s);
+            }
         }
     }
 }

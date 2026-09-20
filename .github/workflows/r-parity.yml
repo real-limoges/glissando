@@ -54,3 +54,14 @@ jobs:
 
       - name: Assert parity against R
         run: cargo test --test mgcv_reference -- --ignored --nocapture
+
+      - name: Publish the regenerated fixture
+        # The per-commit gate (`glissando_matches_committed_mgcv_fixture` in
+        # rust.yml's suite) checks the *committed* copy of this file. When families
+        # or scenarios change, download this artifact and commit it to refresh that
+        # guardrail. Uploaded on success so only parity-passing data gets promoted.
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-summary
+          path: benchmark/output/comparison_summary.json
+          if-no-files-found: error

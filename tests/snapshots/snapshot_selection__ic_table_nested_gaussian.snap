@@ -1,0 +1,17 @@
+---
+source: tests/snapshot_selection.rs
+assertion_line: 85
+expression: table_snap
+---
+- label: "null"
+  edf: "2.00e0"
+  global_deviance: "1.56e3"
+  gaic: "1.56e3"
+- label: linear
+  edf: "3.00e0"
+  global_deviance: "4.10e2"
+  gaic: "4.16e2"
+- label: smooth
+  edf: "3.00e0"
+  global_deviance: "4.10e2"
+  gaic: "4.16e2"

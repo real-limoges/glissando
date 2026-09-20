@@ -477,11 +477,10 @@ fn record_mgcv(
     }
 }
 
-#[test]
-#[ignore = "requires benchmark/output/comparison_summary.json (run benchmark/run_comparison.sh)"]
-fn glissando_matches_mgcv_within_tolerance() {
-    let summary = load_summary()
-        .expect("failed to load comparison_summary.json; run benchmark/run_comparison.sh first");
+/// Run the full parity comparison over a loaded summary and panic on any failure.
+/// Shared by the `--ignored` regenerate-and-check path and the per-commit fixture
+/// gate so the two never drift apart.
+fn assert_parity(summary: &ComparisonSummary) {
     assert_eq!(
         summary.version, 2,
         "expected comparison_summary.json schema v2; regenerate with benchmark/run_comparison.sh"
@@ -541,6 +540,35 @@ fn glissando_matches_mgcv_within_tolerance() {
         failures.len(),
         failures.join("\n  - ")
     );
+}
+
+/// Regenerate-and-check path: reads the freshly-produced summary and requires it to
+/// be present, so a nightly R run that generates bad data fails loudly. `#[ignore]`d
+/// because it needs `benchmark/run_comparison.sh` (R + mgcv + gamlss) to have run.
+#[test]
+#[ignore = "requires benchmark/output/comparison_summary.json (run benchmark/run_comparison.sh)"]
+fn glissando_matches_mgcv_within_tolerance() {
+    let summary = load_summary()
+        .expect("failed to load comparison_summary.json; run benchmark/run_comparison.sh first");
+    assert_parity(&summary);
+}
+
+/// Per-commit guardrail: when the fixture is committed it enforces mgcv parity on
+/// every `cargo test`, with no R in the loop. When the fixture is absent (a fresh
+/// clone, or a machine/CI job without the benchmark data) it skips cleanly rather
+/// than failing, so the suite stays green. The nightly `r-parity` job stays the
+/// source of truth that regenerates the fixture; this is the fast guardrail against
+/// the committed copy. Not `#[ignore]`d, so it runs in the normal suite.
+#[test]
+fn glissando_matches_committed_mgcv_fixture() {
+    match load_summary() {
+        Some(summary) => assert_parity(&summary),
+        None => eprintln!(
+            "skipping mgcv parity: {SUMMARY_PATH} not present. \
+             The nightly r-parity job regenerates it; commit that fixture to \
+             enforce parity on every commit."
+        ),
+    }
 }
 
 #[test]
