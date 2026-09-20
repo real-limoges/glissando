@@ -1,0 +1,7 @@
+# cargo-fuzz build output and crash artifacts. The seed corpus under corpus/ is
+# tracked; coverage-guided inputs cargo-fuzz adds there during a run are not
+# ignored here so you can choose to commit interesting ones, but target/ and
+# artifacts/ are always generated.
+/target
+/artifacts
+Cargo.lock
