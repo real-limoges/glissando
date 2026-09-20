@@ -1,0 +1,51 @@
+name: Fuzz
+
+# TEST-2: coverage-guided fuzzing of the two untrusted string seams, the formula
+# parser and the JSON embedding facade. A crash (panic, OOM, timeout) fails the job.
+#
+# Per-PR runs are a short smoke test; the nightly cron runs each target much longer
+# to reach deeper paths. The fuzz crate (`fuzz/`) is its own workspace on the
+# pure-rust backend, so no system OpenBLAS is needed.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      # 60s per target on a PR/push; 10 minutes each on the nightly cron.
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz the formula parser
+        run: cargo +nightly fuzz run formula_parse -- -max_total_time=$FUZZ_SECONDS
+
+      - name: Fuzz the JSON facade
+        run: cargo +nightly fuzz run json_facade -- -max_total_time=$FUZZ_SECONDS
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

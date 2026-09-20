@@ -1,0 +1,1 @@
+y ~ factor(g):x + a*b

@@ -45,16 +45,30 @@ cd benchmark
 ```
 
 Once the data is regenerated, `tests/mgcv_reference.rs` checks the glissando results
-against mgcv coefficient-by-coefficient and pointwise on fitted μ:
+against mgcv coefficient-by-coefficient and pointwise on fitted μ. There are two entry
+points into the same comparison logic (`assert_parity`):
 
 ```bash
+# Regenerate-and-check: reads the freshly-produced summary, requires it to exist.
 cargo test --test mgcv_reference -- --ignored
+
+# Per-commit gate: checks the committed fixture if present, skips cleanly if not.
+cargo test --test mgcv_reference glissando_matches_committed_mgcv_fixture
 ```
 
-The test reads `benchmark/output/comparison_summary.json` (gitignored) and asserts
-agreement within scenario-aware tolerances (~1e-3 relative for linear models, ~5% for
-smooths). It is `#[ignore]`-gated on purpose: the comparison output has to exist locally
-first, and CI without R has no way to produce it.
+Both assert agreement within scenario-aware tolerances (~1e-3 relative for linear models,
+~5% for smooths). The `--ignored` test is gated because it needs R to have just produced
+the data; the per-commit gate is not `#[ignore]`d and runs in the normal suite.
+
+### Fixture cadence
+
+`benchmark/output/` is gitignored except for one allowlisted file,
+`comparison_summary.json`, which is the fixture the per-commit gate reads. The nightly
+`r-parity` workflow is the source of truth: it installs R + mgcv + gamlss, regenerates the
+summary, asserts parity, and uploads the regenerated `comparison_summary.json` as a build
+artifact. When families or scenarios change, download that artifact and commit it to
+refresh the guardrail. Machines and CI jobs without the fixture simply skip the per-commit
+gate, so a fresh clone stays green.
 
 ## Commands
 

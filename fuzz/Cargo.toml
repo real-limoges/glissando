@@ -1,0 +1,40 @@
+# cargo-fuzz crate (TEST-2). Its own workspace so the stable-toolchain build of the
+# root crate never pulls in libfuzzer (which needs nightly). Run with:
+#   cargo +nightly fuzz run formula_parse
+#   cargo +nightly fuzz run json_facade
+[package]
+name = "glissando-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# pure-rust backend so the fuzz sandbox needs no system OpenBLAS; serialization
+# for the JSON facade target.
+[dependencies.glissando]
+path = ".."
+default-features = false
+features = ["pure-rust", "serialization"]
+
+[[bin]]
+name = "formula_parse"
+path = "fuzz_targets/formula_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_facade"
+path = "fuzz_targets/json_facade.rs"
+test = false
+doc = false
+bench = false
+
+# Empty workspace table makes this crate its own workspace root, excluded from the
+# parent workspace.
+[workspace]
