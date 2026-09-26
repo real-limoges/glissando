@@ -10,17 +10,12 @@ CLAUDE.md
 .venv-prepush/
 *.pyc
 __pycache__/
-docs/*
-!docs/math/
-!docs/math/mathematics.md
-!docs/math/mathematics.pdf
-!docs/math/build-math-pdf.sh
-!docs/planning/
-docs/planning/feature-brainstorm.md
-!docs/planning/ROADMAP.html
-docs/planning/*.md
 
 # Accidental root-level npm scaffolding — the published npm package is pkg/.
 /package.json
 /package-lock.json
 
+# docs/: only the public reference/ tree (cookbook + math) is tracked;
+# decisions/, state.yaml, private-notes/, html/ stay local.
+docs/*
+!docs/reference/
