@@ -207,7 +207,7 @@ def main() -> None:
     print(f"  glissando loglik(tr) : {rust_smooth['loglik_train']:.4f}")
     print(f"  mgcv loglik(tr)      : {mgcv_smooth['loglik_train']:.4f}")
 
-    print(f"\n  glissando vs mgcv — per-cell relative error on (n × 4) probs:")
+    print(f"\n  glissando vs mgcv: per-cell relative error on (n × 4) probs:")
     print(f"    P50 = {np.percentile(flat_vm, 50):.4f}")
     print(f"    P95 = {np.percentile(flat_vm, 95):.4f}  (target < {PROB_P95_TARGET:.2f})")
     print(f"    max = {flat_vm.max():.4f}")
@@ -215,7 +215,7 @@ def main() -> None:
     print(f"  Argmax agreement vs mgcv : {argmax_agreement(rust_probs, mgcv_probs):.1%}"
           f"  (target ≥ {ARGMAX_TARGET:.0%})")
 
-    print(f"\n  glissando vs TRUE probs — per-cell relative error:")
+    print(f"\n  glissando vs TRUE probs: per-cell relative error:")
     print(f"    P50 = {np.percentile(flat_vt, 50):.4f}")
     print(f"    P95 = {np.percentile(flat_vt, 95):.4f}")
     print(f"    max = {flat_vt.max():.4f}")

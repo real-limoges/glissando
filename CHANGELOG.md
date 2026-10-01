@@ -173,21 +173,27 @@ contract inverted to the natural scale.
 
 ### Added
 
-- **`Weibull` distribution** (gamlss `WEI`: scale `μ`, shape `σ`, both log-linked)
-  in `src/distributions/weibull.rs`, with analytic score/Fisher weights, closed-form
-  `cdf` (`1 − exp(−(y/μ)^σ)`) and `quantile` (`μ·(−ln(1−p))^(1/σ)`). Registered across
-  every surface: `from_name`, the FFI `FamilyType` (WASM), and the Python `Weibull`
-  class. Full derivation in `docs/math/mathematics.md` `[WEIBULL]`.
-- **Tag-based cross-references in `docs/math/mathematics.md`**: named subsections are
-  now cited by stable bracketed tags (e.g. `[WEIBULL]`, `[CDF-TRIO]`, `[PWLS-CHOLESKY]`)
-  instead of section numbers, so inserting a family no longer renumbers the document.
+- **`Weibull` distribution** (gamlss `WEI`: scale `μ`, shape `σ`, both log-linked) in `src/distributions/weibull.rs`.
+  It has analytic natural-scale score and Fisher information (`theta_derivatives`), a closed-form `cdf` (`1 − exp(−(y/μ)^σ)`) and a closed-form `quantile` (`μ·(−ln(1−p))^(1/σ)`).
+  It is selectable by name (`"Weibull"`) through `from_name` on the native and JSON/WASM surfaces, and as the Python `Weibull()` class, bringing the catalog to 12 families.
+  The full derivation is in `docs/reference/mathematics.md` `[WEIBULL]`.
+- **Tag-based cross-references in `docs/reference/mathematics.md`**: named subsections are now cited by stable bracketed tags (e.g. `[WEIBULL]`, `[CDF-TRIO]`, `[PWLS-CHOLESKY]`) instead of section numbers, so inserting a family no longer renumbers the document.
   Chapter-level references keep the `§N` form.
-
-- **Weibull family**: a two-parameter (`mu`, `sigma`) Weibull distribution in
-  `src/distributions/weibull.rs`, with analytic score/Fisher `derivatives`,
-  `cdf` (`1 − exp(−(y/μ)^σ)`), `quantile`, and log-linked `mu`/`sigma`.
-  Selectable by name (`"Weibull"`) across native, JSON/WASM, and Python
-  (`Weibull()`) surfaces, bringing the catalog to 12 families.
+- **Box-Cox family (`BCCG`, `BCT`, `BCPE`)**: the gamlss Box-Cox Cole-Green, Box-Cox t and Box-Cox power exponential distributions for positive, skewed responses, in `src/distributions/{boxcox,bccg,bct,bcpe}.rs`.
+  All three are selectable by name.
+- **`Ocat` ordered-categorical family** (proportional-odds / cumulative logit) for 2 to 5 categories, in `src/distributions/ocat.rs`.
+  It carries its category count as state, so it is constructed explicitly (`Ocat::new(k)` in Rust, `Ocat(n_categories=k)` in Python) rather than by name.
+  `GamlssModel::predict_class_probabilities` returns the per-category probabilities.
+- **Cubic regression splines**: `Smooth::cr` (mgcv `bs="cr"`), with an optional point constraint `pc`.
+- **Model selection** in `glissando::selection`: `ic_table` (GAIC comparison across models), `lr_test` (likelihood-ratio test for nested models) and `step_gaic` (stepwise term selection, `Direction::{Forward, Backward, Both}`), plus `GamlssModel::gaic`.
+- **Centiles and quantile residuals**: `GamlssModel::centiles` and `GamlssModel::quantile_residuals` (randomized for discrete families).
+- **`glissando::json` facade** (feature `serialization`): JSON parse and serialize plus `fit` / `predict` / `load` and the diagnostics and selection helpers, for embedders behind a custom FFI.
+  `src/wasm.rs` is now a thin shim over it.
+- **Per-parameter link overrides**: `FitConfig::with_link(param, link)` (or the `links` field, `{"links": {...}}` in JSON) selects any of the 9 named links: identity, log, logit, probit, cloglog, inverse, inverse_square, sqrt and cauchit.
+- **R-style formula strings**: `parse_formula_string` and `Formula::from_strings` parse specs such as `"y ~ s(x, bs=\"cr\") + te(a, b) + factor(g) + a:b + offset(e)"` into the same terms the builder API produces.
+  New `Term::Offset`, `Term::Factor` (with `Contrast::Treatment` or sum-to-zero contrasts) and `Term::Interaction` variants back them.
+- **Missing-data handling**: `NaAction::DropRows` (the default, R's `na.omit`) or `NaAction::Fail`, set with `FitConfig::with_na_action`.
+- **Prior weights**: `GamlssModel::fit_weighted`, and a `weights` argument on `fit_with_config` and `json::fit`.
 - **Structural likelihoods (STRUCT-1..3)**: `Censored`, `Truncated`, and
   `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base
   family, in `src/distributions/{censored,truncated,hurdle}.rs`. Censoring swaps
@@ -197,11 +203,10 @@ contract inverted to the natural scale.
 - **Finite mixtures (STRUCT-4)**: `MixtureModel` and `fit_mixture` in
   `src/fitting/mixture.rs` fit a `K`-component mixture by EM, reusing the
   prior-weighted RS fit as the M-step. Re-exported at the crate root.
-- **`Distribution::cdf_eta_derivatives`**: a new trait hook returning analytic
-  `(∂F/∂η, ∂²F/∂η²)` per parameter; implemented for the location/scale parameters
-  of Gaussian, Student-t, and Gamma, with a central-difference fallback (shared
-  helper `src/distributions/structural.rs`) for shape parameters. Drives the
-  censoring/truncation score and observed-information weight.
+- **`Distribution::cdf_theta_derivatives`**: a new trait hook returning analytic natural-scale `(∂F/∂θ, ∂²F/∂θ²)` per parameter.
+  It is implemented for Gaussian μ and σ, Student-t μ and σ, and Gamma μ; every other parameter uses a central-difference fallback.
+  The shared helper in `src/distributions/structural.rs` chains the result to the η scale once and drives the censoring and truncation score and observed-information weight.
+  (It shipped under the name `cdf_eta_derivatives` with an η-scale contract; see the rename under "Fixed: non-default links" above.)
 - **SER-1 serialization**: a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`)
   and a `Distribution::descriptor` hook; `Binomial`, `Ocat`, and the structural
   wrappers now round-trip through `to_json` / `from_json`, not just the stateless

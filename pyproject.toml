@@ -7,13 +7,13 @@ name = "glissando"
 version = "0.1.0"
 description = "Python bindings for the glissando library - GAMLSS (Generalized Additive Models for Location, Scale, and Shape)"
 requires-python = ">=3.8"
-license = { text = "MIT OR Apache-2.0" }
+license = { text = "MIT" }
+readme = "README.md"
 keywords = ["statistics", "regression", "gamlss", "generalized-additive-models"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -26,6 +26,10 @@ classifiers = [
 dependencies = [
     "numpy>=1.21",
 ]
+
+[project.urls]
+Repository = "https://github.com/real-limoges/glissando"
+Documentation = "https://docs.rs/glissando"
 
 [project.optional-dependencies]
 dev = [

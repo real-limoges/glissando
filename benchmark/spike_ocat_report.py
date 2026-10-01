@@ -89,7 +89,7 @@ def main() -> None:
 
     # ── 1. Generate data ──────────────────────────────────────────────────────
     print("╔══════════════════════════════════════════════════════════╗")
-    print("║       Guide 3 — Phase 0 ocat spike                      ║")
+    print("║       Guide 3: Phase 0 ocat spike                       ║")
     print("╚══════════════════════════════════════════════════════════╝")
 
     run(
@@ -166,7 +166,7 @@ def main() -> None:
 
     # ── 5. Print report ───────────────────────────────────────────────────────
     print(f"\n{'═'*60}")
-    print(f"  RESULTS  —  n_test={n_test}")
+    print(f"  RESULTS:  n_test={n_test}")
     print(f"{'═'*60}")
     print(f"\n  Rust fit time:  {rust['fit_time_ms']:.0f} ms")
     print(f"  mgcv fit time:  {mgcv_res['fit_time_ms']:.0f} ms")

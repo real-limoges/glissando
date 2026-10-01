@@ -1626,9 +1626,9 @@ mod reml_tests {
             "Interior vs collapse: global-min edf = {:.3} ⇒ {}",
             best.2,
             if best.2 > null_dim as f64 + 1.5 {
-                "REML prefers an INTERIOR (curved) λ — collapse is a SPURIOUS LOCAL optimum (fixable)"
+                "REML prefers an INTERIOR (curved) λ; collapse is a SPURIOUS LOCAL optimum (fixable)"
             } else {
-                "REML's global optimum IS near-collapse — NOT an optimizer bug"
+                "REML's global optimum IS near-collapse; NOT an optimizer bug"
             }
         );
     }

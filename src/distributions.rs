@@ -2,7 +2,21 @@
 //!
 //! Each distribution defines its parameter names (μ, σ, ν, …), default link functions,
 //! and the score / Fisher-information pairs that drive the Rigby–Stasinopoulos
-//! IRLS update. Derivatives are batched (vectorized over observations).
+//! IRLS update. Derivatives are batched (vectorized over observations) and
+//! returned on the natural parameter scale by [`Distribution::theta_derivatives`];
+//! [`chain_to_eta`] applies the link.
+//!
+//! Families: [`Gaussian`], [`Poisson`], [`StudentT`], [`Gamma`],
+//! [`NegativeBinomial`], [`Beta`], [`Weibull`], [`BCCG`], [`BCT`], [`BCPE`],
+//! [`Binomial`], and [`Ocat`]. [`from_name`] resolves the first ten by name;
+//! `Binomial` and `Ocat` carry state and are rebuilt through [`FamilyDescriptor`].
+//!
+//! Structural wrappers over any base family: [`Censored`], [`Truncated`], and
+//! [`Hurdle`].
+//!
+//! Links: nine are selectable by name through [`link_from_name`] (`identity`,
+//! `log`, `logit`, `probit`, `cloglog`, `inverse`, `inverse_square`, `sqrt`,
+//! `cauchit`). [`FlooredLogLink`] is internal-only.
 
 use crate::error::GamlssError;
 use ndarray::{Array1, Zip};

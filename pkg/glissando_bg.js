@@ -1,8 +1,9 @@
 /**
  * WASM wrapper for GAMLSS models.
  *
- * Supports both fitting models in the browser and loading pre-fitted models
- * serialized via `GamlssModel::to_json()`.
+ * Two ways in: fit a fresh model in the browser, or load one someone already fit
+ * and serialized with `GamlssModel::to_json()`. Either way you get the same
+ * object back.
  */
 export class WasmGamlssModel {
     static __wrap(ptr) {
@@ -152,10 +153,11 @@ export class WasmGamlssModel {
         }
     }
     /**
-     * Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
+     * Fit a GAMLSS model. The wire formats live on [`crate::json`].
      *
      * `weights_json` is an optional JSON array of per-observation prior weights,
-     * e.g. `"[0.5, 1.0, 1.5]"`.  Pass `null` / `undefined` for unweighted fitting.
+     * e.g. `"[0.5, 1.0, 1.5]"`. Leave it `null` / `undefined` and you get an
+     * unweighted fit.
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json
@@ -181,6 +183,10 @@ export class WasmGamlssModel {
         return WasmGamlssModel.__wrap(ret[0]);
     }
     /**
+     * Fit with an explicit config JSON. Past the usual algorithm knobs,
+     * `config_json` also takes `"links"` to override a parameter's link by name,
+     * e.g. `{"links": {"mu": "probit"}}` (the accepted names are listed on
+     * [`crate::json`]).
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json
@@ -532,48 +538,12 @@ export function __wbg_Error_8c4e43fe74559d73(arg0, arg1) {
     const ret = Error(getStringFromWasm0(arg0, arg1));
     return ret;
 }
-export function __wbg___wbindgen_is_undefined_9e4d92534c42d778(arg0) {
-    const ret = arg0 === undefined;
-    return ret;
-}
 export function __wbg___wbindgen_throw_be289d5034ed271b(arg0, arg1) {
     throw new Error(getStringFromWasm0(arg0, arg1));
 }
-export function __wbg_call_389efe28435a9388() { return handleError(function (arg0, arg1) {
-    const ret = arg0.call(arg1);
-    return ret;
-}, arguments); }
 export function __wbg_getRandomValues_2a91986308c74a93() { return handleError(function (arg0, arg1) {
     globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
 }, arguments); }
-export function __wbg_new_no_args_1c7c842f08d00ebb(arg0, arg1) {
-    const ret = new Function(getStringFromWasm0(arg0, arg1));
-    return ret;
-}
-export function __wbg_now_2c95c9de01293173(arg0) {
-    const ret = arg0.now();
-    return ret;
-}
-export function __wbg_performance_7a3ffd0b17f663ad(arg0) {
-    const ret = arg0.performance;
-    return ret;
-}
-export function __wbg_static_accessor_GLOBAL_12837167ad935116() {
-    const ret = typeof global === 'undefined' ? null : global;
-    return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-}
-export function __wbg_static_accessor_GLOBAL_THIS_e628e89ab3b1c95f() {
-    const ret = typeof globalThis === 'undefined' ? null : globalThis;
-    return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-}
-export function __wbg_static_accessor_SELF_a621d3dfbb60d0ce() {
-    const ret = typeof self === 'undefined' ? null : self;
-    return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-}
-export function __wbg_static_accessor_WINDOW_f8727f0cf888e0bd() {
-    const ret = typeof window === 'undefined' ? null : window;
-    return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
-}
 export function __wbindgen_init_externref_table() {
     const table = wasm.__wbindgen_externrefs;
     const offset = table.grow(4);

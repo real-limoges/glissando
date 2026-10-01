@@ -39,7 +39,7 @@ stage() {
     local end; end=$(date +%s)
     green  "  ok     $name (${name} took $((end - start))s)"
   else
-    red    "  FAIL   $name — fix or rerun with ${skip_var}=1 to skip; --no-verify to bypass all"
+    red    "  FAIL   $name: fix or rerun with ${skip_var}=1 to skip; --no-verify to bypass all"
     exit 1
   fi
 }

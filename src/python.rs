@@ -391,11 +391,15 @@ impl PyGamlssModel {
     /// y : array
     ///     Response variable (1D array)
     /// formula : dict
-    ///     Dictionary mapping parameter names to lists of terms.
+    ///     Dictionary mapping parameter names to either an R/mgcv-style
+    ///     formula string (e.g. "y ~ s(x) + factor(g)") or a list of terms.
     ///     Each term is a tuple: ('intercept',), ('linear', 'x'),
-    ///     ('smooth', 'x', {'n_splines': 10}), or ('random', 'group')
+    ///     ('smooth', 'x', {'n_splines': 10}),
+    ///     ('smooth', 'x', {'bs': 'cr', 'k': 10}), or ('random', 'group')
     /// family : Distribution
     ///     Distribution object (e.g., Gaussian(), Poisson())
+    /// weights : array, optional
+    ///     Prior observation weights (1D array, same length as y)
     ///
     /// Returns
     /// -------

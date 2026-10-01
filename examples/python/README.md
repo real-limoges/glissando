@@ -1,6 +1,6 @@
 # Python examples
 
-Runnable Python versions of the cookbook (`docs/cookbook/`).
+Runnable Python versions of the cookbook ([`docs/reference/cookbook-quickstart.md`](../../docs/reference/cookbook-quickstart.md) and [`cookbook-families.md`](../../docs/reference/cookbook-families.md)).
 
 ## Setup
 

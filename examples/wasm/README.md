@@ -1,14 +1,15 @@
 # WASM / JavaScript examples
 
-Runnable JavaScript version of the cookbook quickstart (`docs/cookbook/`), against the `glissando` npm package (the committed `pkg/`).
+Runnable JavaScript version of the cookbook quickstart ([`docs/reference/cookbook-quickstart.md`](../../docs/reference/cookbook-quickstart.md)), against the `glissando` npm package (the committed `pkg/`).
 
 ## The target-build wrinkle
 
 `pkg/` is built for the default (bundler) target, which a bundler (Vite, webpack, Rollup) consumes directly but plain Node cannot `import`.
-To run these scripts under Node, rebuild for the nodejs target:
+To run these scripts under Node, rebuild for the nodejs target.
+Put the wasm-pack options (`--target`, `--out-dir`) before the cargo feature flags; wasm-pack 0.15 forwards everything after the first cargo flag to cargo, which then rejects `--target nodejs` as an unknown Rust target:
 
 ```bash
-wasm-pack build --no-default-features --features wasm --target nodejs --out-dir pkg-node
+wasm-pack build --target nodejs --out-dir pkg-node --no-default-features --features wasm
 ```
 
 Then either import from that output directly, or link it as the `glissando` package so the bare `import { WasmGamlssModel } from "glissando"` resolves:
@@ -18,7 +19,8 @@ cd pkg-node && npm link && cd ..
 npm link glissando            # in this examples/wasm directory, or your project
 ```
 
-Under a bundler instead, install the published package (`npm install glissando`) and the same import works with no rebuild.
+Under a bundler instead, depend on the committed `pkg/` directly (`npm install ../../pkg`, or a `file:` dependency) and the same import works with no rebuild.
+The package is not yet on the npm registry.
 
 ## Run
 

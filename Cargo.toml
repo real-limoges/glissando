@@ -2,7 +2,7 @@
 name = "glissando"
 version = "0.1.0"
 edition = "2021"
-description = "GAMLSS implementation in Rust — generalized additive models for location, scale, and shape"
+description = "GAMLSS implementation in Rust: generalized additive models for location, scale, and shape"
 license = "MIT"
 repository = "https://github.com/real-limoges/glissando"
 authors = ["Real Limoges <b.real.limoges@gmail.com>"]
@@ -67,8 +67,8 @@ wasm-bindgen = { version = "0.2.108", optional = true }
 # getrandom is a transitive dependency, but we explicitly depend on two majors so
 # the right WASM feature is enabled for each in a wasm build. The split tracks the
 # distinct rand majors pinned by upstreams:
-#   v0.2 — pulled in by statrs 0.18 -> rand 0.8 (via nalgebra/cauchy)
-#   v0.4 — pulled in by our direct rand 0.10 dependency
+#   v0.2: pulled in by statrs 0.18 -> rand 0.8 (via nalgebra/cauchy)
+#   v0.4: pulled in by our direct rand 0.10 dependency
 # A third major, v0.3, reaches the tree only through the proptest dev-dependency,
 # which is excluded on wasm32 (see below), so it never enters a wasm build and
 # needs no feature shim here.
@@ -86,7 +86,7 @@ approx = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 
-# criterion pulls rayon, proptest pulls wait-timeout — neither compiles for wasm32.
+# criterion pulls rayon, proptest pulls wait-timeout; neither compiles for wasm32.
 # Scope both to non-wasm targets so wasm-pack test can build the test crate.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.8"

@@ -290,7 +290,8 @@ impl GamlssModel {
             })
     }
 
-    /// Serializes the model to JSON, and tucks a [`FamilyDescriptor`] in alongside
+    /// Serializes the model to JSON, and tucks a
+    /// [`FamilyDescriptor`](crate::distributions::FamilyDescriptor) in alongside
     /// it so the family can be rebuilt on load (SER-1). That descriptor is what lets
     /// stateful families and the structural wrappers come back intact, not just the
     /// simple named ones.
@@ -308,7 +309,8 @@ impl GamlssModel {
     }
 
     /// Deserializes a model from JSON, returning the model and the
-    /// [`FamilyDescriptor`] describing its family. Call
+    /// [`FamilyDescriptor`](crate::distributions::FamilyDescriptor) describing its
+    /// family. Call
     /// [`FamilyDescriptor::build`](crate::distributions::FamilyDescriptor::build)
     /// to reconstruct the boxed distribution.
     ///

@@ -36,5 +36,5 @@ const meanResid = resid.reduce((a, b) => a + b, 0) / resid.length;
 console.log("mean quantile residual (~0):", meanResid.toFixed(4));
 
 // k = 2 is AIC, k = ln(n) is BIC.
-console.log("AIC =", model.gaic(JSON.stringify(y), 2.0).toFixed(2));
-console.log("BIC =", model.gaic(JSON.stringify(y), Math.log(n)).toFixed(2));
+console.log("AIC =", JSON.parse(model.gaic(JSON.stringify(y), 2.0)).gaic.toFixed(2));
+console.log("BIC =", JSON.parse(model.gaic(JSON.stringify(y), Math.log(n))).gaic.toFixed(2));

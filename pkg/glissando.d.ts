@@ -4,8 +4,9 @@
 /**
  * WASM wrapper for GAMLSS models.
  *
- * Supports both fitting models in the browser and loading pre-fitted models
- * serialized via `GamlssModel::to_json()`.
+ * Two ways in: fit a fresh model in the browser, or load one someone already fit
+ * and serialized with `GamlssModel::to_json()`. Either way you get the same
+ * object back.
  */
 export class WasmGamlssModel {
     private constructor();
@@ -32,12 +33,19 @@ export class WasmGamlssModel {
     designMatrix(data_json: string, param: string): string;
     diagnosticsJson(): string;
     /**
-     * Fit a GAMLSS model. Wire formats are documented on [`crate::json`].
+     * Fit a GAMLSS model. The wire formats live on [`crate::json`].
      *
      * `weights_json` is an optional JSON array of per-observation prior weights,
-     * e.g. `"[0.5, 1.0, 1.5]"`.  Pass `null` / `undefined` for unweighted fitting.
+     * e.g. `"[0.5, 1.0, 1.5]"`. Leave it `null` / `undefined` and you get an
+     * unweighted fit.
      */
     static fit(y_json: string, data_json: string, formula_json: string, distribution: string, weights_json?: string | null): WasmGamlssModel;
+    /**
+     * Fit with an explicit config JSON. Past the usual algorithm knobs,
+     * `config_json` also takes `"links"` to override a parameter's link by name,
+     * e.g. `{"links": {"mu": "probit"}}` (the accepted names are listed on
+     * [`crate::json`]).
+     */
     static fitWithConfig(y_json: string, data_json: string, formula_json: string, distribution: string, config_json: string, weights_json?: string | null): WasmGamlssModel;
     fittedValues(param: string): Float64Array;
     static fromJson(json: string): WasmGamlssModel;

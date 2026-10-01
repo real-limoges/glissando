@@ -4,8 +4,30 @@
 //! Ordinary regression models the mean and stops there. GAMLSS models the whole
 //! shape of the response: the mean, yes, but also the spread, the skew, and the
 //! kurtosis, each as its own function of the predictors. It does that through the
-//! Rigby-Stasinopoulos algorithm, with penalized B-splines carrying the nonlinear
-//! effects.
+//! Rigby-Stasinopoulos algorithm, with penalized smooths (P-splines, cubic
+//! regression splines, tensor products, random effects) carrying the nonlinear
+//! effects and REML, GCV, or Fellner-Schall choosing the smoothing parameters.
+//!
+//! # What ships
+//!
+//! - Twelve families in [`distributions`]: Gaussian, Poisson, Student-t, Gamma,
+//!   negative binomial, Beta, Weibull, BCCG, BCT, BCPE, Binomial, and ordered
+//!   categorical (`Ocat`).
+//! - Structural-likelihood wrappers over any base family:
+//!   [`Censored`](distributions::Censored), [`Truncated`](distributions::Truncated),
+//!   and [`Hurdle`](distributions::Hurdle).
+//! - Finite mixtures fitted by EM: [`MixtureModel`] and [`fit_mixture`].
+//! - Nine links selectable per parameter through [`FitConfig::with_link`].
+//! - Formulas built from [`Term`]s or parsed from R/mgcv-style strings
+//!   ([`parse_formula_string`]).
+//! - Diagnostics and model selection in [`diagnostics`] and [`selection`].
+//!
+//! # Feature flags
+//!
+//! `openblas` (default) and `pure-rust` pick the linear-algebra backend and are
+//! mutually exclusive. `parallel` (default) enables Rayon. `serialization` adds
+//! serde support and the `json` facade. `wasm` and `python` build the
+//! JavaScript and Python bindings; `wasm` needs `--no-default-features`.
 //!
 //! # Quick start
 //!

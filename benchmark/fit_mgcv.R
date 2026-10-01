@@ -6,14 +6,14 @@
 # Coverage:
 #   Gaussian (linear, multiple, large, smooth, quadratic, sigma-smooth / gaulss)
 #   Poisson  (linear, smooth)
-#   Binomial (linear, smooth) — binomial(logit)
+#   Binomial (linear, smooth): binomial(logit)
 #   Gamma    (linear, smooth, sigma-smooth / gammals)
-#   Student-t (linear, smooth) — scat() scaled-t family
-#   NegBin   (linear, smooth) — nb()
-#   Beta     (linear, smooth) — betar()
-#   Tensor   (Gaussian te) — te(x1, x2, bs="ps")
-#   RandomEf (Gaussian re) — s(g, bs="re")
-#   CR spline (Gaussian cr) — s(x, bs="cr")
+#   Student-t (linear, smooth): scat() scaled-t family
+#   NegBin   (linear, smooth): nb()
+#   Beta     (linear, smooth): betar()
+#   Tensor   (Gaussian te): te(x1, x2, bs="ps")
+#   RandomEf (Gaussian re): s(g, bs="re")
+#   CR spline (Gaussian cr): s(x, bs="cr")
 #   B1: Gaussian + prior weights; B2: StudentT + prior weights (scat)
 #
 # All gam() fits default to method="REML" to match glissando's default
@@ -198,8 +198,8 @@ fit_beta_linear <- function(df, output) {
 }
 
 # ─── Smooth (P-spline) fitters ────────────────────────────────────────────────
-# `s(x, bs="ps", k=K)` requests a penalised B-spline basis of size K with
-# second-order difference penalty — matches glissando's
+# `s(x, bs="ps", k=K)` requests a penalized B-spline basis of size K with
+# second-order difference penalty, matching glissando's
 # `PSpline1D { degree: 3, penalty_order: 2 }`.
 
 fit_gaussian_smooth <- function(df, output) {

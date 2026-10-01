@@ -18,7 +18,7 @@
 // times" instead of anything that tells you what went wrong. So we catch it here.
 #[cfg(all(feature = "openblas", feature = "pure-rust"))]
 compile_error!(
-    "Features `openblas` and `pure-rust` are mutually exclusive — pick one linear-algebra backend. \
+    "Features `openblas` and `pure-rust` are mutually exclusive; pick one linear-algebra backend. \
      If this fired while you ran `cargo --workspace … --features pure-rust`, the `benchmark` crate \
      is unioning `openblas` on top of your override; run cargo on the library directly instead: \
      `cargo test -p glissando --no-default-features --features pure-rust`."
@@ -72,9 +72,9 @@ mod backend {
     /// ("`i` off-diagonal elements failed to converge"). We hit exactly that when a
     /// smooth collapses to its penalty null space and `penalty_eigen` decomposes
     /// `λ·S` with `λ ≈ e³⁰`: whether `dsteqr` converges is OpenBLAS-build-dependent,
-    /// so a fit that passes locally can die only on CI — the same CI-only-LAPACK
+    /// so a fit that passes locally can die only on CI (the same CI-only-LAPACK
     /// failure mode that [`super::solve_robust`] / [`super::inv_robust`] guard the
-    /// other backends against. Jacobi rotation is unconditionally convergent for
+    /// other backends against). Jacobi rotation is unconditionally convergent for
     /// any real symmetric matrix and computes small eigenvalues to high relative
     /// accuracy, so fall back to it rather than propagating the crash. It only runs
     /// when `*syev` has actually failed, so the healthy path is untouched.

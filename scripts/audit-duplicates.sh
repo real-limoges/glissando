@@ -25,7 +25,7 @@ cd "$repo_root"
 # Platform-conditional entries only appear on Linux CI runners (not on the macOS
 # dev tree), pulled in via dev/test infrastructure crates that aren't under our
 # control:
-#   - `rustix` — used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
+#   - `rustix`: used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
 #     coverage/test scaffolding. Long-standing dual-version coexistence in the
 #     Rust ecosystem; benign for our purposes.
 ALLOWLIST=(
@@ -65,7 +65,7 @@ if (( ${#unexpected[@]} == 0 )); then
   exit 0
 fi
 
-echo "audit-duplicates: FAIL — new duplicate dependencies detected:"
+echo "audit-duplicates: FAIL: new duplicate dependencies detected:"
 printf '  - %s\n' "${unexpected[@]}"
 echo
 echo "If the new duplicate is unavoidable (upstream pin), document it in"
