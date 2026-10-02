@@ -40,7 +40,7 @@ fn make_formula_with_smooth(n_params: usize) -> Formula {
 }
 
 fn synthetic_ocat_data(n: usize, seed: u64) -> (Array1<f64>, DataSet) {
-    // Dead-simple deterministic LCG. Keeps rand out of the test deps.
+    // Minimal deterministic LCG, which keeps rand out of the test deps.
     let mut state = seed;
     let lcg = |s: &mut u64| -> f64 {
         *s = s

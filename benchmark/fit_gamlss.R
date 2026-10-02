@@ -1,10 +1,10 @@
 #!/usr/bin/env Rscript
 # Fits gamlss TF() models matching glissando's StudentT compare_fit.rs scenarios.
 #
-# Why a separate script from fit_mgcv.R: mgcv's scat() is a *different* algorithm
+# Why a separate script from fit_mgcv.R: mgcv's scat() is a different algorithm
 # (Wood's joint outer-BFGS) that folds σ and ν into internal nuisance scalars and
-# exposes only `mu` as a modelled predictor. The gamlss TF() family is the SAME
-# Rigby–Stasinopoulos algorithm and the SAME (μ, σ, ν) location-scale-df
+# exposes only `mu` as a modeled predictor. The gamlss TF() family is the same
+# Rigby–Stasinopoulos algorithm and the same (μ, σ, ν) location-scale-df
 # parameterization glissando implements, so it is the correct like-for-like oracle:
 # it reports μ, σ, ν coefficients, their EDF, SEs, and the (unweighted) log-likelihood
 # on the same footing as glissando. The JSON shape mirrors `FitResult` in
@@ -40,7 +40,7 @@ elapsed_ms <- function(start) as.numeric(Sys.time() - start, units = "secs") * 1
 
 # Link-scale standard errors for one distribution parameter, as a plain list.
 # Wrapped in tryCatch because gamlss predict(se.fit=TRUE) can fail for some
-# smoother configurations; an empty list then simply omits that parameter.
+# smoother configurations; an empty list then omits that parameter.
 se_eta_for <- function(m, what) {
   tryCatch({
     p <- predict(m, what = what, type = "link", se.fit = TRUE)

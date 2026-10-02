@@ -16,8 +16,8 @@ x = np.arange(n) * 0.1
 y = np.sin(x) + 0.1 * x
 data = {"x": x}
 
-# One additive predictor per parameter. String formulas are the ergonomic path,
-# and the only comfortable way to spell smooths.
+# One additive predictor per parameter. String formulas are the most concise way
+# to write smooths.
 formula = {"mu": "y ~ s(x)", "sigma": "~ x"}
 
 model = glissando.GamlssModel.fit(data, y, formula, glissando.Gaussian())

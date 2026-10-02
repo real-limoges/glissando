@@ -1,12 +1,11 @@
 //! JSON marshaling facade for embedding glissando behind your own FFI.
 //!
-//! If you're calling glissando in-process from Rust, the typed API
-//! ([`crate::GamlssModel`], [`crate::DataSet`], [`crate::Formula`]) is the surface
-//! you want. But an embedder sitting behind a *different* boundary (a Rustler NIF,
-//! a C ABI, a JSON microservice) usually just wants to throw glissando strings and
-//! get strings back, without taking a dependency on `ndarray` types or reverse-
-//! engineering the wire format. That's what this module is: the exact same tested
-//! JSON marshaling the WASM bindings run on, opened up for any embedder to use.
+//! In-process Rust callers should use the typed API ([`crate::GamlssModel`],
+//! [`crate::DataSet`], [`crate::Formula`]). An embedder behind a *different*
+//! boundary (a Rustler NIF, a C ABI, a JSON microservice) can instead pass strings
+//! in and get strings back, without depending on `ndarray` types or
+//! reverse-engineering the wire format. This module exposes the same tested JSON
+//! marshaling the WASM bindings use.
 //!
 //! Gated behind the `serialization` feature.
 //!
@@ -32,7 +31,7 @@
 //! A *fresh fit* ([`fit`]) resolves a distribution by name via
 //! [`crate::distributions::from_name`], which covers `Gaussian`, `Poisson`,
 //! `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, `BCCG`, `BCT`, and `BCPE`.
-//! Stateful families sit this path out: `Binomial` needs `n_trials` and `Ocat`
+//! Stateful families are not available on this path: `Binomial` needs `n_trials` and `Ocat`
 //! needs `n_categories`, and a bare name has nowhere to carry that, so originate
 //! those fits through the typed API instead.
 //!
@@ -108,7 +107,7 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
 ///
 /// - **term-list**: the structured `{ "mu": [ {"Linear": {"col_name": "x"}}, … ] }`
 ///   form matching the [`Term`](crate::Term) schema; or
-/// - **string formula**: the ergonomic `{ "mu": "y ~ s(x) + z", "sigma": "~ 1" }`
+/// - **string formula**: the `{ "mu": "y ~ s(x) + z", "sigma": "~ 1" }`
 ///   form, where each value is an R/mgcv-style formula string.
 ///
 /// The two are disambiguated by value type (string vs array), so existing
@@ -118,10 +117,10 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
 /// Returns [`GamlssError::Input`] if the JSON matches neither schema or a string
 /// formula is malformed.
 pub fn parse_formula(json: &str) -> Result<Formula, GamlssError> {
-    // Try the ergonomic string-map form first: `{param: "y ~ ..."}`. It only
-    // parses when every value is a JSON string, so a term-list payload (whose
-    // values are arrays) misses cleanly and drops through to the structured
-    // deserializer below. No ambiguity, the value type decides.
+    // Try the string-map form first: `{param: "y ~ ..."}`. It only parses when
+    // every value is a JSON string, so a term-list payload (whose values are
+    // arrays) fails to match and falls through to the structured deserializer
+    // below. The value type decides, so there is no ambiguity.
     if let Ok(string_map) = serde_json::from_str::<HashMap<String, String>>(json) {
         return Formula::from_strings(string_map.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     }
@@ -145,9 +144,9 @@ pub fn parse_config(json: &str) -> Result<FitConfig, GamlssError> {
 pub fn serialize_predictions(
     predictions: &HashMap<String, Array1<f64>>,
 ) -> Result<String, GamlssError> {
-    // BTreeMap so the keys come out sorted and deterministic, not in HashMap's
-    // roll-the-dice order. Embedders get stable output, and two predict calls
-    // compare equal byte for byte instead of only sometimes.
+    // BTreeMap so the keys come out sorted and deterministic rather than in
+    // HashMap's randomized order, so two predict calls produce byte-identical
+    // output.
     let result: BTreeMap<&str, Vec<f64>> = predictions
         .iter()
         .map(|(k, v)| (k.as_str(), v.to_vec()))
@@ -491,7 +490,7 @@ pub fn step_gaic(
     let result = run_step_gaic(&data, &y, family.as_ref(), start, &scope, k, dir, config)?;
 
     // Nest the selected model as an object in the exact shape `load` reads back,
-    // so the caller can round-trip it straight through without reshaping anything.
+    // so the caller can round-trip it without reshaping anything.
     let model_wire: serde_json::Value =
         serde_json::from_str(&result.model.to_json(family.as_ref())?).map_err(json_err)?;
     let out = serde_json::json!({

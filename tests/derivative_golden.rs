@@ -13,15 +13,15 @@
 // return *expected* information (StudentT μ, `student_t.rs:102-110`) or a
 // squared-score surrogate (NegBinomial σ, `negative_binomial.rs:94-100`) rather
 // than the observed `−∂²l/∂η²`, so a second difference of `loglik_pointwise` is
-// just a different quantity. Characterizing the current values sidesteps the
-// theory entirely and is exact.
+// a different quantity. Characterizing the current values avoids that theory
+// and is exact.
 //
 // PRECISION. Values are formatted to 11 significant digits. The refactor
 // reassociates floating-point operations (`w_σ = 2.0` becomes `σ²·(2/σ²)`,
 // which is not bit-identical), so bit-exactness is the wrong bar.
 // Reassociation moves the last ~1-2 digits (~1e-16 relative); a wrong chain
 // rule moves the value by orders of magnitude. 11 digits sits well above the
-// noise and well below any real algebraic change.
+// noise and well below any algebraic change.
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test derivative_golden`,
 // then `cargo insta accept`.
@@ -111,7 +111,7 @@ impl DefaultLinks {
 /// construction, so these snapshots pin the *seam* rather than one side of it.
 ///
 /// Iterates `family.parameters()` rather than the returned map's keys so a
-/// family that silently stops emitting a parameter fails loudly here.
+/// family that stops emitting a parameter fails here.
 fn golden<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
@@ -232,8 +232,8 @@ fn golden_student_t() {
 #[test]
 fn golden_student_t_at_nu_floor() {
     // Pins the aggregate KKT projection at the ν floor (`student_t.rs:147-161`):
-    // every row is pinned, so the frozen-vs-lift-off branch is what we're
-    // characterizing here. StudentT keeps this logic as an `eta_derivatives`
+    // every row is pinned, so this table characterizes the frozen-vs-lift-off
+    // branch. StudentT keeps this logic as an `eta_derivatives`
     // override, so this table must stay bit-stable across the whole refactor.
     let y = array![-3.0, -1.0, 0.0, 1.0, 4.0, 0.5];
     let owned = [
@@ -355,7 +355,7 @@ fn golden_censored_all_statuses() {
     //
     // The `sigma` weights are the unfloored observed information the wrapper
     // computes: `-1.1406392216e-1` on the right-censored row (observed
-    // information is not a variance and is legitimately negative) and
+    // information is not a variance and can be negative) and
     // `0.0000000000e0` on the left-censored row, where z = 0 makes both `d1` and
     // `d2` vanish identically. Flooring happens once, in `scoring::step`. Any drift
     // here is a defect, not a snapshot to accept.

@@ -13,8 +13,8 @@ pub(crate) fn create_penalty_matrix(n_splines: usize, order: usize) -> Array2<f6
     // General order-d difference coefficients: convolve [1, -1] with itself d
     // times to get the alternating binomial row (1, -d, ..., ±1). Same thing as
     // R's diff(diag(k), differences = d). The old code special-cased orders 1 and
-    // 2, then silently reused the order-2 row (with the wrong number of rows) for
-    // anything higher. That was a bug.
+    // 2 and reused the order-2 row (with the wrong number of rows) for any higher
+    // order, which was a bug.
     let mut coef = vec![1.0_f64];
     for _ in 0..order {
         let mut next = vec![0.0; coef.len() + 1];
@@ -132,8 +132,8 @@ mod tests {
 
         /// An order-`d` difference penalty annihilates every polynomial of degree
         /// `< d`: `v'Sv = 0` for `v` a monomial sequence `(i^p)_i`, `p < order`.
-        /// That is what fixes the penalty's null-space dimension at `order` (hence
-        /// its rank at `n_splines - order`), the property REML/GCV lean on.
+        /// This fixes the penalty's null-space dimension at `order` (hence its rank
+        /// at `n_splines - order`), which REML/GCV rely on.
         #[test]
         fn penalty_null_space_contains_low_degree_polynomials(
             n_splines in 6usize..20,

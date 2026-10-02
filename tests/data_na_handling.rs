@@ -5,7 +5,7 @@
 //! has to equal a fit on the manually pre-filtered data. `NaAction::Fail` keeps
 //! the historical hard-error behavior.
 
-// Integration tests can't run under the `python` feature. PyO3 linking gets in the way.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 use glissando::distributions::Gaussian;
@@ -18,8 +18,8 @@ fn formula() -> Formula {
         .with_terms("sigma", vec![Term::Intercept])
 }
 
-/// Dropping incomplete rows gives me exactly the fit I'd get by removing those
-/// rows by hand before calling `fit`. Same answer, no surprises.
+/// Dropping incomplete rows gives exactly the fit obtained by removing those
+/// rows by hand before calling `fit`.
 #[test]
 fn drop_rows_equals_manual_prefilter() {
     // Rows 2 and 5 each carry a missing value: NaN in y, Inf in x respectively.
@@ -82,7 +82,7 @@ fn unreferenced_column_missing_does_not_drop_rows() {
     assert!((slope - 3.0).abs() < 1e-6, "slope {slope}");
 }
 
-/// `NaAction::Fail` rejects a missing value outright rather than quietly dropping its row.
+/// `NaAction::Fail` rejects a missing value outright rather than dropping its row.
 #[test]
 fn fail_action_errors_on_missing() {
     let mut data = DataSet::new();
@@ -104,7 +104,7 @@ fn fail_action_errors_on_missing() {
     );
 }
 
-/// Dropping every row (all of them incomplete) is an error, not an empty fit. Fail loud.
+/// Dropping every row (all of them incomplete) is an error, not an empty fit.
 #[test]
 fn all_rows_missing_is_empty_data_error() {
     let mut data = DataSet::new();

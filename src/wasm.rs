@@ -1,10 +1,9 @@
-//! WebAssembly bindings via wasm-bindgen: fit and predict GAMLSS right in the browser.
+//! WebAssembly bindings via wasm-bindgen: fit and predict GAMLSS in the browser.
 //!
 //! [`WasmGamlssModel`] is the whole surface, with JSON in and JSON out so
-//! JavaScript can drive it. Gated behind the `wasm` feature flag. It's a thin
-//! marshaling shim over [`crate::json`], and nothing more; the wire formats and
-//! distribution dispatch are all written up there, so this file doesn't repeat
-//! them.
+//! JavaScript can drive it. Gated behind the `wasm` feature flag. It is a thin
+//! marshaling shim over [`crate::json`], which documents the wire formats and
+//! distribution dispatch.
 
 use wasm_bindgen::prelude::*;
 
@@ -18,9 +17,8 @@ fn to_js_err(e: impl std::fmt::Display) -> JsError {
 
 /// WASM wrapper for GAMLSS models.
 ///
-/// Two ways in: fit a fresh model in the browser, or load one someone already fit
-/// and serialized with `GamlssModel::to_json()`. Either way you get the same
-/// object back.
+/// Created either by fitting a model in the browser or by loading one serialized
+/// with `GamlssModel::to_json()`; both produce the same object.
 #[wasm_bindgen]
 pub struct WasmGamlssModel {
     model: GamlssModel,
@@ -32,8 +30,7 @@ impl WasmGamlssModel {
     /// Fit a GAMLSS model. The wire formats live on [`crate::json`].
     ///
     /// `weights_json` is an optional JSON array of per-observation prior weights,
-    /// e.g. `"[0.5, 1.0, 1.5]"`. Leave it `null` / `undefined` and you get an
-    /// unweighted fit.
+    /// e.g. `"[0.5, 1.0, 1.5]"`. `null` / `undefined` gives an unweighted fit.
     pub fn fit(
         y_json: &str,
         data_json: &str,
@@ -53,7 +50,7 @@ impl WasmGamlssModel {
         Ok(WasmGamlssModel { model, family })
     }
 
-    /// Fit with an explicit config JSON. Past the usual algorithm knobs,
+    /// Fit with an explicit config JSON. Besides the algorithm settings,
     /// `config_json` also takes `"links"` to override a parameter's link by name,
     /// e.g. `{"links": {"mu": "probit"}}` (the accepted names are listed on
     /// [`crate::json`]).

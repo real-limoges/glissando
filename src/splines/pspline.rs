@@ -4,7 +4,7 @@ use ndarray::{Array1, Array2};
 
 /// Test-only wrapper that derives the knot range from `x` itself. Production paths
 /// have to pass the range resolved at fit time (`create_basis_matrix_with_range`),
-/// so I compile this out of non-test builds to make the wrong call unrepresentable.
+/// so this is compiled out of non-test builds and the wrong call cannot be written.
 #[cfg(test)]
 pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usize) -> Array2<f64> {
     create_basis_matrix_with_range(x, n_splines, degree, None)
@@ -16,9 +16,9 @@ pub(crate) fn create_basis_matrix(x: &Array1<f64>, n_splines: usize, degree: usi
 /// The fitter resolves each P-spline's training range once and stores it on the
 /// term; prediction hands it back here so new data (a grid, a subset, a single
 /// point) is evaluated on the *training* basis. `None` derives the range from `x`,
-/// which is fit-time resolution and tests only. Get this wrong and the knots
-/// silently follow the prediction data's range, so the coefficients end up applied
-/// to a different basis than the one they were fit on.
+/// which is for fit-time resolution and tests only. Passing `None` at prediction
+/// makes the knots follow the prediction data's range, so the coefficients are
+/// applied to a different basis than the one they were fit on.
 pub(crate) fn create_basis_matrix_with_range(
     x: &Array1<f64>,
     n_splines: usize,
@@ -83,7 +83,7 @@ pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
 ///
 /// A difference penalty (`create_penalty_matrix`) only approximates a roughness
 /// penalty on the fitted function when the knots are **equally spaced**, so the
-/// P-spline penalty and the basis have to share that assumption. I place
+/// P-spline penalty and the basis have to share that assumption. This places
 /// `safe_n_splines + degree + 1` uniform knots with spacing
 /// `dx = (max − min) / (safe_n_splines − degree)` such that `t[degree] = min` and
 /// `t[safe_n_splines] = max`, leaving `degree` knots beyond each end. Over the
@@ -204,7 +204,7 @@ mod tests {
     fn knots_are_uniform_and_bracket_range() {
         // P-spline layout: equally-spaced knots with `t[degree] = min`,
         // `t[n_splines] = max`, and `degree` extra knots beyond each end. Equal
-        // spacing is what makes the difference penalty a valid roughness penalty.
+        // spacing makes the difference penalty a valid roughness penalty.
         let x = Array1::linspace(0.0, 4.0, 200);
         let (n_splines, degree) = (15usize, 3usize);
         let knots = select_knots(&x, n_splines, degree, None);
@@ -304,7 +304,7 @@ mod tests {
     /// The previous (buggy) implementation gave wrong interior basis values. At
     /// x=0.5 it returned [0, 1/48, **2/3, 7/24**, 1/48, 0] instead of the correct
     /// [0, 1/48, **23/48, 23/48**, 1/48, 0]. Both sum to 1, so the partition-of-unity
-    /// tests waved it right through.
+    /// tests did not catch it.
     #[test]
     fn bspline_basis_golden_values_degree3() {
         let x = Array1::from_vec(vec![0.0, 0.25, 0.5, 0.75, 1.0]);
@@ -348,8 +348,8 @@ mod tests {
         /// arbitrary knot counts, degrees, and sample sizes: every entry is finite
         /// and non-negative, and interior rows form a partition of unity (sum to 1).
         /// Boundary rows are skipped because a point sitting exactly on the extreme
-        /// knot can lose a hair of mass to fp rounding, which the example tests
-        /// already pin at the endpoints via golden values.
+        /// knot can lose a little mass to fp rounding; the example tests already
+        /// pin the endpoints with golden values.
         #[test]
         fn basis_is_finite_nonnegative_and_partitions_unity(
             degree in 1usize..=3,

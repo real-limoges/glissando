@@ -2,7 +2,7 @@
 
 GAMLSS (Generalized Additive Models for Location, Scale, and Shape) for JavaScript, compiled from the [glissando](https://github.com/real-limoges/glissando) Rust crate to WebAssembly.
 
-GAMLSS gives every distribution parameter its own regression: the mean, the variance, the skew, and the tail weight can each depend on your predictors through linear terms, factors, and penalized smooths.
+GAMLSS gives each distribution parameter (location, scale, and shape) its own regression on the predictors, built from linear terms, factors, and penalized smooths.
 Smoothing parameters are chosen automatically (REML by default).
 
 This package is built for the default wasm-pack (bundler) target, so Vite, webpack, and Rollup consume it directly.

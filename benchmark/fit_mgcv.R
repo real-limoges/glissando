@@ -472,7 +472,7 @@ fit_gamma_sigma_smooth <- function(df, output) {
 
 # Student-t via scat() scaled-t family.
 # scat models μ linearly and treats σ, ν as global nuisance parameters.
-# Gate only on fitted_mu; σ/ν parameterisations differ.
+# Gate only on fitted_mu; σ/ν parameterizations differ.
 fit_studentt_linear <- function(df, output) {
   start <- Sys.time()
   m <- gam(y ~ x, data = df, family = scat(), method = "REML")

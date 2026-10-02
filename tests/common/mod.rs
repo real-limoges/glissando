@@ -310,11 +310,10 @@ impl Generator {
         (Array1::from_vec(y), data)
     }
 
-    /// Gaussian with a genuinely nonlinear (sinusoidal) mean: `y ~ N(sin(x), σ)`
-    /// on `x ∈ [0, 2π]`. A P-spline on `x` has solidly fractional effective df
-    /// here: the smooth cannot collapse to a straight line the way it can on a
-    /// linear-mean dataset, which is what the fractional-df model-comparison
-    /// tests need.
+    /// Gaussian with a nonlinear (sinusoidal) mean: `y ~ N(sin(x), σ)` on
+    /// `x ∈ [0, 2π]`. A P-spline on `x` has fractional effective df here: the
+    /// smooth cannot collapse to a straight line the way it can on a linear-mean
+    /// dataset, which is what the fractional-df model-comparison tests need.
     pub fn sinusoidal_gaussian(&mut self, n: usize, sigma: f64) -> (Array1<f64>, DataSet) {
         let x: Vec<f64> = (0..n)
             .map(|i| i as f64 / n as f64 * 2.0 * std::f64::consts::PI)

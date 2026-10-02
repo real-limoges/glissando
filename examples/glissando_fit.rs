@@ -26,7 +26,7 @@ fn main() -> Result<(), GamlssError> {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x_vals));
 
-    // The formula, using the terse constructors. `Smooth::ps` already carries sane
+    // The formula, using the terse constructors. `Smooth::ps` already carries sensible
     // defaults (degree 3, 2nd-order penalty); builders like `.n_splines(20)` override them.
     //   mu    ~ intercept + P-spline(x)   (smooth mean)
     //   sigma ~ intercept + x             (linear heteroskedasticity)
@@ -44,7 +44,7 @@ fn main() -> Result<(), GamlssError> {
     let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new())?;
     println!("Successfully Trained GAMLSS Model!");
 
-    // Poke at the results.
+    // Inspect the results.
     let mu_model = &model.models["mu"];
     let sigma_model = &model.models["sigma"];
     let nu_model = &model.models["nu"];

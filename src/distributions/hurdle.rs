@@ -6,12 +6,11 @@
 //! P(Y = y) = (1 − ξ) · g_T(y)   (y > 0)   base, zero-TRUNCATED
 //! ```
 //!
-//! I think of this as a clean generalization of zero-inflation. Contrast it with
-//! zero-*inflation*, where the base can still emit zero
-//! (`P(Y=0) = π + (1−π)·g(0)`): a hurdle's positive process is structurally
-//! separate from the zero process. I reach for a hurdle when the zero-generating
-//! mechanism is genuinely distinct (a true two-part model), and for zero-inflation
-//! when the zeros are a contamination of one process.
+//! Under zero-*inflation* the base can still emit zero
+//! (`P(Y=0) = π + (1−π)·g(0)`); in a hurdle the positive process is structurally
+//! separate from the zero process. A hurdle suits data whose zero-generating
+//! mechanism is distinct (a true two-part model); zero-inflation suits zeros that
+//! contaminate a single process.
 //!
 //! The wrapper adds one fitted parameter `xi` (the zero probability, logit link)
 //! on top of the base family's parameters, and the positive part reuses the
@@ -153,8 +152,8 @@ impl Distribution for Hurdle {
                     // Writing 0.0 here and letting `scoring::step` floor it would be
                     // numerically identical (`u/w = 0` either way), but it would tally
                     // one `weight_floor_hits` per structural zero on every iteration,
-                    // reporting every well-behaved hurdle fit as degenerate, the
-                    // opposite of what making that diagnostic accurate was for.
+                    // reporting every well-behaved hurdle fit as degenerate and
+                    // defeating the purpose of that diagnostic.
                     u[i] = 0.0;
                     w[i] = MIN_WEIGHT;
                 } else {
@@ -195,7 +194,7 @@ impl Distribution for Hurdle {
 
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         // Reports the untruncated base variance. The zero atom and the truncation
-        // are not folded in. Its a known diagnostic approximation, same as Truncated.
+        // are not folded in. This is a known diagnostic approximation, as in Truncated.
         self.base.variance(params)
     }
 
@@ -312,7 +311,7 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
         // ξ at both rails: the natural-scale atom divides by ξ(1−ξ), and
-        // `DENOM_FLOOR` is what keeps it finite there.
+        // `DENOM_FLOOR` keeps it finite there.
         // μ and σ sweep the log link's reach at the same time so the zero-truncation
         // normalizer's `F'(0)/D` is evaluated in the saturated tail too.
         let y = array![0.0, 2.0, 0.0, 3.0];

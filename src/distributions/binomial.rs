@@ -70,16 +70,16 @@ impl Distribution for Binomial {
         //
         // **The guard is on the denominator, not on μ.** This family used to clamp
         // `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]` with `MIN_POSITIVE = 1e-10`. The folded
-        // form could afford that because the division canceled. The un-fold can't
-        // survive it. `chain_to_eta` multiplies by a `mu_eta` computed from η
+        // form could afford that because the division canceled; the un-folded form
+        // cannot. `chain_to_eta` multiplies by a `mu_eta` computed from η
         // independently of anything clamped here, so a clamp that binds breaks the
         // telescoping. Under a probit link at η = −30 (the link's own clamp)
         // μ = Φ(η) ≈ 5e-198, and clamping the denominator up to 1e-10 would collapse
-        // the score by ~190 orders of magnitude. That's exactly the regime the
-        // probit and cloglog acceptance gates exercise. `DENOM_FLOOR` sits far below
-        // anything any link produces, so all it does is stop a division by exactly zero.
+        // the score by ~190 orders of magnitude. The probit and cloglog acceptance
+        // gates exercise that regime. `DENOM_FLOOR` sits far below anything any link
+        // produces, so it only prevents a division by exactly zero.
         //
-        // And `1.0 - MIN_POSITIVE` was never the upper clamp its name suggests once μ
+        // `1.0 - MIN_POSITIVE` was also never the upper clamp its name suggests once μ
         // got close to 1.
         let mu = require(self, params, "mu")?;
         let n = self.trials(y.len());
@@ -340,14 +340,14 @@ mod tests {
         // `mu_eta = φ(η)` is minuscule, and the product has to telescope back to
         // `y·φ(η)/Φ(η)`, the inverse Mills ratio times y. The old `MIN_POSITIVE`
         // clamp on μ would floor the denominator at 1e-10 and collapse the result by
-        // orders of magnitude. That's what kept the probit acceptance gate red.
+        // orders of magnitude, which kept the probit acceptance gate failing.
         //
         // η stops at −6 because of the *test helper*, not the fitter.
         // `ParamLinks` reconstructs η as `link(μ)`, and `ProbitLink::link` clamps μ
         // at `MIN_POSITIVE = 1e-10` (so η saturates around −6.36). In production η is
         // the primary quantity and μ is `inv_link(η)`, so no such round trip happens
         // and the tail extends to `MIN_ETA`. Φ(−6) ≈ 9.9e-10 is just clear of the
-        // clamp, which is far enough to make the point: the folded value would be ≈ 4
+        // clamp and far enough out to separate the two: the folded value would be ≈ 4
         // and the correct one is ≈ 24.
         let bin = Binomial::new(10);
         let y = array![4.0];

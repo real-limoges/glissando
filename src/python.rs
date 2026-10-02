@@ -1,9 +1,8 @@
 //! Python bindings via PyO3.
 //!
-//! Model fitting and prediction, over NumPy arrays, from Python. The actual term
-//! and family parsing lives in `terms::py_parse` and `distributions`, which keeps
-//! this file honest as a thin marshaling layer: it moves values across the
-//! Python/Rust line and little else.
+//! Model fitting and prediction, over NumPy arrays, from Python. Term and family
+//! parsing live in `terms::py_parse` and `distributions`, so this file stays a thin
+//! marshaling layer that moves values across the Python/Rust boundary.
 
 use ndarray::Array1;
 use numpy::{PyArray2, PyReadonlyArray1, ToPyArray};
@@ -81,7 +80,7 @@ impl PyOcat {
 ///
 /// `status` entries are `"event"`, `"left"`, `"right"`, or `"interval"`, and case
 /// doesn't matter. `upper` holds the interval upper bounds; it's only looked at on
-/// `"interval"` rows, and defaults to zeros when you leave it off.
+/// `"interval"` rows, and defaults to zeros when omitted.
 #[pyclass(name = "Censored", frozen)]
 struct PyCensored {
     descriptor: FamilyDescriptor,
@@ -122,8 +121,8 @@ impl PyCensored {
 }
 
 /// Truncated responses: pins `base` inside the per-row open interval
-/// `(lower, upper)`. Want one side unbounded? Pass `float("-inf")` or
-/// `float("inf")` for it.
+/// `(lower, upper)`. Pass `float("-inf")` or `float("inf")` for an unbounded
+/// side.
 #[pyclass(name = "Truncated", frozen)]
 struct PyTruncated {
     descriptor: FamilyDescriptor,
@@ -149,8 +148,8 @@ impl PyTruncated {
     }
 }
 
-/// Hurdle / two-part models: bolts a logit-linked zero atom on top of
-/// a zero-truncated `base`. One part decides zero-or-not, the other models the
+/// Hurdle / two-part models: adds a logit-linked zero atom to a
+/// zero-truncated `base`. One part decides zero-or-not, the other models the
 /// positive side.
 #[pyclass(name = "Hurdle", frozen)]
 struct PyHurdle {
@@ -201,9 +200,9 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
         // A parameter's value can be an R/mgcv-style **formula string**
-        // (`"y ~ s(x) + factor(g)"`), which is the nice ergonomic form, or the
-        // structured list of term tuples. If it extracts as a `str` we take that
-        // path; anything else, we treat as a term list.
+        // (`"y ~ s(x) + factor(g)"`) or the structured list of term tuples. A
+        // value that extracts as a `str` is parsed as a formula; anything else is
+        // treated as a term list.
         if let Ok(formula_str) = terms.extract::<String>() {
             let (_response, parsed) = crate::parse_formula_string(&formula_str)
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -276,12 +275,11 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
 }
 
 /// Build a [`FamilyDescriptor`] from a Python family object, recursing into `base`
-/// for the structural wrappers. It deliberately routes through the very same
-/// descriptor that [`GamlssModel::to_json`](crate::GamlssModel::to_json) uses for
-/// serialization, so every family that descriptor can describe (the
-/// `Censored`/`Truncated`/`Hurdle` wrappers included) is automatically reachable
-/// here. No second name roster to keep in sync, and no way for the two to drift
-/// apart.
+/// for the structural wrappers. It routes through the same descriptor that
+/// [`GamlssModel::to_json`](crate::GamlssModel::to_json) uses for serialization,
+/// so every family that descriptor can describe (the `Censored`/`Truncated`/
+/// `Hurdle` wrappers included) is reachable here without a second name roster to
+/// keep in sync.
 fn extract_descriptor(family_obj: &Bound<'_, PyAny>) -> PyResult<FamilyDescriptor> {
     if family_obj.extract::<PyRef<PyGaussian>>().is_ok() {
         return Ok(FamilyDescriptor::Named("Gaussian".to_string()));
@@ -767,7 +765,7 @@ impl PyGamlssModel {
             ));
         }
         let y_array = y.as_array().to_owned();
-        // Hold a borrow on every model for the whole call, so none can be mutated under us.
+        // Hold a borrow on every model for the whole call, so none can be mutated during it.
         let borrowed: Vec<(String, PyRef<PyGamlssModel>)> = models
             .iter()
             .map(|(label, m)| Ok((label.clone(), m.borrow(py))))

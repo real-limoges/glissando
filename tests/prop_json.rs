@@ -12,7 +12,7 @@
 //! returns `Ok`/`Err` on arbitrary input, never panicking, so an embedder can throw
 //! untrusted bytes at the boundary safely. Second, a *round-trip* invariant: a
 //! fitted model serialized with `to_json` and reloaded with `json::load` predicts
-//! the same values it did before, so persistence is lossless where it counts.
+//! the same values it did before, so persistence preserves predictions.
 
 mod common;
 
@@ -94,7 +94,7 @@ proptest! {
 /// `to_json` → `json::load` preserves predictions for a linear-mean Gaussian fit.
 /// Coefficients are not compared byte-for-byte (that needs the `float_roundtrip`
 /// feature per the crate docs); predictions within a tight tolerance are the
-/// contract embedders actually rely on.
+/// contract embedders rely on.
 #[test]
 fn to_json_load_round_trip_preserves_predictions() {
     let mut rng = Generator::new(7);

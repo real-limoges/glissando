@@ -9,7 +9,7 @@ use std::collections::HashMap;
 /// `r_i = (y_i − E[Y_i]) / √Var(Y_i)`.
 ///
 /// The variance gets floored at `MIN_POSITIVE = 1e-10` before the square root, so a
-/// degenerate fitted variance can't send the residuals off to infinity.
+/// degenerate fitted variance cannot make the residuals infinite.
 pub fn pearson_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,

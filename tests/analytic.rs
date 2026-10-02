@@ -1,9 +1,9 @@
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
-//! Closed-form anchors. I want these to prove the iterative fitter recovers the
-//! exact analytic solution on problems where one exists, independent of any
-//! snapshot or regression comparison against past runs.
+//! Closed-form anchors: the iterative fitter must recover the exact analytic
+//! solution on problems where one exists, independent of any snapshot or
+//! regression comparison against past runs.
 
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
@@ -19,7 +19,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     let true_beta = -1.75;
 
     let x: Array1<f64> = Array1::from_iter((0..n).map(|i| i as f64 / 10.0));
-    // Pseudo-random jitter, deterministic off the index, just to keep sigma > 0.
+    // Pseudo-random jitter, deterministic off the index, to keep sigma > 0.
     let y: Array1<f64> = (0..n)
         .map(|i| {
             let jitter = ((i as f64 * 0.731).sin()) * 1e-3;
@@ -45,8 +45,8 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Compute the analytic OLS solution on the *same* y (jitter and all) and check
-    // the fitter matches it. That match is the real closed-form anchor, and it
-    // holds regardless of whether the RS outer loop's eps-criterion flagged "converged".
+    // the fitter matches it. This match is the closed-form check, and it holds
+    // regardless of whether the RS outer loop's eps-criterion flagged "converged".
     let x_bar = x.mean().unwrap();
     let y_bar = y.mean().unwrap();
     let sxx: f64 = x.iter().map(|xi| (xi - x_bar).powi(2)).sum();
@@ -73,7 +73,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     );
 }
 
-/// Intercept-only Gaussian is just the sample mean. Exact closed form, no wiggle room.
+/// An intercept-only Gaussian fit is the sample mean, an exact closed form.
 #[test]
 fn gaussian_intercept_only_recovers_sample_mean() {
     let y = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);

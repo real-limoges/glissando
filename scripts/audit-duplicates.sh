@@ -3,7 +3,7 @@
 #
 # `cargo tree --duplicates` lists every crate compiled at more than one version.
 # The remaining duplication is the rand/getrandom chain driven by upstream version
-# pins: statrs 0.18 -> rand 0.8 -> getrandom 0.2, our direct rand 0.10 ->
+# pins: statrs 0.18 -> rand 0.8 -> getrandom 0.2, the direct rand 0.10 ->
 # getrandom 0.4, and the proptest dev-dependency -> rand 0.9 -> getrandom 0.3.
 # This script enforces that only the documented allowlist appears, so new
 # duplicates fail the audit and get investigated before merge.
@@ -23,11 +23,11 @@ cd "$repo_root"
 # rand_distr) follow mechanically from those root duplications.
 #
 # Platform-conditional entries only appear on Linux CI runners (not on the macOS
-# dev tree), pulled in via dev/test infrastructure crates that aren't under our
+# dev tree), pulled in via dev/test infrastructure crates outside this repo's
 # control:
 #   - `rustix`: used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
 #     coverage/test scaffolding. Long-standing dual-version coexistence in the
-#     Rust ecosystem; benign for our purposes.
+#     Rust ecosystem; benign here.
 ALLOWLIST=(
   getrandom
   rand

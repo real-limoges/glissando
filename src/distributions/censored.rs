@@ -58,9 +58,9 @@ pub struct Censored {
     /// [`CensorStatus::Interval`] rows.
     upper: Array1<f64>,
     /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
-    /// immutable after construction, so I compute this once here rather than
-    /// rescan it on every `loglik_pointwise` / `theta_derivatives` call (i.e. every
-    /// IRLS iteration).
+    /// immutable after construction, so this is computed once here rather than
+    /// rescanned on every `loglik_pointwise` / `theta_derivatives` call (i.e.
+    /// every IRLS iteration).
     has_interval: bool,
 }
 
@@ -163,7 +163,7 @@ impl Distribution for Censored {
         true
     }
 
-    /// I override the η-scale adapter directly here. The censored rows carry
+    /// Overrides the η-scale adapter directly. The censored rows carry
     /// *observed* information, which is not link-invariant, so there is no
     /// natural-scale `(∂l/∂θ, i_θ)` for the generic chain rule to lift. See
     /// [`Link::mu_eta2`].
@@ -375,10 +375,9 @@ mod tests {
         // through Gaussian's *default* link instead puts this score off by a factor
         // of `mu_eta_default / mu_eta_actual` on every censored row.
         //
-        // σ goes on `sqrt` rather than the usual suspects because η = √σ keeps the
-        // fixture's positive σ in the link's domain. μ stays on identity on purpose:
-        // this fixture has μ < 0, and `sqrt` and `inverse_square` can't represent
-        // that.
+        // σ goes on `sqrt` because η = √σ keeps the fixture's positive σ in the
+        // link's domain. μ stays on identity on purpose: this fixture has μ < 0,
+        // and `sqrt` and `inverse_square` can't represent that.
         let y = array![0.0, -0.5, 0.3, 1.0];
         let upper = array![1.0, 0.5, 1.2, 2.0];
         let owned = gaussian_owned();
@@ -395,10 +394,11 @@ mod tests {
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
         // The base's CDF derivatives divide by σ and σ², and no family-level
-        // `.max(MIN_WEIGHT)` launders the censored rows' weights. A saturating F drives `clamp_prob` to both of its
-        // rails, so `d1/F` and `d2/F` land at `PROB_EPS`.
+        // `.max(MIN_WEIGHT)` clamps the censored rows' weights. A saturating F
+        // drives `clamp_prob` to both of its rails, so `d1/F` and `d2/F` land at
+        // `PROB_EPS`.
         //
-        // I check the weights for finiteness only, not sign: these rows carry
+        // Weights are checked for finiteness only, not sign: these rows carry
         // observed information, which is legitimately negative in places (see
         // `derivative_keys_match_parameters_observed_info`).
         let y = array![-40.0, 40.0, 0.0, 0.0];

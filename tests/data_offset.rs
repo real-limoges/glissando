@@ -1,9 +1,9 @@
 //! Offsets, tested through the public API.
 //!
 //! An offset enters the linear predictor as `η = X·β + offset` with a fixed
-//! coefficient of 1. The load-bearing correctness check is a closed-form
-//! equivalence I like: for a Gaussian identity-link model `μ = X·β + o`, fitting
-//! `y` with offset `o` is exactly fitting `(y − o)` with no offset.
+//! coefficient of 1. The main correctness check is a closed-form equivalence:
+//! for a Gaussian identity-link model `μ = X·β + o`, fitting `y` with offset `o`
+//! is exactly fitting `(y − o)` with no offset.
 
 // Can't run under the `python` feature (PyO3 linking).
 #![cfg(not(feature = "python"))]
@@ -86,7 +86,7 @@ fn gaussian_offset_equals_folding_into_response() {
     }
 }
 
-/// An offset never gets silently dropped: pull it out and the fit moves for real.
+/// An offset is never dropped silently: removing it changes the fit.
 #[test]
 fn offset_changes_the_fit() {
     let n = 150;

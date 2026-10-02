@@ -1,10 +1,10 @@
 //! BCT and BCPE families, public-API integration tests.
 //!
-//! I cover coefficient recovery from simulated data and JSON round-trips here. The
-//! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) I check at
-//! the unit level, over alongside the family impls, not in this file.
+//! Covers coefficient recovery from simulated data and JSON round-trips. The
+//! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) are checked
+//! at the unit level, alongside the family impls.
 
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -49,7 +49,7 @@ fn bct_recovers_known_parameters() {
     assert!((sigma_hat - sigma).abs() < 0.05, "σ̂ {sigma_hat} vs {sigma}");
     let nu_hat = model.models["nu"].coefficients.0[0];
     assert!((nu_hat - nu).abs() < 0.4, "ν̂ {nu_hat} vs {nu}");
-    // τ̂ within a factor of ~2 of the truth. df is the noisiest parameter, always is.
+    // τ̂ within a factor of ~2 of the truth. τ (the df) is the noisiest parameter.
     let tau_hat = model.models["tau"].coefficients.0[0].exp();
     assert!(tau_hat > 3.0 && tau_hat < 15.0, "τ̂ {tau_hat} vs {tau}");
 }

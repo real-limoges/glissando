@@ -3,24 +3,24 @@
 //! These are the special functions the score and Fisher-information terms lean
 //! on, so they run over whole arrays at a time, with optional Rayon parallelism
 //! once an array gets big (n >= 10,000). Small arguments go through recurrence
-//! relations; large ones through asymptotic expansions. Same math either way,
-//! just the numerically well-behaved path for each regime.
+//! relations; large ones through asymptotic expansions, whichever is numerically
+//! stable for the regime.
 
 use ndarray::{Array1, Zip};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use statrs::function::gamma::digamma as statrs_digamma;
 
-/// Under this many elements, spinning up Rayon costs more than it saves, so we don't bother.
+/// Under this many elements, spinning up Rayon costs more than it saves.
 #[cfg(feature = "parallel")]
 pub(crate) const PARALLEL_THRESHOLD: usize = 10_000;
 
 /// Element-wise map over two `Array1<f64>`s, parallelized for large inputs.
 ///
 /// Below [`PARALLEL_THRESHOLD`] elements (or with the `parallel` feature off) this
-/// just runs sequentially through `ndarray::Zip`. Above it, Rayon takes the
-/// underlying slices, and if an input isn't contiguous it quietly drops back to
-/// sequential iteration. Either way the caller never has to think about layout.
+/// runs sequentially through `ndarray::Zip`. Above it, Rayon takes the underlying
+/// slices, and if an input isn't contiguous it falls back to sequential iteration,
+/// so callers need not care about layout.
 #[inline]
 pub(crate) fn par_zip_map<F>(a: &Array1<f64>, b: &Array1<f64>, f: F) -> Array1<f64>
 where
@@ -97,8 +97,8 @@ where
 ///
 /// `p` is clamped to `[1e-12, 1−1e-12]` so the tails stay finite instead of
 /// blowing up to `±∞`. Both [`Gaussian::quantile`](crate::distributions::Gaussian)
-/// and the randomized quantile residuals call this, so there is exactly
-/// one definition to keep honest.
+/// and the randomized quantile residuals call this, so there is one
+/// definition.
 #[inline]
 pub(crate) fn std_normal_quantile(p: f64) -> f64 {
     use statrs::function::erf::erf_inv;
@@ -122,8 +122,8 @@ pub(crate) fn std_normal_pdf(x: f64) -> f64 {
 
 /// Median of `y`, finite entries only. Returns 0.0 on an empty slice; that case
 /// shouldn't reach here, since `validate_inputs` already rejects an empty `y` on
-/// the public path, so the return value is just a defensive floor rather than
-/// anything a caller relies on. The robust `initial_value` seeds for `StudentT`
+/// the public path, so the return value is a defensive default that no caller
+/// relies on. The robust `initial_value` seeds for `StudentT`
 /// and the Box-Cox families (`BCCG` / `BCT` / `BCPE`) all start from this.
 pub(crate) fn median(y: &Array1<f64>) -> f64 {
     let mut v: Vec<f64> = y.iter().copied().filter(|x| x.is_finite()).collect();
@@ -147,7 +147,7 @@ pub(crate) fn median_abs_deviation(y: &Array1<f64>) -> f64 {
 }
 
 /// Digamma function: psi(x) = d/dx log(Gamma(x)).
-/// Just a thin pass-through to statrs. Got an array? Reach for [`digamma_batch`] instead.
+/// Thin pass-through to statrs; for arrays use [`digamma_batch`].
 #[inline]
 pub fn digamma(x: f64) -> f64 {
     statrs_digamma(x)
@@ -173,7 +173,7 @@ pub fn trigamma(x: f64) -> f64 {
     }
 
     // Asymptotic expansion from Abramowitz & Stegun 6.4.11.
-    // Now that x is large, this nails it to full precision.
+    // At x >= 10 it is accurate to full precision.
     let inv_x = 1.0 / x_shifted;
     let inv_x2 = inv_x * inv_x;
     let inv_x3 = inv_x2 * inv_x;
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_digamma() {
-        // Ground-truth values straight from Mathematica/WolframAlpha
+        // Reference values from Mathematica/WolframAlpha
         assert!((digamma(1.0) - (-std::f64::consts::EULER_GAMMA)).abs() < 1e-10);
         assert!((digamma(2.0) - 0.4227843350984671).abs() < 1e-10);
         assert!((digamma(10.0) - 2.2517525890667214).abs() < 1e-10);
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(r.to_vec(), vec![111.0, 222.0, 333.0]);
     }
 
-    /// Push an array past PARALLEL_THRESHOLD so the parallel branch actually runs.
+    /// Push an array past PARALLEL_THRESHOLD so the parallel branch runs.
     #[cfg(feature = "parallel")]
     #[test]
     fn par_zip_map_parallel_branch_matches_sequential() {

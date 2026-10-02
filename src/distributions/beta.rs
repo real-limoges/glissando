@@ -59,7 +59,7 @@ impl Distribution for Beta {
         // which would have evaluated ψ and ψ' at the wrong α entirely. Same argument
         // spelled out at length in `binomial.rs`.
         //
-        // What actually needs guarding is α = μφ and β = (1−μ)φ hitting exactly 0,
+        // What needs guarding is α = μφ and β = (1−μ)φ hitting exactly 0,
         // where ψ(0) = −∞ and ψ'(0) = +∞. `TRIGAMMA_FLOOR` is the binding one of the
         // two (ψ' ~ 1/x² overflows ~150 decades before ψ ~ −1/x does) and sits far
         // below anything a link produces inside its own η clamp.
@@ -99,8 +99,8 @@ impl Distribution for Beta {
             + &one_minus_mu * &log_1_minus_y;
 
         // I_φ = μ²·ψ'(α) + (1−μ)²·ψ'(β) − ψ'(φ). ψ' is decreasing and convex, so
-        // I_φ > 0. An earlier expression had the sign inverted and leaned on
-        // `.abs()` to rescue it. That's gone now.
+        // I_φ > 0. An earlier expression had the sign inverted and relied on
+        // `.abs()` to correct it.
         let mu_sq = mu.mapv(|m| m * m);
         let one_minus_mu_sq = one_minus_mu.mapv(|v| v * v);
         let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_beta - &psi_prime_phi;
@@ -196,9 +196,9 @@ mod tests {
         // Regression for the `μ.clamp(MIN_POSITIVE, 1−MIN_POSITIVE)` this body used to
         // apply. Under a probit link at η = −10 the true μ is Φ(−10) ≈ 7.6e-24. The
         // clamp evaluated ψ and ψ' at 1e-10 instead, fourteen orders of magnitude
-        // away, so `chain_to_eta` multiplied a `mu_eta` taken from the real η into a
-        // score taken from a fictional μ, and the product stopped telescoping. Two μ
-        // that far apart had better not collapse onto the same derivative.
+        // away, so `chain_to_eta` multiplied a `mu_eta` taken from the true η into a
+        // score taken from a different μ, and the product stopped telescoping. Two μ
+        // that far apart must not produce the same derivative.
         let y = array![0.5];
         let clamped = [("mu", array![1e-10]), ("phi", array![10.0])];
         let truthful = [("mu", array![7.6e-24]), ("phi", array![10.0])];

@@ -1,11 +1,11 @@
 // Prior-weight end-to-end tests.
 //
 // These pin down `GamlssModel::fit_weighted` / `fit_with_config(..., Some(weights), ...)`
-// semantics. Three things I care about:
+// semantics:
 //
-//   1. Ones-identity: all-ones weights reproduce the unweighted fit. No exceptions.
+//   1. Ones-identity: all-ones weights reproduce the unweighted fit.
 //   2. Zero-weight exclusion: a row with weight 0 is effectively dropped.
-//   3. Validation errors: wrong length, negative, NaN. All rejected.
+//   3. Validation errors: wrong length, negative, and NaN weights are rejected.
 //
 // The mgcv parity benchmarks (B1/B2) don't live here; they're in the benchmark
 // harness, run via `benchmark/run_comparison.sh` + `cargo test --test mgcv_reference`.
@@ -109,7 +109,7 @@ fn prior_weight_ones_identity_gaussian_linear() {
             "mu coefficient mismatch: unweighted={u} weighted={w}"
         );
     }
-    // EDF has to come back identical too. The weight fold is a no-op here.
+    // EDF must be identical too, since the weight fold is a no-op here.
     let uw_edf = unweighted.models["mu"].edf;
     let wt_edf = weighted.models["mu"].edf;
     assert!(
@@ -150,7 +150,7 @@ fn prior_weight_ones_identity_student_t() {
 #[test]
 fn prior_weight_zero_excludes_rows() {
     // Dataset with a clean split: first 5 rows one mean, last 5 another.
-    // Zero the last 5 and the fit should track the first 5 only. The rest may as well not exist.
+    // With the last 5 zeroed, the fit should track the first 5 only.
     let y_full = Array1::from_vec(vec![
         2.0, 2.1, 1.9, 2.0, 2.05, // mean ≈ 2
         8.0, 8.1, 7.9, 8.0, 8.05, // mean ≈ 8 (should be invisible)

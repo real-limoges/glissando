@@ -1,7 +1,7 @@
 //! Factors and interactions, tested through the public API.
 //!
 //! Contrast coding is locked at the unit level against R's `contr.treatment` /
-//! `contr.sum` (see `assembler::tests`). Here I check the end-to-end story:
+//! `contr.sum` (see `assembler::tests`). These tests check the end-to-end path:
 //! a factor's per-level effects come back out of a fit, an interaction term
 //! recovers a level-specific slope, and resolved factor levels replay verbatim
 //! through a JSON round-trip and at predict time.
@@ -65,7 +65,7 @@ fn factor_recovers_treatment_level_effects() {
 }
 
 /// Sum-to-zero coding produces the same fitted values as treatment coding. The
-/// contrast is just a reparameterization; the fit underneath is identical.
+/// contrast is a reparameterization; the fit underneath is identical.
 #[test]
 fn factor_sum_to_zero_fits_same_values_as_treatment() {
     let (y, data) = factor_dataset(300, 5.0, [0.0, 2.0, -1.5]);

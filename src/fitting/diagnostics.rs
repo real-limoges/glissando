@@ -3,7 +3,7 @@
 //!
 //! The per-family math (log-density, marginal variance, expected value) lives on the
 //! [`Distribution`] trait. This module only composes those primitives; it never
-//! hand-dispatches on the family name, which is the whole point of keeping it here.
+//! dispatches on the family name.
 
 mod residuals;
 
@@ -34,11 +34,11 @@ pub struct ModelDiagnostics {
 
 /// Generalized Akaike Information Criterion: `−2·loglik + k·EDF`.
 ///
-/// The penalty `k` is the knob you turn: `k = 2` recovers AIC (predictive accuracy,
-/// permissive), `k = log(n)` recovers BIC/SBC (consistency, parsimonious), and
-/// `k = 3.84 ≈ χ²₁,₀.₉₅` is another one people reach for. Every information-criterion
-/// score in the crate runs through this single definition, so AIC, BIC, and the
-/// stepwise / ANOVA scores can't quietly disagree with each other.
+/// The penalty `k` selects the criterion: `k = 2` gives AIC (predictive accuracy,
+/// permissive), `k = log(n)` gives BIC/SBC (consistency, parsimonious), and
+/// `k = 3.84 ≈ χ²₁,₀.₉₅` is another common choice. Every information-criterion score
+/// in the crate goes through this one definition, so AIC, BIC, and the stepwise /
+/// ANOVA scores cannot disagree with each other.
 ///
 /// `EDF` is the *effective* degrees of freedom (the summed smoother traces,
 /// generally fractional), not the raw coefficient count.
@@ -129,10 +129,10 @@ pub(crate) fn compute<D: Distribution + ?Sized>(
 /// (Dunn & Smyth, 1996).
 ///
 /// By the probability integral transform, `U = F(Y | θ̂) ∼ Uniform(0,1)` for a
-/// correct continuous fit, so `r = Φ⁻¹(U) ∼ N(0,1)` no matter the family. That is
-/// the appeal: one Q-Q/worm-plot yardstick that works across every distribution. For
-/// a discrete response `F` jumps, so the **randomized PIT** spreads each atom across
-/// its jump interval: `u_i = F(y_i−1) + v_i·(F(y_i) − F(y_i−1))` with `v_i ∼ U(0,1)`.
+/// correct continuous fit, so `r = Φ⁻¹(U) ∼ N(0,1)` for every family, and one
+/// Q-Q/worm-plot reference applies across all distributions. For a discrete response
+/// `F` jumps, so the **randomized PIT** spreads each atom across its jump interval:
+/// `u_i = F(y_i−1) + v_i·(F(y_i) − F(y_i−1))` with `v_i ∼ U(0,1)`.
 ///
 /// `seed` makes the discrete randomization reproducible (via `StdRng`); it is
 /// ignored for continuous families, where `u = F(y)` is deterministic.

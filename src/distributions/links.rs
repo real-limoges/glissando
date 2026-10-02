@@ -28,7 +28,7 @@ pub trait Link: Debug + Send + Sync {
     /// The Fisher-scoring inner loop works on the η-scale, where the generic IRLS
     /// weight is `mu_eta(η)² · i_θ` (with `i_θ` the Fisher information on the
     /// natural scale). Supply this analytically and the scoring step can build
-    /// η-scale weights for *any* link, which is the whole prerequisite for the link
+    /// η-scale weights for *any* link, which is the prerequisite for the link
     /// expansion (probit, cloglog, …).
     ///
     /// The default is a symmetric finite difference so external `Link` impls keep
@@ -385,10 +385,10 @@ impl Link for CauchitLink {
 /// makes the type `!Sync` and therefore unusable inside the families' rayon closures
 /// under the `parallel` feature.
 ///
-/// Eager does not have to mean unconditional, though, and `d²μ/dη²` is only ever read
-/// by the structural wrappers' second-order CDF chain rule. [`Self::first_order`]
-/// therefore skips it, and is what the scoring loop uses for every other family; the
-/// saving is real because [`Link::mu_eta2`]'s default body finite-differences
+/// Eager is not unconditional: `d²μ/dη²` is read only by the structural wrappers'
+/// second-order CDF chain rule. [`Self::first_order`] therefore skips it, and is
+/// what the scoring loop uses for every other family. This matters because
+/// [`Link::mu_eta2`]'s default body finite-differences
 /// [`Link::mu_eta`], which may itself finite-difference [`Link::inv_link`], so a
 /// discarded element can cost up to four `inv_link` calls. Which constructor to use
 /// is decided by

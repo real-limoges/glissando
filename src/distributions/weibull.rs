@@ -13,7 +13,7 @@ use std::collections::HashMap;
 ///
 /// Parameters: `μ` (scale, log link) and `σ` (shape, log link). Support `y > 0`.
 /// With `z = (y/μ)^σ`, `Var(Y) = μ²·[Γ(1+2/σ) − Γ(1+1/σ)²]` and the mean is
-/// `μ·Γ(1+1/σ)`. Neither equals `μ`, so I override both moment methods.
+/// `μ·Γ(1+1/σ)`. Neither equals `μ`, so both moment methods are overridden.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Weibull;
 
@@ -36,7 +36,7 @@ impl Distribution for Weibull {
     }
 
     /// σ is the Weibull shape, and the default `y.std()` seed is meaningless for it.
-    /// I seed σ = 1 (Exponential), where the scale μ ≈ mean(y), and let RS refine both.
+    /// σ starts at 1 (Exponential), where the scale μ ≈ mean(y), and RS refines both.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => y.mean().expect("validate_inputs rejects empty y"),
@@ -75,7 +75,7 @@ impl Distribution for Weibull {
         // `MIN_POSITIVE` while dividing by a μ floored at `DENOM_FLOOR` left the two
         // 290 orders of magnitude apart, and the mismatch was not a rounding
         // difference: at μ = 0 with σ = 5 the numerator stayed a finite ~1e50 while
-        // `1/μ` reached 1e300, so their product overflowed to +∞ where the honest
+        // `1/μ` reached 1e300, so their product overflowed to +∞ where the exact
         // value is ~1e350 (beyond f64 either way), but `chain_to_eta` then met that
         // ∞ with a `mu_eta` of exactly 0 (`sqrt` at η = 0, `log` at η ≤ −745) and
         // produced NaN. Sharing one guard leaves the overflow to `chain_to_eta`,

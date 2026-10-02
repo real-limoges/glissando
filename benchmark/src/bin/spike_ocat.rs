@@ -1,16 +1,16 @@
 //! Ocat spike, Candidate A: three independent Binomial(1)/logit models.
 //!
-//! I fit three cumulative threshold models on the train data:
+//! Fits three cumulative threshold models on the train data:
 //!   model k: y_k = (y <= k), Binomial(n_trials=1), logit link, formula mu ~ s(x1)+s(x2)
 //!
-//! Then I rebuild the (n × 4) category-probability matrix on the held-out test set:
+//! Then rebuilds the (n × 4) category-probability matrix on the held-out test set:
 //!   P(y=1) = μ₁
 //!   P(y=2) = μ₂ - μ₁   (clipped to [0, 1] before renormalizing)
 //!   P(y=3) = μ₃ - μ₂
 //!   P(y=4) = 1 - μ₃
 //!
-//! I also count "monotonicity violations": rows where the three independent
-//! cumulative fits are not monotone increasing (μ₁ ≤ μ₂ ≤ μ₃ is NOT guaranteed,
+//! Also counts "monotonicity violations": rows where the three independent
+//! cumulative fits are not monotone increasing (μ₁ ≤ μ₂ ≤ μ₃ is not guaranteed,
 //! since each model is fit on its own).
 //!
 //! Usage:
@@ -65,8 +65,8 @@ fn extract_column(df: &DataFrame, name: &str) -> Array1<f64> {
 }
 
 /// P-spline formula mu ~ intercept + s(x1) + s(x2).
-/// The explicit intercept matches mgcv's implicit global mean term, and I need
-/// it for the penalized WLS system to condition properly: without it the
+/// The explicit intercept matches mgcv's implicit global mean term, and the
+/// penalized WLS system needs it to be well conditioned: without it the
 /// constant component of the two smooths runs through the origin, and the
 /// 20×20 X'WX block can go singular at the last diagonal entry.
 fn make_formula() -> Formula {
@@ -180,7 +180,7 @@ fn main() {
             n_violations += 1;
         }
 
-        // Clip each category prob to [0,1], then renormalize back to a real distribution.
+        // Clip each category prob to [0,1], then renormalize to a valid distribution.
         let p1 = c1.clamp(0.0, 1.0);
         let p2 = (c2 - c1).clamp(0.0, 1.0);
         let p3 = (c3 - c2).clamp(0.0, 1.0);

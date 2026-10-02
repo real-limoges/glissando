@@ -36,8 +36,8 @@ impl Distribution for NegativeBinomial {
     }
 
     /// NB2 σ is the overdispersion coefficient (`Var = μ + σμ²`), not a standard
-    /// deviation, so the trait default of `sd(y)` is on the wrong scale entirely
-    /// (often 10–30× too large for count data). I seed it with the method-of-moments
+    /// deviation, so the trait default of `sd(y)` is on the wrong scale
+    /// (often 10–30× too large for count data). The seed is the method-of-moments
     /// estimate `(var(y) − mean(y))/mean(y)²`, floored at 0.1 like gamlss NBI's
     /// `sigma.initial`.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
@@ -112,8 +112,8 @@ impl Distribution for NegativeBinomial {
         //
         // The convention is chain-rule covariant, so it needs no special handling
         // here: taking `i_σ := (∂l/∂σ)²` gives `mu_eta²·i_σ = (mu_eta·∂l/∂σ)² =
-        // u_η²`, which is the previous η-scale weight *for any link*, not just the
-        // default log one. Returned unfloored, like every other weight.
+        // u_η²`, which is the previous η-scale weight *for any link*. Returned
+        // unfloored, like every other weight.
         let i_sigma = u_sigma.mapv(|u| u * u);
 
         Ok(HashMap::from([

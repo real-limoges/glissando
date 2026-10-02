@@ -54,9 +54,9 @@ impl Distribution for Gaussian {
 
         let sigma_sq = sigma.mapv(|s| s * s);
         // Guard each reciprocal at its own power of σ rather than clamping σ, so the
-        // value `chain_to_eta` multiplies back in stays exactly the caller's σ. Guard
-        // σ instead and then cube it and it overflows to infinity for a σ the log
-        // link can still underflow to. And inf · 0 is NaN.
+        // value `chain_to_eta` multiplies back in stays exactly the caller's σ.
+        // Guarding σ and then cubing it overflows to infinity for a σ the log link
+        // can still underflow to, and inf · 0 is NaN.
         let inv_sigma_sq = sigma_sq.mapv(|s2| 1.0 / s2.max(DENOM_FLOOR));
         let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
         let residual = y - mu;
@@ -140,8 +140,8 @@ impl Distribution for Gaussian {
             // are far enough apart (σ on its `MIN_POSITIVE` floor against a 1e300
             // censoring bound), long after φ has underflowed to exactly 0, and
             // `∞ · 0` is NaN, which `chain_cdf_to_eta` then spreads into every
-            // censored or truncated row's score and weight. Same shape as the ±∞-bound
-            // arm above, and it leaves every in-range value untouched.
+            // censored or truncated row's score and weight. This mirrors the ±∞-bound
+            // arm above and leaves every in-range value untouched.
             if !z.is_finite() {
                 continue;
             }
@@ -251,8 +251,8 @@ mod tests {
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
         // Gaussian μ is identity-linked, so a default-link
-        // finite difference can't tell `∂l/∂μ` from `∂l/∂η` at all. A log link on μ
-        // is what makes the check bite.
+        // finite difference can't tell `∂l/∂μ` from `∂l/∂η`. A log link on μ makes
+        // the check discriminate.
         //
         // μ stays positive throughout the fixture so the log and sqrt links are
         // well defined on it.

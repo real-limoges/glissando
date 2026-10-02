@@ -1,4 +1,4 @@
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -46,7 +46,7 @@ fn random_effect_recovers_group_means() {
     let mu_fitted = &model.models["mu"].fitted_values;
     for (g_idx, off) in group_offsets.iter().enumerate() {
         let expected = grand_mean + off;
-        // grab the first observation in this group
+        // first observation in this group
         let i = g_idx * n_per_group;
         let diff = (mu_fitted[i] - expected).abs();
         assert!(
@@ -59,9 +59,9 @@ fn random_effect_recovers_group_means() {
         );
     }
 
-    // EDF should reflect the random effect buying us something above an intercept-only fit.
+    // EDF should show the random effect adding fit beyond an intercept-only model.
     // With strong group separation and 4 groups (3 free degrees of freedom after the
-    // sum-to-zero constraint), EDF has to sit clearly above 1.
+    // sum-to-zero constraint), EDF must sit clearly above 1.
     let edf = model.models["mu"].edf;
     assert!(
         edf > 1.5,
@@ -72,7 +72,7 @@ fn random_effect_recovers_group_means() {
 
 #[test]
 fn random_effect_with_few_groups_runs() {
-    // Smoke test. 2-group case, the smallest one where sum-to-zero actually kicks in.
+    // Smoke test: the 2-group case, the smallest one where sum-to-zero applies.
     let mut rng = rand::rng();
     let n_per_group = 20;
     let mut y_vals: Vec<f64> = Vec::new();

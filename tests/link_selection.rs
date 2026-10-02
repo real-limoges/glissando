@@ -2,7 +2,7 @@
 //!
 //! Exercises the public surface of the link-selection feature:
 //! - `FitConfig::with_link` overrides a parameter's link at fit time;
-//! - the override actually changes the fit (probit/cloglog ≠ logit default);
+//! - the override changes the fit (probit/cloglog ≠ logit default);
 //! - an unknown link name is a typed error;
 //! - an unknown *parameter* name is a typed error, and so is an override on a
 //!   parameter whose family cannot honor it;
@@ -200,7 +200,7 @@ fn unit_interval_data() -> (DataSet, Array1<f64>) {
 #[test]
 fn a_link_override_for_an_unknown_parameter_is_rejected() {
     // Beta's second parameter is `phi`, not `sigma`. Before this check, the
-    // override just never matched inside the per-parameter loop and the fit
+    // override never matched inside the per-parameter loop and the fit
     // ran to completion under the default links, reporting success for a
     // configuration it had completely ignored.
     let (data, y) = unit_interval_data();
@@ -309,7 +309,7 @@ fn hurdle_answers_for_xi_itself_rather_than_asking_its_base() {
     assert!(hurdle_over_gamma.allows_link_override("mu"));
 }
 
-/// A family may only refuse a name it actually has. Without this, a family added
+/// A family may only refuse a name it has. Without this, a family added
 /// later could return `false` for a parameter outside `parameters()` and the
 /// refusal would be unreachable dead logic that reads as a live constraint.
 #[test]
@@ -330,7 +330,7 @@ fn refusals_only_ever_name_real_parameters() {
                 family.name()
             );
         }
-        // Every refused name must be one the family really exposes; the fit
+        // Every refused name must be one the family exposes; the fit
         // rejects unknown keys before ever consulting `allows_link_override`.
         let refused: Vec<&str> = family
             .parameters()
@@ -375,7 +375,7 @@ fn json_roundtrip_preserves_overridden_link() {
 
     // ...and predict reconstructs the probit link, not the logit default, so
     // predictions match bit-for-bit. (A regression that dropped the persisted
-    // link would silently predict through logit and diverge here.)
+    // link would predict through logit and diverge here.)
     let preds2 = reloaded.predict(&data, &family).unwrap();
     for (a, b) in preds["mu"].iter().zip(preds2["mu"].iter()) {
         assert!(

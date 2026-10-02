@@ -4,12 +4,12 @@ use ndarray::{Array1, Array2};
 
 /// Householder-built orthonormal basis (k × (k−1)) of the null-space of `1_k`.
 ///
-/// I use this as a sum-to-zero reparameterization for smooth bases with the
+/// Serves as a sum-to-zero reparameterization for smooth bases with the
 /// partition-of-unity property (P-spline: `B · 1_k = 1_n`). When an [`Intercept`]
 /// term sits alongside such a smooth on the same parameter, the design matrix
 /// `[1 | B]` is rank-deficient because `1_n ∈ col(B)`. Replacing `B` with `B · Z`
-/// and the penalty `S` with `Z' · S · Z` strips the constant direction out of the
-/// smooth and hands back identifiability.
+/// and the penalty `S` with `Z' · S · Z` removes the constant direction from the
+/// smooth and restores identifiability.
 ///
 /// `Z` depends only on `k`, never on the training data, so prediction reapplies the
 /// same constraint deterministically.
@@ -22,7 +22,7 @@ pub(crate) fn sum_to_zero_basis(k: usize) -> Array2<f64> {
     //   v = 1_k + √k · e_1   (sign chosen so v_0 = 1 + √k never vanishes),
     //   H = I − 2·v·v'/(v'·v).
     // The remaining columns H[:, 1..] span the orthogonal complement of 1_k, and
-    // they come out orthonormal for free because H is orthogonal.
+    // they are orthonormal because H is orthogonal.
     let sqrt_k = (k as f64).sqrt();
     let mut v = Array1::ones(k);
     v[0] += sqrt_k;
@@ -105,8 +105,8 @@ mod tests {
     proptest! {
         /// For any `k >= 2` the reparameterization matrix is `k×(k-1)`, has
         /// orthonormal columns (`Z'Z = I`), and spans the null-space of `1_k`
-        /// (`Z'·1_k = 0`, so every column sums to zero). These three together are
-        /// exactly what makes `B·Z` an identifiable sum-to-zero smooth.
+        /// (`Z'·1_k = 0`, so every column sums to zero). Together these make `B·Z`
+        /// an identifiable sum-to-zero smooth.
         #[test]
         fn reparam_is_orthonormal_null_space_of_ones(k in 2usize..40) {
             let z = sum_to_zero_basis(k);

@@ -6,13 +6,13 @@
 //   - Default `FitConfig` uses REML.
 //   - REML fits converge and produce finite, well-conditioned output.
 //   - EDF lands in the interior of the feasible range (not pinned at 0 or p).
-//   - REML and GCV agree closely on well-identified data. They shouldn't be
+//   - REML and GCV agree closely on well-identified data. They needn't be
 //     identical (different criteria), but the difference should be modest.
 //
 // Golden-value comparison vs `mgcv::gam(method="REML")` is handled by the
 // existing benchmark harness (`benchmark/run_comparison.sh` + the ignored
-// `tests/mgcv_reference.rs`); duplicating that here would just re-implement the
-// same workflow.
+// `tests/mgcv_reference.rs`); duplicating that here would re-implement the same
+// workflow.
 #![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -25,7 +25,7 @@ use glissando::{
 };
 use ndarray::Array1;
 
-/// Wiggly sinusoidal Gaussian data: a regime where the basis is genuinely needed
+/// Wiggly sinusoidal Gaussian data: a regime where the basis is needed
 /// and REML/GCV pick comparable smoothing. Linear-trend data lives in the order-2
 /// penalty's null space, so on such data REML correctly drives λ to ∞ (EDF ≈ 2)
 /// while GCV undersmooths; the criteria *should* disagree there.
@@ -55,7 +55,7 @@ fn default_fit_config_uses_reml() {
 
 #[test]
 fn reml_fits_gaussian_pspline_end_to_end() {
-    // Sinusoidal (not linear) truth: the smooth is genuinely identified, so REML
+    // Sinusoidal (not linear) truth: the smooth is identified, so REML
     // settles on an interior λ and EDF lands in (1, p). Linear-trend data lives in
     // the order-2 penalty's null space, which leaves the REML objective flat in λ.
     // The smoothing parameter is then unidentified and the outer loop's convergence
@@ -117,7 +117,7 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
     // Order-2 P-spline penalty has a 2-dim null space (constants + linear).
     // When the truth is linear, REML correctly drives λ very high so the fit
     // collapses to its null space, giving EDF ≈ 2.  GCV is documented to
-    // undersmooth in this regime; we don't assert anything about GCV here,
+    // undersmooth in this regime; nothing is asserted about GCV here,
     // only that REML lands at the principled solution.
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(150, 1.0, 5.0, 1.0);
@@ -149,7 +149,7 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
 
 #[test]
 fn reml_and_gcv_agree_on_wiggly_truth() {
-    // On data that genuinely needs the basis (sinusoidal truth), both criteria
+    // On data that needs the basis (sinusoidal truth), both criteria
     // should pick comparable smoothing and produce indistinguishable predictions.
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
@@ -208,7 +208,7 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
 fn fellner_schall_fits_gaussian_pspline_end_to_end() {
     // Sinusoidal truth so F-S has a finite interior optimum.  On linear-trend
     // data, the order-2 P-spline penalty's null space already captures the
-    // truth, and any LAML-target optimizer (REML or F-S) will legitimately
+    // truth, and any LAML-target optimizer (REML or F-S) will correctly
     // drive λ to its ceiling; that's covered by REML's own null-space test.
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
@@ -315,7 +315,7 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
 
 #[test]
 fn fellner_schall_dispatch_is_distinct_from_gcv() {
-    // Proves the F-S match arm is actually wired, not aliased to GCV.
+    // Confirms the F-S match arm is wired, not aliased to GCV.
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);
     let formula = Formula::new()
@@ -349,7 +349,7 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
 
     assert!(
         (fs.models["mu"].lambdas[0] - gcv.models["mu"].lambdas[0]).abs() > 1e-12,
-        "F-S and GCV produced identical λ — dispatch may not be wired"
+        "F-S and GCV produced identical λ; dispatch may not be wired"
     );
 }
 
@@ -393,7 +393,7 @@ fn criterion_dispatch_is_observable() {
     let iters_differ = reml.diagnostics.iterations != gcv.diagnostics.iterations;
     assert!(
         lambdas_differ || iters_differ,
-        "REML and GCV produced identical λ and identical iteration count — \
+        "REML and GCV produced identical λ and identical iteration count; \
          dispatch may not be wired through"
     );
 }

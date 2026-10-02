@@ -24,7 +24,7 @@ fn fmt(x: f64) -> String {
 
 /// 3-significant-figure formatter for quantities that carry openblas/pure-rust drift
 /// in their 4th–5th digit (effective df, residual extremes): coarse enough to be
-/// backend-stable, fine enough to still catch a real move.
+/// backend-stable, fine enough to still catch a change.
 fn fmt3(x: f64) -> String {
     format!("{:.2e}", x)
 }
@@ -110,7 +110,7 @@ fn diagnostics_poisson_pspline() {
     insta::assert_yaml_snapshot!(snap);
 }
 
-/// Centile curves (the signature GAMLSS output) on a fresh grid, snapshotted at the
+/// Centile curves (the characteristic GAMLSS output) on a new grid, snapshotted at the
 /// gamlss default percentiles. Locks the response-scale quantile inversion.
 #[test]
 fn centiles_gaussian_linear() {

@@ -3,12 +3,11 @@
 //! Home of [`FamilyHandle`], which turns a
 //! [`FamilyDescriptor`](crate::distributions::FamilyDescriptor) into a boxed
 //! [`Distribution`](crate::distributions::Distribution) and keeps it alive across
-//! however many `fit` / `predict` calls the binding makes. The point of going
-//! through `FamilyDescriptor` instead of a hand-maintained enum of concrete family
-//! types is coverage: every family the descriptor already knows about (`Binomial`,
-//! `Ocat`, and the `Censored`/`Truncated`/`Hurdle` structural wrappers) is
-//! reachable here for free, with no second name roster that could quietly fall out
-//! of sync.
+//! however many `fit` / `predict` calls the binding makes. Going through
+//! `FamilyDescriptor` instead of a hand-maintained enum of concrete family types
+//! makes every family the descriptor knows about (`Binomial`, `Ocat`, and the
+//! `Censored`/`Truncated`/`Hurdle` structural wrappers) reachable here, with no
+//! second name roster to keep in sync.
 
 #![cfg(feature = "python")]
 
@@ -40,9 +39,9 @@ impl FamilyHandle {
 
     /// Rebuild the concrete `Ocat` this handle describes, if that's what it is.
     ///
-    /// `Ocat` carries nothing but `n_categories`, so it's cheap to just rebuild.
-    /// That lets this hand back an owned value rather than fighting a downcast out
-    /// of the boxed trait object.
+    /// `Ocat` carries nothing but `n_categories`, so rebuilding it is cheap, and
+    /// this can return an owned value instead of downcasting the boxed trait
+    /// object.
     pub(crate) fn as_ocat(&self) -> Option<Ocat> {
         match &self.descriptor {
             FamilyDescriptor::Ocat { n_categories } => Some(Ocat::new(*n_categories)),

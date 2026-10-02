@@ -2,7 +2,7 @@
 
 Runnable JavaScript version of the cookbook quickstart ([`docs/reference/cookbook-quickstart.md`](../../docs/reference/cookbook-quickstart.md)), against the `glissando` npm package (the committed `pkg/`).
 
-## The target-build wrinkle
+## Building for Node
 
 `pkg/` is built for the default (bundler) target, which a bundler (Vite, webpack, Rollup) consumes directly but plain Node cannot `import`.
 To run these scripts under Node, rebuild for the nodejs target.
@@ -36,7 +36,7 @@ Everything crosses the boundary as a JSON string: inputs are `JSON.stringify`'d,
 - `formula` is `{ "mu": "y ~ s(x)", "sigma": "~ 1" }` (a formula string per parameter).
 - `predict(dataJson)` returns `{ "mu": [...], "sigma": [...] }`.
 
-Two traps specific to this surface:
+Two details specific to this surface:
 
 1. The static `fit` / `fitWithConfig` take `y` **before** `data`, the reverse of the Rust and Python surfaces.
 2. Seed arguments are BigInt (`42n`), not `Number`.

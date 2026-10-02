@@ -1,14 +1,15 @@
 # Glissando Benchmark Suite
 
-This is how I keep the Rust `glissando` implementation honest: I fit the same models in R's established GAMLSS tools (`mgcv` and `gamlss`) and check that the numbers agree.
+I use this suite to check the Rust `glissando` implementation against R: I fit the same models with `mgcv` and `gamlss` and check that the numbers agree.
 
 ## Overview
 
-The benchmark holds glissando (Rust) up against two R oracles:
+The benchmark compares glissando (Rust) against two R oracles:
 - **R/mgcv**: for Gaussian, Poisson, Binomial, Gamma, Negative Binomial, and Beta, including the tensor-product, random-effect and cubic-regression-spline scenarios.
 - **R/gamlss**: the like-for-like oracle for Student-t (`TF()`).
-  It is the oracle because it implements the same Rigby–Stasinopoulos algorithm and the same (μ, σ, ν) location-scale-df parameterization glissando uses, so a disagreement is a real bug rather than a difference of convention.
-  mgcv's `scat()` is *also* run for Student-t, but only as a loose, μ-only cross-method sanity check: it cannot validate σ/ν/EDF/SE, because it folds σ and ν into internal nuisance scalars instead of exposing them as modeled predictors.
+  It is the oracle because it implements the same Rigby–Stasinopoulos algorithm and the same (μ, σ, ν) location-scale-df parameterization glissando uses, so a disagreement points to a bug rather than a difference of convention.
+  mgcv's `scat()` is also run for Student-t, but only as a loose, μ-only cross-method sanity check.
+  It cannot validate σ/ν/EDF/SE, because it folds σ and ν into internal nuisance scalars instead of exposing them as modeled predictors.
 
 The suite draws synthetic data with known parameters, fits it in both implementations, and writes out detailed comparison reports.
 Each scenario is replicated (25 replicates by default), and the reference test gates the distribution of drift across replicates rather than a single sample.
@@ -25,7 +26,8 @@ sudo apt-get install libopenblas-dev  # Ubuntu/Debian
 ```
 
 **Python**: the environment is managed by [uv](https://docs.astral.sh/uv/) from `pyproject.toml` and `uv.lock`.
-`run_comparison.sh` calls `uv run`, which creates the environment on first use; to create it ahead of time:
+`run_comparison.sh` calls `uv run`, which creates the environment on first use.
+To create it ahead of time:
 ```bash
 cd benchmark
 uv sync
@@ -66,8 +68,8 @@ The `--ignored` test is gated because it needs R to have just produced the data;
 
 `benchmark/output/` is gitignored except for one allowlisted file, `comparison_summary.json`, which is the fixture the per-commit gate reads.
 The nightly `r-parity` workflow is the source of truth: it installs R + mgcv + gamlss, regenerates the summary, asserts parity, and uploads the regenerated `comparison_summary.json` as a build artifact.
-When families or scenarios change, download that artifact and commit it to refresh the guardrail.
-Machines and CI jobs without the fixture simply skip the per-commit gate, so a fresh clone stays green.
+When families or scenarios change, download that artifact and commit it to refresh the fixture.
+Machines and CI jobs without the fixture skip the per-commit gate, so a fresh clone stays green.
 
 ## Commands
 
@@ -164,7 +166,7 @@ All paths are under `output/`, and every per-fit file is suffixed with its repli
 
 ### Convergence
 Both implementations should converge on every scenario.
-If one of them does not, that is the finding.
+A scenario where either one fails to converge needs investigating.
 
 ### Performance
 Speedup = R time / Rust time (typically 2-10x on large data).

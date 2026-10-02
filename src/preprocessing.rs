@@ -1,10 +1,10 @@
 //! Input validation for model fitting.
 //!
-//! The gatekeeper that runs before any fitting starts: it checks the dataset, the
-//! response, and the formula for the things that would otherwise blow up deep in
-//! the fitter (ragged or mismatched dimensions, non-finite values, a formula that
-//! references a column nobody supplied). Better to catch them here with a clear
-//! error than three layers down inside a linear solve.
+//! Runs before fitting starts and checks the dataset, the response, and the
+//! formula for problems that would otherwise fail deep in the fitter (ragged or
+//! mismatched dimensions, non-finite values, a formula that references a column
+//! nobody supplied), so they surface here as a clear error instead of inside a
+//! linear solve.
 
 use crate::distributions::Distribution;
 use crate::error::GamlssError;
@@ -20,12 +20,11 @@ type CompleteFrame = (DataSet, Array1<f64>, Option<Array1<f64>>);
 /// formula-referenced column, or (when present) its prior weight, and return
 /// owned, row-aligned copies of the response, the referenced columns, and the
 /// weights (`NaAction::DropRows`). This is R's `na.omit` over the model
-/// frame: only the variables the formula actually references count toward
-/// completeness, so an unrelated column full of holes never costs you a single
-/// row.
+/// frame: only the variables the formula references count toward completeness,
+/// so missing values in an unrelated column drop no rows.
 ///
-/// The returned `DataSet` carries only the referenced columns, which is all the
-/// fitter ever looks at; everything else is left out of the working copy. Errors
+/// The returned `DataSet` carries only the referenced columns, the only ones the
+/// fitter reads. Errors
 /// with [`GamlssError::EmptyData`] if nothing complete survives.
 pub fn drop_incomplete_rows(
     y: &Array1<f64>,
@@ -33,7 +32,7 @@ pub fn drop_incomplete_rows(
     formula: &Formula,
     weights: Option<&Array1<f64>>,
 ) -> Result<CompleteFrame, GamlssError> {
-    // Only the columns the formula actually references; nothing else can mask a row.
+    // Only the columns the formula references; nothing else can mask a row.
     let mut referenced: HashSet<&str> = HashSet::new();
     for terms in formula.values() {
         for term in terms {
@@ -43,10 +42,10 @@ pub fn drop_incomplete_rows(
         }
     }
 
-    // Only the response and the referenced columns get a vote in the completeness
+    // Only the response and the referenced columns count in the completeness
     // test. Weights are left out on purpose: a non-finite or negative weight is a
     // user error, not missing data, so `validate_inputs` rejects it outright
-    // instead of quietly dropping the row and hiding the mistake.
+    // instead of dropping the row and hiding the mistake.
     let n = y.len();
     let mut keep = vec![true; n];
     for (i, &yi) in y.iter().enumerate() {
@@ -80,7 +79,7 @@ pub fn drop_incomplete_rows(
     let y_filtered = take(y);
     // Subset the weights only when their length matches `y`. If it doesn't, leave
     // them as-is and let `validate_inputs` downstream report the length mismatch,
-    // rather than papering over it here.
+    // rather than hiding it here.
     let w_filtered = match weights {
         Some(w) if w.len() == n => Some(take(w)),
         other => other.cloned(),
@@ -149,10 +148,10 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
         }
     }
 
-    // `DataSet` already guarantees every column shares one length internally, so all
-    // that's left is checking that length agrees with `y`. `n_obs()` comes back
-    // `None` for an empty dataset, and that's fine: a formula might reference only
-    // `Intercept`, which needs no data at all.
+    // `DataSet` already guarantees every column shares one length internally, so
+    // the remaining check is that this length agrees with `y`. `n_obs()` returns
+    // `None` for an empty dataset, which is allowed: a formula might reference only
+    // `Intercept`, which needs no data.
     if let Some(data_n_obs) = data.n_obs() {
         if data_n_obs != n_obs {
             return Err(GamlssError::Input(format!(
@@ -330,10 +329,9 @@ mod tests {
         use proptest::prelude::*;
 
         proptest! {
-            /// Hand `y` even one NaN or ±∞ and validate_inputs has to come back
-            /// with `NonFiniteValues` whose `count` matches the number of
-            /// non-finite entries exactly. Silently accepting the input is never
-            /// allowed.
+            /// If `y` contains any NaN or ±∞, validate_inputs must return
+            /// `NonFiniteValues` whose `count` equals the number of non-finite
+            /// entries. Accepting the input is never allowed.
             #[test]
             fn rejects_any_non_finite_y(
                 finite_vals in proptest::collection::vec(-1e6f64..1e6, 1..32),

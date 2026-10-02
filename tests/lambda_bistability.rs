@@ -1,4 +1,4 @@
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking gets in the way.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 //! DIAGNOSTIC harness (`#[ignore]`d) for the smoothing-parameter bistability:
@@ -12,11 +12,11 @@
 //! −V_r and sitting on a near-flat high-λ shelf. So collapse is not a competing
 //! optimum; it is a gradient optimizer getting stuck on that flat shelf.
 //!
-//! What I measure here is the *behavioral* consequence: how often the default
+//! This harness measures the behavioral consequence: how often the default
 //! (REML / L-BFGS) collapses across repeated fits, and whether `Gcv` and the
 //! deterministic `FellnerSchall` land on the good interior λ instead.
 //!
-//! RESOLUTION (kept as a regression diagnostic): the tipping was driven entirely
+//! Resolution (kept as a regression diagnostic): the tipping was driven entirely
 //! by multi-threaded OpenBLAS reduction-order nondeterminism. This repo now pins
 //! BLAS to a single thread for all `cargo` runs (`OPENBLAS_NUM_THREADS=1` in
 //! `.cargo/config.toml`), so these harnesses now report a 0/N collapse rate with
@@ -84,7 +84,7 @@ fn control_formula() -> Formula {
     formula
 }
 
-/// σ-smooth case (the one reported as genuinely flaky): constant mean, the
+/// σ-smooth case (the one reported as flaky): constant mean, the
 /// nonlinear curve lives on log σ.
 fn sigma_data() -> (DataSet, Array1<f64>, Vec<f64>) {
     let n = 8_000usize;
@@ -161,7 +161,7 @@ fn fit_once(criterion: SmoothingCriterion) -> (f64, f64, f64, usize) {
 #[ignore = "diagnostic: measures REML collapse frequency over repeated fits"]
 fn diagnostic_reml_collapse_frequency() {
     const REPEATS: usize = 20;
-    eprintln!("REML (default) — {REPEATS} repeated fits of the control case:");
+    eprintln!("REML (default): {REPEATS} repeated fits of the control case:");
     eprintln!(
         "{:>4}  {:>10}  {:>12}  {:>8}  {:>6}",
         "run", "edf", "smooth_edf", "corr", "warns"
@@ -192,7 +192,7 @@ fn diagnostic_reml_collapse_frequency() {
 #[test]
 #[ignore = "diagnostic: compares GCV / REML / Fellner-Schall on the control case"]
 fn diagnostic_criterion_comparison() {
-    eprintln!("Control case — one fit per criterion (interior recovery ⇒ edf ≈ 13, corr > 0.95):");
+    eprintln!("Control case: one fit per criterion (interior recovery ⇒ edf ≈ 13, corr > 0.95):");
     eprintln!(
         "{:>16}  {:>10}  {:>12}  {:>8}  {:>6}",
         "criterion", "edf", "smooth_edf", "corr", "warns"
@@ -226,7 +226,7 @@ fn diagnostic_criterion_comparison() {
     }
 }
 
-/// Q1': collapse frequency on the genuinely-flaky σ-smooth case, per criterion.
+/// Q1': collapse frequency on the flaky σ-smooth case, per criterion.
 #[test]
 #[ignore = "diagnostic: σ-smooth collapse frequency across criteria"]
 fn diagnostic_sigma_collapse_frequency() {

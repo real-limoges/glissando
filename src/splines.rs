@@ -36,8 +36,8 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn is_psd(m: &Array2<f64>) -> bool {
-        // M = D'D is PSD by construction; I just check x'Mx >= 0 for a batch of random x.
-        // Cheap stand-in for a real eigenvalue computation, and it needs no linalg backend.
+        // M = D'D is PSD by construction; this checks x'Mx >= 0 for a batch of random x.
+        // A cheap stand-in for an eigenvalue computation that needs no linalg backend.
         use ndarray::{Array, Array1};
         use rand::rngs::StdRng;
         use rand::{RngExt, SeedableRng};

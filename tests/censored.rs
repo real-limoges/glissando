@@ -1,6 +1,6 @@
-//! Censored integration tests. Here I want a `Censored` wrapper to fit end-to-end
-//! through the standard RS loop, recover known parameters under right-censoring, and
-//! collapse back to the base family when every row is an event.
+//! Censored integration tests: a `Censored` wrapper fits end-to-end through the
+//! standard RS loop, recovers known parameters under right-censoring, and collapses
+//! back to the base family when every row is an event.
 
 #![cfg(not(feature = "python"))]
 
@@ -71,7 +71,7 @@ fn right_censored_recovers_mean() {
             status[i] = CensorStatus::Right;
         }
     }
-    // Sanity check. Censoring has to actually bind on a meaningful fraction, or the test proves nothing.
+    // Sanity check: censoring must bind on a meaningful fraction, or the test proves nothing.
     let n_cens = status.iter().filter(|s| **s == CensorStatus::Right).count();
     assert!(
         n_cens > 20 && n_cens < n - 20,
@@ -91,8 +91,8 @@ fn right_censored_recovers_mean() {
         "censored MLE mu {mu_hat} should recover ≈ {true_mu}"
     );
 
-    // The naive (ignore-censoring) mean sits materially lower. That's the proof the wrapper
-    // is doing real work, not just echoing back the data mean.
+    // The naive (ignore-censoring) mean sits materially lower, which shows the wrapper
+    // changes the estimate rather than echoing back the data mean.
     let naive_mean = y.mean().unwrap();
     assert!(
         naive_mean < true_mu - 0.3,
