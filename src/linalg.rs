@@ -7,15 +7,15 @@
 //!
 //! Both backend modules expose the identical set of functions (`solve`, `inv`,
 //! `cholesky_lower`, `log_det_via_cholesky`, `symmetric_eigh`), and the file-level
-//! `pub use` hands out whichever one is active. The rest of the crate never has to
-//! know which is underneath.
+//! `pub use` exports whichever one is active, so the rest of the crate does not
+//! depend on which is underneath.
 
 // Both `openblas` and `pure-rust` define `mod backend { … }` behind `#[cfg]`
 // gates, each assuming it's the only one active. Cargo's feature-unification
-// across workspace members can quietly turn both on at once (say
-// `cargo --workspace --features pure-rust` while the `benchmark` member drags in
-// `openblas`), and then you get a cryptic E0428 "name `backend` defined multiple
-// times" instead of anything that tells you what went wrong. So we catch it here.
+// across workspace members can turn both on at once (say
+// `cargo --workspace --features pure-rust` while the `benchmark` member pulls in
+// `openblas`), which otherwise produces a cryptic E0428 "name `backend` defined
+// multiple times" that does not name the cause. This guard reports it directly.
 #[cfg(all(feature = "openblas", feature = "pure-rust"))]
 compile_error!(
     "Features `openblas` and `pure-rust` are mutually exclusive; pick one linear-algebra backend. \
@@ -69,15 +69,15 @@ mod backend {
     /// The fast path is LAPACK `*syev`. That driver's implicit-QR sweep (`dsteqr`)
     /// carries a fixed iteration budget and can exhaust it on a graded matrix whose
     /// eigenvalues span many orders of magnitude, returning a positive `info`
-    /// ("`i` off-diagonal elements failed to converge"). We hit exactly that when a
+    /// ("`i` off-diagonal elements failed to converge"). This happens when a
     /// smooth collapses to its penalty null space and `penalty_eigen` decomposes
     /// `λ·S` with `λ ≈ e³⁰`: whether `dsteqr` converges is OpenBLAS-build-dependent,
     /// so a fit that passes locally can die only on CI (the same CI-only-LAPACK
     /// failure mode that [`super::solve_robust`] / [`super::inv_robust`] guard the
     /// other backends against). Jacobi rotation is unconditionally convergent for
     /// any real symmetric matrix and computes small eigenvalues to high relative
-    /// accuracy, so fall back to it rather than propagating the crash. It only runs
-    /// when `*syev` has actually failed, so the healthy path is untouched.
+    /// accuracy, so this falls back to it rather than propagating the error. It runs
+    /// only when `*syev` has failed, so the normal path is unchanged.
     pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
         // ndarray-linalg's `eigh` hands them back ascending already, so nothing to sort.
         match a.eigh(UPLO::Lower) {
@@ -256,8 +256,8 @@ mod backend {
 }
 
 // The `not(feature = "openblas")` gate keeps this mod out of the build when both
-// features unify, so the only thing that fires is the `compile_error!` above. No
-// cryptic E0428 piled on top of it.
+// features unify, so the only error is the `compile_error!` above, with no
+// cryptic E0428 alongside it.
 #[cfg(all(feature = "pure-rust", not(feature = "openblas")))]
 mod backend {
     use super::Result;
@@ -357,17 +357,16 @@ pub use backend::{cholesky_lower, inv, log_det_via_cholesky, solve, symmetric_ei
 
 /// Numerically stable log-determinant via symmetric eigendecomposition.
 ///
-/// This reaches for LAPACK `dsyev` (the symmetric eigensolver) rather than
+/// This uses LAPACK `dsyev` (the symmetric eigensolver) rather than
 /// Cholesky. That keeps it consistent with the analytic REML gradient, which
 /// carries the term `tr(V·S_j)` for `V = (H+S_λ)⁻¹`: the gradient of `log|H+S_λ|`
 /// w.r.t. `log λ_j` is `λ_j·tr(V·S_j)` no matter whether V came out of LU or
-/// Cholesky. The payoff is that `dsyev` succeeds exactly where Cholesky flatly
-/// fails, on near-PD matrices (think evenly-spaced B-spline designs whose
-/// normal-equation matrix picks up a few tiny negative floating-point pivots), and
-/// still returns meaningful eigenvalues. Near-zero eigenvalues get clamped to
-/// `1e-300` before the log, which drives the log-det very negative and steers the
-/// REML optimizer away from those λ regions on its own. That is the behavior we
-/// want, not a crash.
+/// Cholesky. `dsyev` also succeeds where Cholesky fails, on near-PD matrices
+/// (e.g. evenly-spaced B-spline designs whose normal-equation matrix picks up a
+/// few tiny negative floating-point pivots), and still returns meaningful
+/// eigenvalues. Near-zero eigenvalues get clamped to `1e-300` before the log,
+/// which drives the log-det very negative and steers the REML optimizer away from
+/// those λ regions instead of crashing.
 pub fn log_det_robust(a: &ndarray::Array2<f64>) -> Result<f64> {
     // Fast path: a well-conditioned matrix never touches the eigensolver.
     if let Ok(ld) = log_det_via_cholesky(a) {
@@ -385,15 +384,14 @@ pub fn log_det_robust(a: &ndarray::Array2<f64>) -> Result<f64> {
 ///
 /// In exact arithmetic `X'WX + S_λ` is symmetric positive definite (the penalty's
 /// null space, e.g. the polynomial trend a P-spline leaves unpenalized, is always
-/// covered by `X'WX` for a well-posed design). Floating point is less generous: it
-/// can develop a near-zero pivot, the same failure mode written up on
-/// [`log_det_robust`], and that trips a hard LAPACK error (`dgesv`/`dpotrf`
-/// returning a nonzero info code) inside [`inv`] on some BLAS builds and not
-/// others. So a design that fits fine on your machine can blow up only on CI,
-/// which is the worst place to find out. Here, eigenvalues below a relative
-/// tolerance are treated as numerically zero and dropped from the pseudo-inverse
-/// instead of inverted, so floating-point noise never gets amplified into a giant
-/// bogus coefficient.
+/// covered by `X'WX` for a well-posed design). In floating point it can develop a
+/// near-zero pivot, the same failure mode described on [`log_det_robust`], and
+/// that trips a hard LAPACK error (`dgesv`/`dpotrf` returning a nonzero info code)
+/// inside [`inv`] on some BLAS builds and not others, so a design that fits
+/// locally can fail only on CI. Here, eigenvalues below a relative tolerance are
+/// treated as numerically zero and dropped from the pseudo-inverse instead of
+/// inverted, so floating-point noise is never amplified into a huge spurious
+/// coefficient.
 pub fn inv_robust(a: &ndarray::Array2<f64>) -> Result<ndarray::Array2<f64>> {
     // Fast path: a well-conditioned matrix never touches the eigensolver.
     if let Ok(v) = inv(a) {
@@ -418,12 +416,12 @@ pub fn inv_robust(a: &ndarray::Array2<f64>) -> Result<ndarray::Array2<f64>> {
 /// direct solve hard-fails on a near-singular `A`. See [`inv_robust`] for why that
 /// only happens on some BLAS builds.
 ///
-/// Why keep this as a fallback around [`solve`] instead of always routing through
-/// `inv_robust(a).dot(b)`? The two take different LAPACK paths (`dgesv` vs
+/// This is a fallback around [`solve`] rather than always routing through
+/// `inv_robust(a).dot(b)` because the two take different LAPACK paths (`dgesv` vs
 /// `dsyev`) and round differently, and a caller that iterates (the REML
 /// smoothing-parameter search, say) can be sensitive enough to that rounding to
-/// settle on a different optimum. So the pseudo-inverse only comes out when the
-/// fast path has actually failed, never speculatively.
+/// settle on a different optimum. The pseudo-inverse is used only when the fast
+/// path has failed, never speculatively.
 pub fn solve_robust(
     a: &ndarray::Array2<f64>,
     b: &ndarray::Array1<f64>,
@@ -490,7 +488,7 @@ mod tests {
     fn test_inv_robust_singular_returns_pseudo_inverse() {
         // Rank-1 matrix: `inv` fails outright. `inv_robust` should catch that and
         // fall back to the Moore-Penrose pseudo-inverse via eigendecomposition
-        // instead of erroring, which is exactly what the near-singular
+        // instead of erroring, which is what the near-singular
         // normal-equations matrices in `fit_pwls` need it to do.
         let a = array![[1.0, 1.0], [1.0, 1.0]];
         assert!(inv(&a).is_err());

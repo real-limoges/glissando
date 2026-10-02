@@ -1,7 +1,7 @@
 //! Quickstart: fit, predict, and diagnose a Gaussian location-scale model.
 //!
-//! Both the mean (`mu`) and the spread (`sigma`) vary with `x`, which is the
-//! thing a plain GAM cannot do and GAMLSS can.
+//! Both the mean (`mu`) and the spread (`sigma`) vary with `x`, which GAMLSS
+//! can model and a plain GAM cannot.
 //!
 //! Run with: `cargo run --example quickstart`
 

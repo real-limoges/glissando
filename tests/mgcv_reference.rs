@@ -1,4 +1,4 @@
-// I validate glissando fits against R/mgcv as the established reference
+// Validates glissando fits against R/mgcv as the established reference
 // implementation.
 //
 // Workflow:
@@ -137,15 +137,15 @@ fn median(vals: &[f64]) -> f64 {
 /// Starting point; recalibrate per scenario from a first nightly's observed
 /// distributions.
 const LOOSE_MULT: f64 = 2.0;
-/// Spread (p90/median) of glissando's own λ across replicates past which we print
+/// Spread (p90/median) of glissando's own λ across replicates past which the test prints
 /// a diagnostic. Deliberately *not* a gate: λ is unidentified wherever the LAML
 /// surface is flat (a smooth collapsing onto its penalty null space, an
 /// anisotropic tensor margin on a ridge), so its cross-rep spread is noise about a
 /// quantity the data doesn't pin down. A λ excursion large enough to *matter*
 /// moves fitted_mu / EDF / log-likelihood, which are gated per-rep against mgcv
-/// (or gamlss); one that doesn't move the fit is harmless. So this loop can only
-/// ever be redundant with those checks or a false alarm on the flat ridge; it
-/// stays as a printed heads-up, never a failure.
+/// (or gamlss); one that doesn't move the fit is harmless. A gate here could
+/// only duplicate those checks or false-alarm on the flat ridge, so it stays a
+/// printed note, never a failure.
 const LAMBDA_SPREAD_NOTE: f64 = 10.0;
 
 /// Gate a distribution of ratios (observed / tolerance): fail if the median
@@ -191,7 +191,7 @@ impl Acc {
         // λ self-consistency across reps: diagnostic only, never a failure (see
         // LAMBDA_SPREAD_NOTE). A wide spread here flags an unidentified λ on a flat
         // LAML ridge, which is expected and harmless; the fit-quality metrics above
-        // are what actually gate glissando against the reference.
+        // are what gate glissando against the reference.
         for (param, per_rep) in &self.lambdas {
             let width = per_rep.iter().map(|v| v.len()).min().unwrap_or(0);
             for i in 0..width {
@@ -261,7 +261,7 @@ const ST_SE_TOL: f64 = 0.05;
 /// Loose cross-method sanity bound for glissando-vs-mgcv-scat fitted_mu.
 const ST_SCAT_SANITY_TOL: f64 = 0.05;
 
-/// EDF tolerance for one parameter: generous band for a genuine smooth (λ
+/// EDF tolerance for one parameter: generous band for a true smooth (λ
 /// selection differs), tight otherwise.
 fn edf_tol(smooth: bool, ref_edf: f64) -> f64 {
     if smooth && ref_edf > 1.5 {
@@ -380,7 +380,7 @@ fn record_studentt(
 }
 
 /// Scale-modeling LSS scenarios (gaulss / gammals, plus heteroskedastic) where
-/// we also gate fitted_sigma.
+/// fitted_sigma is also gated.
 fn is_scale_smooth_scenario(name: &str) -> bool {
     name == "gaussian_sigma_smooth"
         || name == "gamma_sigma_smooth"
@@ -556,7 +556,7 @@ fn assert_parity(summary: &ComparisonSummary) {
 }
 
 /// Regenerate-and-check path: reads the freshly-produced summary and requires it to
-/// be present, so a nightly R run that generates bad data fails loudly. `#[ignore]`d
+/// be present, so a nightly R run that generates bad data fails. `#[ignore]`d
 /// because it needs `benchmark/run_comparison.sh` (R + mgcv + gamlss) to have run.
 #[test]
 #[ignore = "requires benchmark/output/comparison_summary.json (run benchmark/run_comparison.sh)"]

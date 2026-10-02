@@ -4,9 +4,8 @@
 // file picks up the rest, so a change to any family's `theta_derivatives()` shows
 // up as fitted-coefficient drift instead of slipping by unnoticed.
 //
-// Think of it as the end-to-end counterpart to `tests/derivative_golden.rs`: that
-// file pins what each family *returns*, this one pins where the fitting loop
-// *lands*.
+// It is the end-to-end counterpart to `tests/derivative_golden.rs`: that file
+// pins what each family returns, this one pins where the fitting loop lands.
 //
 // Data is generated deterministically from closed-form patterns, no RNG, so the
 // fixtures don't lean on any random-number implementation.
@@ -30,9 +29,9 @@ use std::collections::BTreeMap;
 
 const N: usize = 60;
 
-/// Snapshotted fit summary. Mirrors `tests/regression.rs::ModelSnapshot`; I drop
-/// λ because every fixture here is purely parametric (no penalties), so λ carries
-/// no information.
+/// Snapshotted fit summary. Mirrors `tests/regression.rs::ModelSnapshot` but
+/// drops λ, because every fixture here is purely parametric (no penalties), so λ
+/// carries no information.
 #[derive(Debug, Serialize)]
 struct FitSnapshot {
     converged: bool,
@@ -43,7 +42,7 @@ struct FitSnapshot {
 }
 
 /// 5 significant figures, matching `tests/regression.rs`'s convention: tight
-/// enough to catch real drift, loose enough to survive trailing-digit differences
+/// enough to catch drift, loose enough to survive trailing-digit differences
 /// between the openblas and pure-rust backends.
 fn fmt(x: f64) -> String {
     format!("{:.4e}", x)
@@ -169,7 +168,7 @@ fn fit_gamma() {
 
 #[test]
 fn fit_negative_binomial() {
-    // Genuinely overdispersed draws here, not smooth jitter. With deterministic
+    // Overdispersed random draws here, not smooth jitter. With deterministic
     // jitter the sample variance sits *below* the mean, so σ collapses toward its
     // numerical floor (σ ≈ 1e-10, the Poisson limit) and its coefficient is then
     // pinned by where that floor bites. That differs between the openblas and
@@ -203,9 +202,9 @@ fn fit_weibull() {
 
 #[test]
 fn fit_student_t() {
-    // ν has to be intercept-only. The KKT projection at the ν floor is exact only
-    // for a constant η_ν (`student_t.rs:140-146`), which is exactly what
-    // `formula_for` hands us.
+    // ν must be intercept-only. The KKT projection at the ν floor is exact only
+    // for a constant η_ν (`student_t.rs:140-146`), which is what `formula_for`
+    // provides.
     let x = x_grid();
     let y: Array1<f64> = (0..N).map(|i| 1.0 + 2.0 * x[i] + 0.5 * jitter(i)).collect();
     insta::assert_yaml_snapshot!(fit_and_snapshot(&StudentT::new(), &y, &x));
@@ -215,12 +214,12 @@ fn fit_student_t() {
 // Box-Cox family
 // ---------------------------------------------------------------------------
 
-// The Box-Cox trio is the one spot where a closed-form fixture just doesn't work.
+// The Box-Cox families are the one place where a closed-form fixture doesn't work.
 // BCT and BCPE estimate a fourth, tail-shape parameter (τ) that's unidentifiable
 // from smooth deterministic jitter: τ drifts toward its boundary and the fit
 // stalls at the iteration limit. A non-converged snapshot would pin
 // iteration-limit behavior instead of a fitted optimum, so these three draw from
-// the actual family via the shared seeded generators, the same `Generator::new(42)`
+// the family itself via the shared seeded generators, the same `Generator::new(42)`
 // pattern `tests/regression.rs` already uses.
 
 #[test]
@@ -231,13 +230,13 @@ fn fit_bccg() {
 
 #[test]
 fn fit_bct() {
-    // This snapshot records `converged: false`. That's pre-existing and expected,
+    // This snapshot records `converged: false`. That is pre-existing and expected,
     // not a bug in the fixture: near the normal limit τ is weakly identified, so
     // the deviance keeps wiggling above tolerance even though every estimate lands
     // on target. `bct_recovers_known_parameters` (`tests/boxcox_families.rs:32-35`)
     // documents the same behavior and asserts recovery, not the flag.
     //
-    // The estimates here bear it out: σ = exp(-1.634) = 0.195 against a true 0.2,
+    // The estimates confirm it: σ = exp(-1.634) = 0.195 against a true 0.2,
     // τ = exp(1.916) = 6.8 against a true 6.0, slope 1.06 against a true 1.0. The
     // coefficients are what this file pins, and they're stable.
     let (y, data) = Generator::new(42).bct_data(200, 0.0, 1.0, 0.2, 0.5, 6.0);

@@ -1,4 +1,4 @@
-// These can't run under the `python` feature. PyO3's extension-module linking won't have it.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -29,7 +29,7 @@ fn sample_posterior_errors_on_non_positive_definite_covariance() {
 
 #[test]
 fn posterior_samples_propagates_non_pd_error() {
-    // Build a real fit, then ask for samples on a parameter that isn't there.
+    // Fit a model, then ask for samples on a parameter that isn't there.
     // Confirms the second error branch (UnknownParameter) fires too.
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(50, 1.0, 2.0, 0.5);

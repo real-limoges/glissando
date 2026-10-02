@@ -7,7 +7,7 @@
   The nodejs build command now puts `--target` before the cargo feature flags, which wasm-pack 0.15 requires.
 
 **Goal:** fit one Gaussian location-scale model end to end, then predict and check residuals, in Rust, Python, and JavaScript.
-**Model:** `mu ~ 1 + s(x)`, `sigma ~ 1 + x`, so both the mean and the spread vary with `x`; this is the thing a plain GAM cannot do and GAMLSS can.
+**Model:** `mu ~ 1 + s(x)`, `sigma ~ 1 + x`, so both the mean and the spread vary with `x` (a plain GAM models only the mean).
 **Runnable:** the Rust version is `examples/quickstart.rs` (`cargo run --example quickstart`); the Python version is `examples/python/quickstart.py`; the JavaScript version is `examples/wasm/quickstart.mjs`.
 
 See `cookbook-families.md` to swap the family, and `cookbook-mgcv-migration.md` if you are coming from R.
@@ -46,7 +46,7 @@ let aic = model.gaic(&Gaussian::new(), &y, 2.0).unwrap();          // k = 2 is A
 let bic = model.gaic(&Gaussian::new(), &y, (y.len() as f64).ln()).unwrap();
 ```
 
-The formula can also be written as a string, which is terser and the only comfortable way to spell smooths in the bindings:
+The formula can also be written as a string, which is shorter and is the practical way to write smooths in the bindings:
 
 ```rust
 use glissando::Formula;
@@ -112,5 +112,6 @@ const resid = JSON.parse(model.quantileResiduals(JSON.stringify(y), 42n));
 const aic = JSON.parse(model.gaic(JSON.stringify(y), 2.0)).gaic;  // gaic returns {"gaic": v}
 ```
 
-Two things to keep straight on this surface: the static `fit` takes `y` before `data` (opposite of the other two surfaces), and the committed `pkg/` is a default (bundler-target) build, so raw Node needs `wasm-pack build --target nodejs --out-dir pkg-node --no-default-features --features wasm` first (wasm-pack options before the cargo flags).
+This surface differs in two ways.
+The static `fit` takes `y` before `data` (the opposite of the other two surfaces), and the committed `pkg/` is a default (bundler-target) build, so plain Node needs `wasm-pack build --target nodejs --out-dir pkg-node --no-default-features --features wasm` first (wasm-pack options before the cargo flags).
 See `examples/wasm/README.md` for the runnable setup.

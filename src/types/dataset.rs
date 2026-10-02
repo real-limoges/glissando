@@ -47,8 +47,8 @@ impl DataSet {
     /// # Panics
     ///
     /// Panics if `values` has a different length than the existing columns. A length
-    /// mismatch here is a programmer error; reach for [`DataSet::try_insert_column`]
-    /// when you are inserting runtime-unsafe data and want a fallible path.
+    /// mismatch here is a programmer error; use [`DataSet::try_insert_column`] when
+    /// the length is not known to match and you want a fallible path.
     ///
     /// # Examples
     ///

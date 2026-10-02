@@ -1,16 +1,16 @@
-//! Finite mixture models: the EM capstone sitting on top of the weighted RS fit.
+//! Finite mixture models: an EM loop over the weighted RS fit.
 //!
 //! A `K`-component mixture `f(y) = Σ_k w_k · g_k(y)` ties the observations together
 //! through the components' responsibilities, so (unlike the per-row likelihood
-//! wrappers) there is no way to write it as a single [`Distribution`]. So instead of
-//! fighting that, it wraps the fit we already have in an EM outer loop:
+//! wrappers) it cannot be written as a single [`Distribution`]. Instead, this module
+//! wraps the existing fit in an EM outer loop:
 //!
 //! - **E-step**: posterior responsibilities `r_ik = w_k g_k(y_i) / Σ_j w_j g_j(y_i)`.
 //! - **M-step**: refit each component via the prior-weighted RS fit
 //!   ([`GamlssModel::fit_with_config`] with `weights = r[:,k]`), then set
 //!   `w_k = mean_i r_ik`.
 //!
-//! It stops once the mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` quits
+//! It stops once the mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` stops
 //! improving. Oracle: R `gamlss.mx` (`gamlssMX`).
 
 use super::diagnostics;
@@ -170,7 +170,7 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         // M-step: refit each component with its responsibility column as weights.
         // The k component fits are independent (only the responsibility column
         // changes between them), so run them in parallel. The row-count check and
-        // the weight bookkeeping stay serial; they're cheap and want `n`/`k` anyway.
+        // the weight bookkeeping stay serial; they are cheap and need `n`/`k`.
         let wj_cols: Vec<Array1<f64>> = (0..k).map(|j| resp.column(j).to_owned()).collect();
         let fit_results: Vec<Result<GamlssModel, GamlssError>> = {
             #[cfg(feature = "parallel")]
@@ -212,7 +212,7 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         for (wj, fit) in wj_cols.iter().zip(fit_results) {
             let comp = fit?;
             // The mixture math indexes fitted values against y, so a dropped row
-            // would quietly break the alignment. Refuse it.
+            // would misalign them. Reject it.
             let fitted_len = comp
                 .models
                 .values()
@@ -272,14 +272,13 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
 
 /// Separating initialization: draw `k` distinct observations as seeds and hard-assign
 /// each row to its nearest seed in `y` (a 1-D k-means seeding). A purely random
-/// per-row assignment does the opposite of what you want here: it hands every
-/// component a representative sample of the *whole* response and parks EM at the
-/// symmetric "all components identical" fixed point. This instead gives the
-/// components genuinely different starting regions. The later floor + renormalize is
-/// what keeps every component non-empty.
+/// per-row assignment gives every component a representative sample of the *whole*
+/// response and leaves EM at the symmetric "all components identical" fixed point.
+/// Seeding gives the components distinct starting regions. The later floor +
+/// renormalize keeps every component non-empty.
 fn init_responsibilities(y: &Array1<f64>, k: usize, rng: &mut StdRng) -> Array2<f64> {
     let n = y.len();
-    // Distinct random seed rows where we can (n ≥ k on any real fit). Bounded
+    // Distinct random seed rows where we can (n ≥ k on any usable fit). Bounded
     // attempts, then top up with repeats so we always hand back k seeds.
     let mut seeds: Vec<usize> = Vec::with_capacity(k);
     let mut attempts = 0;

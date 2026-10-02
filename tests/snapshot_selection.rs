@@ -19,15 +19,15 @@ use serde::Serialize;
 
 /// GAIC (and the null-vs-rest deviance gap) is stable to 3 significant figures across
 /// backends and OS BLAS builds, so it stays at this precision: it's the composite the
-/// selection actually turns on, and 3 figures keep the null model's gap sharp.
+/// selection turns on, and 3 figures keep the null model's gap sharp.
 fn fmt(x: f64) -> String {
     format!("{:.2e}", x)
 }
 
-/// A penalized smooth's effective df and its deviance are *not* backend-stable: on data
-/// that is genuinely linear the REML surface is flat along the over-penalized ridge, so
+/// A penalized smooth's effective df and its deviance are not backend-stable: on data
+/// that is truly linear the REML surface is flat along the over-penalized ridge, so
 /// edf and deviance trade off there (macOS OpenBLAS lands the smooth at edf ~3.0, Linux
-/// OpenBLAS at ~3.5) while their sum, GAIC, barely moves. They ride on λ, which is not
+/// OpenBLAS at ~3.5) while their sum, GAIC, barely moves. They depend on λ, which is not
 /// determined to 3 figures across BLAS builds, so pin them at 1 significant figure: coarse
 /// enough to survive the drift, fine enough to still catch a model collapsing or blowing up.
 fn fmt_coarse(x: f64) -> String {
@@ -51,7 +51,7 @@ struct LrTestSnapshot {
 
 /// Fit three nested models to one Gaussian response: intercept-only, linear mean,
 /// and a P-spline mean. GAIC(k=2) should rank the linear model best on data that is
-/// genuinely linear (the smooth pays EDF it can't recover in fit).
+/// truly linear (the smooth pays EDF it can't recover in fit).
 #[test]
 fn ic_table_and_lr_test_nested_gaussian() {
     let mut rng = Generator::new(42);

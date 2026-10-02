@@ -1,12 +1,11 @@
 #![recursion_limit = "1024"]
 //! Generalized Additive Models for Location, Scale, and Shape (GAMLSS) in Rust.
 //!
-//! Ordinary regression models the mean and stops there. GAMLSS models the whole
-//! shape of the response: the mean, yes, but also the spread, the skew, and the
-//! kurtosis, each as its own function of the predictors. It does that through the
+//! GAMLSS models each parameter of the response distribution (mean, spread,
+//! skewness, kurtosis) as its own function of the predictors. Fitting uses the
 //! Rigby-Stasinopoulos algorithm, with penalized smooths (P-splines, cubic
-//! regression splines, tensor products, random effects) carrying the nonlinear
-//! effects and REML, GCV, or Fellner-Schall choosing the smoothing parameters.
+//! regression splines, tensor products, random effects) for nonlinear effects and
+//! REML, GCV, or Fellner-Schall choosing the smoothing parameters.
 //!
 //! # What ships
 //!
@@ -67,12 +66,11 @@ mod types;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-/// The exact `ndarray` major this crate is built against, re-exported. Build and
-/// read your `Array1`/`Array2` through `glissando::ndarray::…` and they unify
-/// with this crate's public API (`predict`, `predict_with_se`) for free. Skip it
-/// and pin the wrong `ndarray` version yourself, and you get a type-mismatch
-/// error that reads like the two arrays are unrelated when they only differ by a
-/// version number.
+/// The exact `ndarray` major this crate is built against, re-exported. Arrays
+/// built through `glissando::ndarray::…` unify with this crate's public API
+/// (`predict`, `predict_with_se`). Pinning a different `ndarray` version yourself
+/// produces a type-mismatch error that makes the two array types look unrelated
+/// when they differ only by version number.
 pub use ndarray;
 
 pub use error::GamlssError;

@@ -4,9 +4,9 @@ use ndarray::{Array1, Array2, ArrayViewMut1};
 
 /// Quantile knot placement for natural cubic regression splines.
 ///
-/// I match mgcv's default here: `quantile(unique(x), seq(0, 1, length = k))`,
-/// type-7 linear interpolation over the sorted unique finite values. The first
-/// and last knots always land on the observed minimum and maximum, no exceptions.
+/// Matches mgcv's default: `quantile(unique(x), seq(0, 1, length = k))`, type-7
+/// linear interpolation over the sorted unique finite values. The first and last
+/// knots always land on the observed minimum and maximum.
 ///
 /// # Panics
 /// Panics if `k < 2`.
@@ -499,10 +499,10 @@ mod tests {
         let s = create_cr_penalty_matrix(&knots);
 
         // mgcv sc$S[[1]] with scale.penalty=FALSE (5×5, unscaled = ∫[f'']² dx).
-        // Heads up: mgcv's default smoothCon rescales by a data-dependent factor
-        // (||X||_inf² / norm(S,"1")) that leans on the basis matrix X, not just the
-        // knots. Ours is the mathematically correct unscaled integral. Doesn't matter
-        // for the fit: the smoothing parameter λ adapts freely under REML/GCV anyway.
+        // mgcv's default smoothCon rescales by a data-dependent factor
+        // (||X||_inf² / norm(S,"1")) that depends on the basis matrix X as well as
+        // the knots. Ours is the unscaled integral. The fit is unaffected, since the
+        // smoothing parameter λ absorbs the scale under REML/GCV.
         #[rustfmt::skip]
         let expected: [[f64; 5]; 5] = [
             [ 0.195252733029792, -0.309840448070508,  0.141767782990886, -0.031781984216865,  0.004601916266695],

@@ -36,10 +36,10 @@ impl Distribution for Gamma {
     }
 
     /// Gamma σ is the coefficient of variation `CV = SD(Y)/E(Y)`, not the raw SD.
-    /// The default `initial_value` returns `y.std()`, which is wildly wrong for
+    /// The default `initial_value` returns `y.std()`, which is far off for
     /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
     /// A bad σ_init makes REML over-penalize the σ smooth on the first RS
-    /// iteration and warm-start straight into a full-collapse trap.
+    /// iteration and warm-start into a full collapse of that smooth.
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         match param {
             "mu" => y.mean().expect("validate_inputs rejects empty y"),
@@ -85,11 +85,11 @@ impl Distribution for Gamma {
         // ψ' ≈ 1e-300) where a raw 1/0 would hand them +∞.
         let alpha = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
-        // Guard each reciprocal at the power it's actually used at. Take an
-        // already-guarded reciprocal and raise it to a power and it overflows to
-        // infinity for a parameter the log link can still underflow to. And inf · 0
-        // is NaN. σ⁶ is why this bites harder here than elsewhere: it underflows
-        // around σ ≈ 1e-50, where the σ⁴ form reaches to σ ≈ 1e-75.
+        // Guard each reciprocal at the power it is used at. Raising an
+        // already-guarded reciprocal to a power overflows to infinity for a
+        // parameter the log link can still underflow to, and inf · 0 is NaN. σ⁶
+        // makes this matter more here than elsewhere: it underflows around
+        // σ ≈ 1e-50, where the σ⁴ form reaches to σ ≈ 1e-75.
         let inv_mu_sq_sigma_sq =
             par_zip_map(mu, sigma, |m, s| 1.0 / (m * m * s * s).max(DENOM_FLOOR));
         let inv_sigma_cubed = sigma.mapv(|s| 1.0 / (s * s * s).max(DENOM_FLOOR));
@@ -183,7 +183,7 @@ impl Distribution for Gamma {
         // which recovers the previous η-scale pair exactly:
         // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
         // σ enters both α and x, so its CDF derivative needs ∂P/∂α (non-elementary).
-        // I leave that one to the wrapper's numeric fallback.
+        // That one is left to the wrapper's numeric fallback.
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
         let mut d1 = Array1::<f64>::zeros(y.len());

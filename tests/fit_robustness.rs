@@ -78,9 +78,9 @@ fn step_halving_keeps_global_deviance_monotone() {
 fn step_halving_reaches_no_worse_deviance_than_raw_loop() {
     // On the overshoot-prone stress case, the monotone (step-halving) loop must
     // not end up at a *worse* fit than the raw full-step loop within the same
-    // iteration budget. That's the whole point of damping. In practice the raw
-    // loop oscillates to a higher deviance (or fails to settle); damping reaches
-    // an at-least-as-good objective.
+    // iteration budget, which is what damping is for. The raw loop typically
+    // oscillates to a higher deviance (or fails to settle); damping reaches an
+    // at-least-as-good objective.
     let (y, data) = heavy_tailed_stress();
     let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
 
@@ -206,13 +206,13 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
 /// accepted per-cycle step.
 ///
 /// A Poisson fit with one massive count outlier is a case where the raw
-/// (unhalved) proposed step genuinely exceeds 20 η-units for several
+/// (unhalved) proposed step exceeds 20 η-units for several
 /// consecutive cycles (verified directly: cycles 7–10 of this exact fit see
 /// `update.eta_max_change` peak at ~24 without the clamp, vs. exactly 20.0
 /// with it), unlike several other "degenerate" scenarios tried while writing
 /// this test (Binomial perfect separation, wide-range covariates, more
 /// iterations), whose raw per-cycle step stayed under 20 throughout and so
-/// never actually exercised the clamp. This test reconstructs the per-cycle η
+/// never exercised the clamp. This test reconstructs the per-cycle η
 /// trajectory the same way `step_halving_keeps_global_deviance_monotone` does
 /// (by sweeping `max_iterations` and differencing consecutive fits) and
 /// checks every step stays within the 20-unit margin.

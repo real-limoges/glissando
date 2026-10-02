@@ -1,9 +1,8 @@
 //! Penalized weighted least squares (PWLS) solver and GCV smoothing-parameter optimization.
 //!
-//! Two jobs live here. Cholesky decomposition solves the PWLS system itself, and a hand-rolled
-//! L-BFGS with a strong-Wolfe line search sits on top, moving the smoothing parameters (lambda)
-//! around to minimize the GCV/REML score. The rest of the file is mostly the bookkeeping that
-//! keeps those two cheap.
+//! Cholesky decomposition solves the PWLS system, and a hand-rolled L-BFGS with a strong-Wolfe
+//! line search adjusts the smoothing parameters (lambda) to minimize the GCV/REML score. Most of
+//! the rest of the file caches intermediate quantities so that those two stay cheap.
 
 use super::{
     Coefficients, CovarianceMatrix, GamlssError, ModelMatrix, PenaltyMatrix, SmoothingCriterion,
@@ -24,14 +23,14 @@ const MIN_LAMBDA: f64 = 1e-10;
 const REML_RANK_TOL_EPS: f64 = 1e-8;
 
 /// Clamp on |log λ| applied to REML's optimized output before exponentiation.
-/// Wide enough that no genuine solution ever hits it, narrow enough that L-BFGS
-/// can't wander off into numerically pathological territory.
+/// Wide enough that no valid solution reaches it, narrow enough to keep L-BFGS
+/// out of numerically pathological regions.
 pub(super) const LOG_LAMBDA_CLAMP: f64 = 30.0;
 
 /// Decades (in natural-log λ) below the cold-start heuristic used to seed the
 /// collapse-guarded restart. The cold start sits *past* the interior LAML
-/// optimum, out on the slope toward the flat high-λ shelf; subtract this offset
-/// and the restart lands safely below both the optimum and the shelf, so a
+/// optimum, out on the slope toward the flat high-λ shelf; subtracting this offset
+/// puts the restart below both the optimum and the shelf, so a
 /// gradient or fixed-point optimizer can descend into the (unimodal) interior
 /// optimum instead of staying pinned to the penalty null space.
 const RESTART_LOG_OFFSET: f64 = 8.0;
@@ -44,7 +43,7 @@ const FS_MAX_ITERS: usize = 50;
 /// The F-S update is only first-order convergent, so stopping at 1e-3 (≈ 0.1%
 /// relative change in λ) leaves noticeably more drift than stopping at 1e-4
 /// (≈ 0.01%). A tighter threshold costs at most a few extra iterations, and F-S
-/// is cheap, so it is worth it to have λ genuinely stationary before the outer
+/// is cheap, so the tighter value is used to make λ stationary before the outer
 /// RS loop calls the whole fit converged.
 const FS_TOL: f64 = 1e-4;
 
@@ -63,11 +62,11 @@ const FS_DENOMINATOR_FLOOR: f64 = 1e-12;
 /// `X`, `z`, and `w` never change for the whole duration of one smoothing-
 /// parameter search; only `λ` moves, across the L-BFGS/Fellner-Schall iterations
 /// and the collapse-guarded restart's basin probes (up to several hundred λ
-/// evaluations per [`super::scoring::step`] call). So I build this once and reuse
-/// it, which turns each λ evaluation's dominant cost from `O(n·p²)` (rebuilding
+/// evaluations per [`super::scoring::step`] call). Building this once and reusing
+/// it turns each λ evaluation's dominant cost from `O(n·p²)` (rebuilding
 /// `X'WX`/`X'Wz` from the raw `n`-row design every time) into `O(p²)`–`O(p³)`
-/// (factorizing the already-assembled `p×p` system). That is the gap that
-/// actually matters whenever `n ≫ p`.
+/// (factorizing the already-assembled `p×p` system). The saving dominates when
+/// `n ≫ p`.
 pub(crate) struct WeightedNormalEquations {
     x_t_w_x: Array2<f64>,
     x_t_w_z: Array1<f64>,
@@ -83,7 +82,7 @@ impl WeightedNormalEquations {
         let x = &x_matrix.0;
         // Fold the weights in as √W rather than ever materializing the n×n
         // diagonal W. X'WX = (√W·X)'(√W·X) and X'Wz = (√W·X)'(√W·z), so the
-        // memory drops from O(n²) to O(n·p). No reason to pay for the big matrix.
+        // memory drops from O(n²) to O(n·p).
         let sqrt_w = w_diag.mapv(f64::sqrt);
         let x_weighted = x * &sqrt_w.view().insert_axis(Axis(1));
         let z_weighted = z * &sqrt_w;
@@ -106,7 +105,7 @@ impl WeightedNormalEquations {
 /// penalties sharing an exact range (e.g. the two marginal penalties of a
 /// tensor-product smooth) merged into one group.
 ///
-/// This depends only on `penalty_matrices`, not λ, so (exactly like
+/// This depends only on `penalty_matrices`, not λ, so (like
 /// [`WeightedNormalEquations`]) it is computed once per smoothing-parameter search
 /// and reused across every [`penalty_eigen`] call that search makes, rather than
 /// re-scanning every penalty's non-zero block on each one.
@@ -166,12 +165,12 @@ impl<'a> GamlssCost<'a> {
     /// where RSS is the weighted residual sum of squares and EDF the effective
     /// degrees of freedom. Minimizing it trades fit (low RSS) off against
     /// complexity (high EDF). The optimization runs in log-space (ρ = log λ),
-    /// which buys numerical stability and an unconstrained problem for free.
+    /// which gives numerical stability and an unconstrained problem.
     ///
     /// The gradient carries the full chain rule: β itself depends on λ through
-    /// the penalized normal equations, so dRSS/dλ and dEDF/dλ each have more
-    /// terms than they first look. Computing score and gradient together reuses one
-    /// `fit_pwls_with_grad_info` solve rather than paying for two.
+    /// the penalized normal equations, so dRSS/dλ and dEDF/dλ each include terms
+    /// from dβ/dλ. Computing score and gradient together reuses one
+    /// `fit_pwls_with_grad_info` solve instead of two.
     fn objective_and_grad(&self, rho: &Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError> {
         let lambdas = rho.mapv(f64::exp);
         let n_penalties = lambdas.len();
@@ -203,7 +202,7 @@ impl<'a> GamlssCost<'a> {
             // dEDF/dlambda_j = -tr(V * Sj * V * X'WX). V·Sj is zero outside
             // columns [start,end] by the same reasoning, so the left multiply also
             // only needs V's [start,end] column slice. The final Hadamard-sum
-            // against X'WX has to stay full-width (v_sj_v is genuinely dense), but
+            // against X'WX has to stay full-width (v_sj_v is dense), but
             // V·Sj·V is symmetric and so is X'WX, so that trace still collapses to
             // a Hadamard-product row sum rather than a third full matrix product.
             let v_sj_cols = info.v_matrix.slice(s![.., start..=end]).dot(&s_j.block);
@@ -377,7 +376,7 @@ where
         ));
     }
 
-    // Best-seen, seeded from the start so we can never return something worse.
+    // Best-seen, seeded from the start so the result is never worse than the start.
     let mut best_x = x.clone();
     let mut best_f = f;
 
@@ -493,8 +492,8 @@ where
 /// Strong-Wolfe line search (Nocedal & Wright Alg 3.5 bracketing + 3.6 zoom).
 ///
 /// Enforces both Armijo `f(x+αd) ≤ f + c1·α·φ'(0)` and strong curvature
-/// `|φ'(α)| ≤ c2·|φ'(0)|`, which pins a well-determined step (this is what makes
-/// the landing point reproducible, unlike a bare-Armijo backtracker). Returns
+/// `|φ'(α)| ≤ c2·|φ'(0)|`, which pins a well-determined step (making the landing
+/// point reproducible, unlike a bare-Armijo backtracker). Returns
 /// `None` when Wolfe cannot be met within the budget; the caller then keeps its
 /// best-so-far point. Non-finite objectives (including the GCV `f64::MAX`
 /// divide-by-zero sentinel) are treated as "step too long".
@@ -638,7 +637,7 @@ fn interp_safeguarded(
 /// Runs L-BFGS to find the optimal smoothing parameters (lambdas).
 ///
 /// Warm-starts from the previous lambdas when they are available, which is most of
-/// the time inside the RS loop and converges noticeably faster for it. Skips the
+/// the time inside the RS loop and converges faster. Skips the
 /// whole optimization when there are no penalty matrices to optimize over.
 pub(crate) fn run_optimization(
     nfo: &WeightedNormalEquations,
@@ -657,7 +656,7 @@ pub(crate) fn run_optimization(
         penalty_matrices,
     };
 
-    // Warm-start from the previous lambdas (in log-space) when we have them.
+    // Warm-start from the previous lambdas (in log-space) when available.
     let initial_log_lambdas = match initial_lambdas {
         Some(prev) if prev.len() == n_penalties => prev.mapv(|l| l.max(MIN_LAMBDA).ln()),
         _ => Array1::<f64>::zeros(n_penalties),
@@ -679,16 +678,16 @@ pub(crate) fn run_optimization(
 /// - the cold start uses `initial_log_lambda` (the mgcv-style heuristic) instead of zeros;
 /// - no `target_cost` early exit, because `−V_r` is not bounded below by zero;
 /// - the returned log λ is clamped to `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]`
-///   before exponentiation, so a runaway L-BFGS step can't hand back a non-finite λ.
+///   before exponentiation, so a runaway L-BFGS step cannot return a non-finite λ.
 ///
-/// `polish` decides whether to chase the L-BFGS solve with the deterministic
-/// Fellner-Schall pass described below. The caller in `scoring::step` leaves it
+/// `polish` decides whether to follow the L-BFGS solve with the deterministic
+/// Fellner-Schall pass described below. The caller in `scoring::step` sets it
 /// `true` on the per-cycle adopted-λ path (where it is the documented fix for
-/// L-BFGS stalls) and flips it `false` for the cheap comparison-only probes in the
-/// basin-restart search. There it screens up to ~9 candidates a cycle, and paying
-/// the extra polish plus 2 `lambda_cost` evaluations on every one would blow up
-/// the single most expensive step in the fitting loop; the eventual winner gets
-/// re-polished on the very next RS cycle anyway.
+/// L-BFGS stalls) and `false` for the cheap comparison-only probes in the
+/// basin-restart search. There it screens up to ~9 candidates a cycle, and running
+/// the extra polish plus 2 `lambda_cost` evaluations on every one would greatly
+/// slow the most expensive step in the fitting loop; the eventual winner is
+/// polished on the next RS cycle.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_optimization_reml(
     x_model: &ModelMatrix,
@@ -735,12 +734,12 @@ pub(crate) fn run_optimization_reml(
     // Fellner-Schall polish. L-BFGS can stall at a warm-start-dependent
     // non-stationary point whenever the LAML surface has flat ridges (smooths
     // collapsing to their null space with λ at the clamp ceiling). F-S iterates the
-    // same LAML target monotonically to a deterministic fixed point, ironing out
-    // that per-cycle λ jitter. Every candidate below is scored by REML cost and the
-    // lowest wins, with L-BFGS always in the running, so the polish can never make
-    // the fit worse than L-BFGS left it. Each F-S run is best-effort: a linear-
-    // algebra failure inside one (an eigensolver hiccup at a degenerate λ, say)
-    // just drops that candidate rather than taking the whole fit down.
+    // same LAML target monotonically to a deterministic fixed point, removing that
+    // per-cycle λ jitter. Every candidate below is scored by REML cost and the
+    // lowest wins, with the L-BFGS result always a candidate, so the polish cannot
+    // make the fit worse than L-BFGS left it. Each F-S run is best-effort: a linear-
+    // algebra failure inside one (an eigensolver failure at a degenerate λ, say)
+    // drops that candidate rather than failing the whole fit.
     let reml_cost = |lams: &Array1<f64>| {
         lambda_cost(
             SmoothingCriterion::Reml,
@@ -762,7 +761,7 @@ pub(crate) fn run_optimization_reml(
         candidates.push(p);
     }
     // Cold-started from the heuristic, multi-penalty only. Anisotropic tensor
-    // smooths grow corner basins where one margin's λ is driven very large but
+    // smooths develop corner basins where one margin's λ is driven very large but
     // short of the clamp bound, so the collapse-guarded restart in `scoring::step`
     // (which triggers only on a collapsed term or a bound-pinned λ) never fires,
     // and both L-BFGS and a warm F-S stall there. A cold F-S ignores the corner
@@ -798,11 +797,11 @@ pub(crate) fn run_optimization_reml(
 /// ```
 ///
 /// where `V = (X'WX + S_λ)⁻¹` and `β̂` come from a PIRLS solve at the current `λ`.
-/// The nice part is that Wood & Fasiolo prove monotone improvement of the LAML
-/// score under mild regularity, for any quadratically penalized smooth
-/// log-likelihood, so this update can only ever help.
+/// Wood & Fasiolo prove monotone improvement of the LAML score under mild
+/// regularity, for any quadratically penalized smooth log-likelihood, so this
+/// update never makes the score worse.
 ///
-/// How it stacks up against `run_optimization_reml`:
+/// Compared with `run_optimization_reml`:
 /// - no outer L-BFGS and no line search → deterministic across linalg backends;
 /// - first-order convergence (slower asymptotically) but no Hessian and no
 ///   step-size tuning to get wrong;
@@ -906,11 +905,11 @@ fn fit_pwls_with_grad_info(
 
     // `solve_robust`/`inv_robust` drop to an eigendecomposition when `lhs` goes
     // near-singular in floating point (a smooth term collapsing toward its penalty
-    // null space, say). The plain LU path has no fallback for exactly that, and it
-    // bit us as a CI-only `dgesv`/`dpotrf` failure that wouldn't reproduce locally:
-    // BLAS-build-dependent rounding tips a near-zero pivot over the edge. The fast
-    // path matches the old direct solve/inv exactly, so nothing changes when `lhs`
-    // is healthy.
+    // null space, say). The plain LU path has no fallback for that case, and it
+    // showed up as a CI-only `dgesv`/`dpotrf` failure that did not reproduce
+    // locally: BLAS-build-dependent rounding pushes a near-zero pivot to zero. The
+    // fast path matches the old direct solve/inv exactly, so nothing changes when
+    // `lhs` is well-conditioned.
     let beta_arr = linalg::solve_robust(&lhs, &nfo.x_t_w_z)?;
     let beta = Coefficients(beta_arr);
 
@@ -923,7 +922,7 @@ fn fit_pwls_with_grad_info(
     //
     // Only the diagonal matters, and X'WX is a Gram matrix (symmetric), so
     // diag(V·X'WX)_i = Σ_k V[i,k]·X'WX[i,k]: an elementwise product with a row sum,
-    // O(p²), instead of the full O(p³) matrix product. No reason to form the product.
+    // O(p²), instead of the full O(p³) matrix product.
     let edf_per_coeff = (&v * &nfo.x_t_w_x).sum_axis(Axis(1));
     let edf = edf_per_coeff.sum();
 
@@ -981,13 +980,13 @@ struct PenaltyEigen {
 /// threshold τ = eps · max(eigenvalue of S_λ). This falls apart when the λ values
 /// span many orders of magnitude (say λ₁ ≈ 1e-8 and λ₄ ≈ 5e10 in a 5-smooth model):
 /// the threshold gets dominated by the large-λ term and then misreads the non-null
-/// directions of the small-λ penalties as null space, which flips the sign of the
-/// REML gradient. Silent and wrong, the worst combination.
+/// directions of the small-λ penalties as null space, which silently flips the sign
+/// of the REML gradient.
 ///
 /// The fix is to group penalty matrices by their non-zero block range (via
 /// [`group_penalties`], computed once per λ search and passed in as `groups`) and
 /// eigendecompose each group on its own. Within a group the combined scaled block is
-/// formed first, then eigendecomposed. That buys two correctness guarantees at once:
+/// formed first, then eigendecomposed. This gives two correctness guarantees:
 ///
 /// - **Per-group threshold**: τ_g = eps · max(eigenvalue of Σ_{j∈g} λ_j S_j_block)
 ///   is relative to the group's own eigenvalue scale, not polluted by other groups.
@@ -1061,23 +1060,23 @@ fn penalty_eigen(
     })
 }
 
-/// Cold-start heuristic for log λ when there is no warm start to lean on.
+/// Cold-start heuristic for log λ when there is no warm start.
 ///
-/// I use `tr(X'X) / tr(S_j)` (unweighted) rather than `tr(X'WX) / tr(S_j)`, and
-/// the reason is scale-invariance. For a B-spline basis the column norms depend
-/// only on the knot layout, not on the response scale, so the unweighted form
-/// keeps the initial λ in a numerically friendly range no matter how large σ is.
+/// Uses `tr(X'X) / tr(S_j)` (unweighted) rather than `tr(X'WX) / tr(S_j)` for
+/// scale invariance. For a B-spline basis the column norms depend only on the
+/// knot layout, not on the response scale, so the unweighted form keeps the
+/// initial λ in a numerically well-behaved range no matter how large σ is.
 /// The weighted form does not: `tr(X'WX) = tr(X'X) / σ²` for homoscedastic
-/// Gaussian, which goes tiny (≈ 10⁻²¹) for price-scale data (σ ≈ 45k) and drops
-/// L-BFGS right next to the unpenalized OLS solution, where the REML landscape is
-/// badly conditioned. From there the smooth reliably overshoots into full collapse.
+/// Gaussian, which becomes tiny (≈ 10⁻²¹) for price-scale data (σ ≈ 45k) and starts
+/// L-BFGS next to the unpenalized OLS solution, where the REML landscape is badly
+/// conditioned. From there the smooth reliably overshoots into full collapse.
 pub(super) fn initial_log_lambda(
     x_matrix: &ModelMatrix,
     penalty_matrices: &[PenaltyMatrix],
 ) -> Array1<f64> {
     // tr(X'X) = sum_ij X[i,j]^2: the diagonal entry (X'X)_jj is sum_i X[i,j]^2,
-    // so summing the diagonal is just summing every squared entry of X. Lets us
-    // skip materializing the full p×p X'X (O(n·p) instead of O(n·p²)).
+    // so summing the diagonal is summing every squared entry of X. This avoids
+    // materializing the full p×p X'X (O(n·p) instead of O(n·p²)).
     let tr_xtx = x_matrix
         .0
         .iter()
@@ -1106,11 +1105,10 @@ pub(super) fn restart_seed_from_heuristic(heur: &Array1<f64>) -> Array1<f64> {
 /// Value of the objective the given criterion minimizes, evaluated at a fixed λ.
 ///
 /// The collapse-guarded restart in [`super::scoring::step`] uses this to weigh a
-/// restart's λ against the incumbent and keep whichever scores lower. Two things
-/// fall out of that: the guard can never make a fit worse, and genuinely
-/// null-space-optimal data (a linear truth under an order-2 penalty) correctly
-/// *keeps* its collapsed fit, because that fit really does have the better
-/// marginal likelihood.
+/// restart's λ against the incumbent and keep whichever scores lower. As a
+/// result, the guard cannot make a fit worse, and data whose optimum is in the
+/// null space (a linear truth under an order-2 penalty) correctly *keeps* its
+/// collapsed fit, because that fit has the better marginal likelihood.
 pub(super) fn lambda_cost(
     criterion: SmoothingCriterion,
     nfo: &WeightedNormalEquations,
@@ -1242,9 +1240,9 @@ mod reml_tests {
     }
 
     /// Build a small synthetic P-spline problem for REML cost/gradient tests.
-    /// Uses a real centered B-spline basis with a matching order-2 difference
-    /// penalty so the objective surface is well-conditioned (the penalty
-    /// genuinely measures wiggliness in the basis).
+    /// Uses a centered B-spline basis with a matching order-2 difference penalty
+    /// so the objective surface is well-conditioned (the penalty measures
+    /// wiggliness in the basis).
     fn synthetic_pwls_problem() -> (ModelMatrix, Array1<f64>, Array1<f64>, Vec<PenaltyMatrix>) {
         use crate::splines::create_basis_matrix;
         let n = 40;
@@ -1290,8 +1288,8 @@ mod reml_tests {
     /// The critical correctness gate for Fellner-Schall: capture λ at each F-S
     /// iteration and check that the LAML score (−V_r, as `RemlCost::cost` evaluates
     /// it) never rises along the trajectory. Wood & Fasiolo 2017 prove this holds,
-    /// so if our implementation breaks it, the bug is in the update formula or one
-    /// of the helpers it leans on. Nowhere else.
+    /// so a failure here means a bug in the update formula or one of the helpers
+    /// it uses.
     #[test]
     fn fellner_schall_monotone_improves_laml() {
         let (x, z, w, ps) = synthetic_pwls_problem();
@@ -1515,13 +1513,13 @@ mod reml_tests {
     /// Rebuilds the exact μ-subproblem of `mu_smooth_recovers_nonlinear_mean_control`
     /// and grids the REML/LAML objective `−V_r(λ)` over log λ. For a Gaussian with
     /// the identity link the IRLS working response is `z = y` exactly and the
-    /// working weight is constant `w = 1/σ̂²` (σ̂ ≈ 0.2 here), so what this grids
-    /// really *is* the landscape the outer loop's λ optimizer sees at convergence.
+    /// working weight is constant `w = 1/σ̂²` (σ̂ ≈ 0.2 here), so this grids the
+    /// same landscape the outer loop's λ optimizer sees at convergence.
     ///
-    /// For each grid point it prints λ, edf, and −V_r. The whole question it settles:
+    /// For each grid point it prints λ, edf, and −V_r. The question it answers:
     /// is the collapsed region (edf → null-space ≈ 3, counting the unpenalized
     /// intercept) a *spurious local* optimum (some interior λ scores strictly lower
-    /// −V_r) or the *global* one (REML honestly prefers the straight line)?
+    /// −V_r) or the *global* one (REML prefers the straight line)?
     #[test]
     #[ignore = "diagnostic: prints the LAML-vs-logλ landscape for the bistable control case"]
     fn diagnostic_laml_landscape_control_case() {

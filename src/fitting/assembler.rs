@@ -1,9 +1,8 @@
 //! Design-matrix and penalty-matrix assembly from formula terms.
 //!
-//! This is the translation layer: a [`Formula`] goes in, and the numeric
-//! [`ModelMatrix`] and [`PenaltyMatrix`] structures the penalized weighted
-//! least-squares solver actually eats come out. Nothing here fits anything; it
-//! just builds the matrices the solver will.
+//! Turns a [`Formula`] into the numeric [`ModelMatrix`] and [`PenaltyMatrix`]
+//! structures that the penalized weighted least-squares solver consumes. Nothing
+//! here fits anything.
 
 use super::{GamlssError, PenaltyMatrix, Smooth, Term};
 use crate::splines::{
@@ -36,11 +35,11 @@ fn get_col<'a>(data: &'a DataSet, name: &str) -> Result<&'a Array1<f64>, GamlssE
     })
 }
 
-/// Per-term layout metadata that rides along with the design matrix: how many
+/// Per-term layout metadata that accompanies the design matrix: how many
 /// coefficient columns the term occupies and, for penalized smooths, the dimension
-/// of its penalty null space (the EDF floor the term decays to as `λ → ∞`). This is
-/// what lets the fitter hand effective degrees of freedom back to individual terms
-/// and flag a smooth that has collapsed onto its null space, e.g. an over-penalized
+/// of its penalty null space (the EDF floor the term decays to as `λ → ∞`). The
+/// fitter uses this to assign effective degrees of freedom to individual terms and
+/// to flag a smooth that has collapsed onto its null space, e.g. an over-penalized
 /// one that has degenerated into a straight line.
 #[derive(Debug, Clone)]
 pub(crate) struct TermLayout {
@@ -59,7 +58,7 @@ pub(crate) struct TermLayout {
 fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
     // A difference penalty of order `d` has a null space of polynomials of degree
     // `< d`, so dimension `d`. Centering removes the constant (one direction), but
-    // only when the basis is actually reparameterized (`n_splines >= 2`).
+    // only when the basis is reparameterized (`n_splines >= 2`).
     let margin = |penalty_order: usize, n_splines: usize| -> usize {
         let base = penalty_order.min(n_splines);
         if centered && n_splines >= 2 {
@@ -120,8 +119,8 @@ fn smooth_null_dim(smooth: &Smooth, centered: bool) -> usize {
 /// function is a no-op at predict time (stored terms carry their state).
 ///
 /// Call this before [`assemble_model_matrices`] so the resolved state lands in
-/// `FittedParameter::terms` and gets replayed verbatim at predict time. That is
-/// the whole guarantee: the fit basis and the predict basis are the same basis.
+/// `FittedParameter::terms` and gets replayed verbatim at predict time. This
+/// guarantees that the fit basis and the predict basis are the same basis.
 pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>, GamlssError> {
     terms.iter().map(|term| resolve_term(term, data)).collect()
 }
@@ -217,8 +216,8 @@ fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
 /// grid to the training-data range so the fit and predict bases coincide.
 ///
 /// Errors when the column has no finite values: storing `(inf, -inf)` on the
-/// term would silently fit a garbage unit-spaced knot grid and cannot round-trip
-/// through JSON. (The public fit path already rejects non-finite columns in
+/// term would fit a meaningless unit-spaced knot grid without error and cannot
+/// round-trip through JSON. (The public fit path already rejects non-finite columns in
 /// `validate_inputs`; this guards internal callers.)
 fn finite_range(x: &Array1<f64>, col: &str) -> Result<(f64, f64), GamlssError> {
     let (lo, hi) = crate::splines::finite_range(x);
@@ -259,8 +258,8 @@ fn distinct_levels(x: &Array1<f64>) -> Vec<f64> {
 /// producing `L − 1` columns. `levels` are the sorted distinct codes (resolved at
 /// fit time and replayed at predict time so a level absent from new data still
 /// maps to the right column). An observation whose code is not among `levels`
-/// (an unseen level at predict time) contributes a zero row, which is the honest
-/// "no information" encoding.
+/// (an unseen level at predict time) contributes a zero row, encoding "no
+/// information".
 ///
 /// - `Treatment`: column `j` indicates `levels[j + 1]`; `levels[0]` is the
 ///   baseline (R's `contr.treatment`).
@@ -344,7 +343,7 @@ fn term_columns(data: &DataSet, n_obs: usize, term: &Term) -> Result<Array2<f64>
 
 /// Row-wise Kronecker product of two design blocks: an `n × p` and an `n × q`
 /// block combine into an `n × (p·q)` block whose row `i` is the Kronecker product
-/// of the two operand rows. It's the same primitive tensor smooths lean on.
+/// of the two operand rows. Tensor smooths use the same primitive.
 fn row_kronecker_block(left: &Array2<f64>, right: &Array2<f64>, n_obs: usize) -> Array2<f64> {
     let n_cols = left.ncols() * right.ncols();
     let mut out = Array2::<f64>::zeros((n_obs, n_cols));
@@ -416,9 +415,9 @@ fn assemble_smooth(
 
             // pc replaces centering: it pins f(pc_val) = 0. The pc-shifted basis
             // sends the coefficient direction 1_k to the zero function
-            // (B_pc·1 = 1·(1 − Σb_j(pc)) = 0), and S·1 = 0 too, so keep all k
-            // columns and you're left with a direction that has zero design AND zero
-            // penalty, which makes X'WX + λS singular. So it needs the same
+            // (B_pc·1 = 1·(1 − Σb_j(pc)) = 0), and S·1 = 0 too, so keeping all k
+            // columns leaves a direction with zero design AND zero penalty, which
+            // makes X'WX + λS singular. So it needs the same
             // Householder null-space transform as centering (below) whenever k ≥ 2,
             // no matter what `apply_constraint` says; f(pc) = 0 survives for every β
             // in the reduced space.
@@ -466,12 +465,12 @@ fn assemble_smooth(
 
             // When an Intercept shares the parameter, apply ONE sum-to-zero
             // constraint to the FULL tensor basis (dropping only the overall
-            // constant) and transform both penalties with the same Z. That is exactly
+            // constant) and transform both penalties with the same Z. This matches
             // mgcv's te() treatment (k1·k2 − 1 coefficients). Centering each
-            // *marginal* before the Kronecker (what we did before) strips every
+            // *marginal* before the Kronecker (the earlier behavior) strips every
             // function of the form f(x1)·1 and 1·g(x2), i.e. both main effects, which
-            // quietly reduces te() to a ti()-style pure interaction with no way to
-            // represent additive structure. That was a real bug, not a nuance.
+            // reduces te() to a ti()-style pure interaction with no way to represent
+            // additive structure. That was a bug.
             if apply_constraint && n_full >= 2 {
                 let (basis_c, penalties_c) =
                     apply_sum_to_zero(&basis, &[&penalty_1, &penalty_2], n_full);
@@ -487,9 +486,9 @@ fn assemble_smooth(
 
             // Column layout comes from the levels resolved at FIT time (stored on
             // the term), so prediction maps each group to the coefficient it was
-            // actually fitted with. Rebuild the map from the incoming data instead
-            // and it silently misaligns columns the moment prediction rows present
-            // the groups in a different first-occurrence order, or drop one. Legacy
+            // fitted with. Rebuilding the map from the incoming data would silently
+            // misalign columns whenever prediction rows present the groups in
+            // a different first-occurrence order or omit one. Legacy
             // models (empty `levels`, from before the field existed) fall back to
             // first-occurrence order to reproduce their fitted layout.
             let group_to_id: HashMap<String, usize> = if levels.is_empty() {
@@ -524,8 +523,8 @@ fn assemble_smooth(
                 }
             }
 
-            // Indicator basis is partition-of-unity (each row sums to 1), so it's the
-            // same rank-deficiency story as the P-splines.
+            // Indicator basis is partition-of-unity (each row sums to 1), so it has
+            // the same rank deficiency as the P-splines.
             if apply_constraint && n_groups >= 2 {
                 let z = sum_to_zero_basis(n_groups);
                 let basis_c = basis.dot(&z);
@@ -543,8 +542,8 @@ fn assemble_smooth(
 /// Assemble the design matrix X and penalty matrices S_j from formula terms.
 ///
 /// Concatenates each term's basis matrix (intercept, linear, smooth) side by side,
-/// then drops the penalty blocks in at the right offsets in the full coefficient
-/// space. All the fiddly bookkeeping is keeping those offsets straight.
+/// then places the penalty blocks at their offsets in the full coefficient space.
+/// Most of the bookkeeping is tracking those offsets.
 pub(crate) fn assemble_model_matrices(
     data: &DataSet,
     n_obs: usize,
@@ -552,8 +551,8 @@ pub(crate) fn assemble_model_matrices(
 ) -> Result<AssembledDesign, GamlssError> {
     // The smooth bases in this codebase (P-spline, tensor-product, random-effect
     // indicator) are all partition-of-unity, so `1_n ∈ col(B)`. Add an `Intercept`
-    // term on top of that and the design matrix goes rank-deficient. When that
-    // happens, sum-to-zero reparameterize the smooths to get identifiability back.
+    // term on top of that and the design matrix becomes rank-deficient. When that
+    // happens, sum-to-zero reparameterize the smooths to restore identifiability.
     let has_intercept = terms.iter().any(|t| matches!(t, Term::Intercept));
 
     let mut model_matrix_parts = Vec::with_capacity(terms.len());
@@ -644,9 +643,9 @@ mod tests {
 
     #[test]
     fn pspline_basis_is_partition_of_unity() {
-        // P-spline basis rows should sum to 1. That is the property that makes them
-        // compatible with an intercept column (and triggers the sum-to-zero
-        // reparameterization in `assemble_smooth`).
+        // P-spline basis rows should sum to 1. This makes them compatible with an
+        // intercept column (and triggers the sum-to-zero reparameterization in
+        // `assemble_smooth`).
         let mut data = DataSet::new();
         let n_obs = 100;
         data.insert_column("x", Array1::linspace(0.0, 1.0, n_obs));
@@ -671,8 +670,8 @@ mod tests {
     }
 
     /// A tensor-product smooth's two anisotropic marginal penalties act on the same
-    /// k1*k2 coefficient block, so they have to share the same offset; that shared
-    /// offset is exactly what lets `group_penalties` merge them into one group.
+    /// k1*k2 coefficient block, so they have to share the same offset, which lets
+    /// `group_penalties` merge them into one group.
     #[test]
     fn tensor_product_penalties_share_offset() {
         let mut data = DataSet::new();
@@ -709,8 +708,8 @@ mod tests {
     }
 
     /// A second smooth term's penalty must start right after the first smooth's
-    /// coefficients; that offset bookkeeping is what `Efficiency #11`'s block-local
-    /// `PenaltyMatrix` storage depends on.
+    /// coefficients; `Efficiency #11`'s block-local `PenaltyMatrix` storage depends
+    /// on that offset.
     #[test]
     fn second_smooth_penalty_offset_equals_first_smooth_coeff_count() {
         let mut data = DataSet::new();

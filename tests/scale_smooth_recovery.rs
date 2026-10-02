@@ -1,11 +1,11 @@
-// Integration tests can't run under the `python` feature, courtesy of PyO3's extension-module linking
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
-//! Parameter-recovery coverage for a P-spline smooth on a *scale* parameter.
+//! Parameter-recovery coverage for a P-spline smooth on a scale parameter.
 //!
 //! `tests/parameter_recovery.rs` and `tests/comprehensive.rs` cover smooths on
-//! `mu` and linear terms on `sigma`, but nothing fits a *smooth* on `sigma`.
-//! This file pins that case: a smooth on `sigma` has to track a known nonlinear
+//! `mu` and linear terms on `sigma`, but nothing fits a smooth on `sigma`.
+//! This file pins that case: a smooth on `sigma` must track a known nonlinear
 //! `log σ(x)`, not collapse onto the penalty null space (a straight line in
 //! `log σ`). A collapsed σ-smooth shows up two ways here, low correlation with
 //! the truth and an effective degrees of freedom pinned near its null-space
@@ -24,7 +24,7 @@ use ndarray::Array1;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal};
 
-/// Pearson correlation between two equal-length vectors. Nothing fancy.
+/// Pearson correlation between two equal-length vectors.
 fn correlation(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len() as f64;
     let mean_a = a.iter().sum::<f64>() / n;
@@ -89,8 +89,7 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     let sigma_param = &model.models["sigma"];
     let edf_sigma = sigma_param.edf;
 
-    // Predicted σ on the response scale; compare log σ̂ against the truth.
-    // That's the actual test.
+    // Predicted σ on the response scale; the test compares log σ̂ against the truth.
     let preds = model
         .predict(&data, &Gaussian::new())
         .expect("predict failed");
@@ -102,7 +101,7 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     println!("σ-smooth edf = {edf_sigma:.3}, corr(log σ̂, log σ) = {corr:.4}");
     println!("{model}");
 
-    // A smooth on σ that genuinely fit the curve correlates strongly with the
+    // A smooth on σ that fits the curve correlates strongly with the
     // truth. A null-space collapse (straight line in log σ) can't follow a full
     // sine period, so it correlates weakly.
     assert!(
@@ -158,7 +157,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).expect("Fit failed");
 
-    // Per-term EDF has to decompose the parameter EDF.
+    // Per-term EDF must decompose the parameter EDF.
     for (name, fp) in &model.models {
         let sum: f64 = fp.term_edf.iter().sum();
         assert!(
@@ -183,7 +182,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 #[test]
 fn recovered_curve_does_not_warn() {
     // The strong-signal recovery case from `sigma_smooth_recovers_nonlinear_scale`
-    // must NOT throw a spurious collapse warning.
+    // must not raise a spurious collapse warning.
     let n = 8_000;
     let mut rng = StdRng::seed_from_u64(7);
     let x_vals: Vec<f64> = (0..n).map(|i| i as f64 / (n as f64 - 1.0)).collect();

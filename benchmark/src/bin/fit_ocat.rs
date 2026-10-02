@@ -1,7 +1,7 @@
 //! Glissando Ocat benchmark binary.
 //!
-//! I fit `Ocat(R=4)` on the spike-train data, compute the training
-//! log-likelihood, and predict the (n_test × 4) category-probability matrix on
+//! Fits `Ocat(R=4)` on the spike-train data, computes the training
+//! log-likelihood, and predicts the (n_test × 4) category-probability matrix on
 //! the test set.
 //!
 //! Usage:
@@ -11,10 +11,10 @@
 //!     --output path/to/glissando_ocat.json \
 //!     [--intercept-only]
 //!
-//! Without `--intercept-only` I model the mu parameter with two P-splines
+//! Without `--intercept-only` the mu parameter is modeled with two P-splines
 //! (matching the mgcv formula `y ~ s(x1,bs="ps") + s(x2,bs="ps")`).
 //! With `--intercept-only` every parameter gets an intercept-only formula; that
-//! is the mode I use for the log-likelihood cross-check against mgcv.
+//! is the mode used for the log-likelihood cross-check against mgcv.
 
 use glissando::distributions::Ocat;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
@@ -182,7 +182,7 @@ fn main() {
         .map(|d| d.log_likelihood)
         .unwrap_or(f64::NAN);
 
-    // Now the test-set probabilities.
+    // Test-set probabilities.
     let prob_matrix = match model.predict_class_probabilities(&test_data, &family) {
         Ok(m) => m,
         Err(e) => {

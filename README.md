@@ -2,9 +2,9 @@
 
 A Rust implementation of Generalized Additive Models for Location, Scale, and Shape (GAMLSS).
 
-Ordinary regression models the mean and stops there.
-GAMLSS keeps going: the variance, the skew, and the tail weight each get their own regression, every one a function of your predictors.
-That is what lets it handle heteroskedastic data, heavy tails, and the other awkward shapes real data shows up in.
+Ordinary regression models only the mean of the response.
+GAMLSS gives each parameter of the response distribution (location, scale, and shape) its own regression on the predictors.
+This makes it suited to heteroskedastic, skewed, and heavy-tailed data.
 
 ## Features
 
@@ -13,27 +13,27 @@ That is what lets it handle heteroskedastic data, heavy tails, and the other awk
 - **R-style formula strings**: `"y ~ s(x) + factor(g) + a:b + offset(log_e)"` parses into the same terms the builder API produces.
 - **Automatic smoothing**: smoothing parameters selected via REML (default), GCV, or Fellner-Schall.
 - **Link overrides**: any of 9 named links per parameter (`FitConfig::with_link`).
-- **Distributional outputs**: `cdf` / `pdf` / `quantile` per family, randomized quantile residuals, and centile / quantile prediction (the signature GAMLSS deliverables).
+- **Distributional outputs**: `cdf` / `pdf` / `quantile` per family, randomized quantile residuals, and centile / quantile prediction.
 - **Structural likelihoods** *(Rust and Python)*: censored, truncated, and hurdle responses via `Censored` / `Truncated` / `Hurdle` wrappers over any base family (survival-style data, detection limits, two-part zero models).
 - **Finite mixtures** *(Rust API)*: `K`-component mixtures fit by EM (`fit_mixture` returns a `MixtureModel`).
 - **Model selection**: GAIC at any penalty `k`, stepwise term selection (`step_gaic`), and ANOVA / likelihood-ratio comparison (`ic_table`, `lr_test`).
-- **Robust fitting**: step-halving line search, global-deviance convergence in the RS loop, prior weights, and missing-value handling (`NaAction`).
-- **Dual backends**: OpenBLAS (default, max performance) or pure Rust via nalgebra (no system deps).
+- **Fitting controls**: step-halving line search, global-deviance convergence in the RS loop, prior weights, and missing-value handling (`NaAction`).
+- **Two backends**: OpenBLAS (default, faster) or pure Rust via nalgebra (no system deps).
 - **WASM support**: fit models and predict directly in the browser via wasm-bindgen.
 - **Python bindings**: a PyO3 extension built with maturin.
 - **Type-safe API**: `DataSet`, `Formula`, and newtype wrappers prevent misuse.
 
 ## Installation
 
-The easiest first build uses the **pure-Rust** backend: no system libraries, and it works on a clean machine and in WASM.
+The pure-Rust backend needs no system libraries, so it builds on a clean machine and for WASM.
 
 ```toml
 [dependencies]
 glissando = { git = "https://github.com/real-limoges/glissando", default-features = false, features = ["pure-rust", "serialization"] }
 ```
 
-For maximum performance, reach for the OpenBLAS backend instead.
-It is the default feature set, but it links against a system OpenBLAS (see [Requirements](#requirements)):
+The OpenBLAS backend is faster.
+It is the default feature set and links against a system OpenBLAS (see [Requirements](#requirements)):
 
 ```toml
 [dependencies]
@@ -46,14 +46,13 @@ glissando = { git = "https://github.com/real-limoges/glissando" }  # default = o
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `openblas` | OpenBLAS backend (ndarray-linalg), max performance | yes |
+| `openblas` | OpenBLAS backend (ndarray-linalg), the faster of the two | yes |
 | `pure-rust` | nalgebra backend, no system dependencies, WASM-compatible | no |
 | `serialization` | Serde support for model serialization and the `glissando::json` facade | no |
 | `wasm` | WASM fitting + prediction API (implies `pure-rust` + `serialization`, no parallelism) | no |
 | `python` | PyO3 bindings for Python integration (implies `openblas` + `parallel` + `serialization`) | no |
 | `parallel` | Rayon parallelism for large datasets (incompatible with WASM) | yes |
 
-**Note**: `openblas` and `pure-rust` are mutually exclusive (select your linear algebra backend).
 Because `openblas` is a default feature, anything that enables `pure-rust` or `wasm` must also pass `--no-default-features`; otherwise both backends activate and the build stops with a `compile_error!`.
 The `wasm` feature automatically disables parallelism.
 
@@ -108,7 +107,7 @@ let formula = Formula::from_strings([("mu", "y ~ x"), ("sigma", "~ 1")])?;
 
 > **ndarray version.**
 > The public API hands back `ndarray` types (`Array1<f64>`, `Array2<f64>`), so you must build against the same `ndarray` major (currently **0.17**).
-> To avoid guessing, use the re-export: `glissando::ndarray::Array1` resolves to exactly the version this crate is built against.
+> The re-export `glissando::ndarray::Array1` resolves to the version this crate is built against.
 
 ## Distributions
 
@@ -173,8 +172,8 @@ let probs = model.predict_class_probabilities(&new_data, &family)?;
 
 *(Rust and Python; not yet constructible on the WASM surface.)*
 
-Censoring, truncation, and hurdle structure are all the same trick: a **transformation of a base family's likelihood**, given a bit of extra per-observation information.
-Each one is a wrapper that holds a boxed base `Distribution` and fits the base family's parameters through the standard RS loop.
+Censoring, truncation, and hurdle structure each transform a base family's likelihood using extra per-observation information.
+Each is a wrapper that holds a boxed base `Distribution` and fits the base family's parameters through the standard RS loop.
 
 **Censoring.**
 Each row is either observed exactly (`Event`) or known only to lie below (`Left`), above (`Right`, the survival case), or within an interval (`Interval`):
@@ -193,7 +192,7 @@ let model = GamlssModel::fit(&data, &y, &formula, &family)?;
 ```
 
 **Truncation.**
-The response is only observed within `(lo, hi)`; out-of-range values are gone entirely, not censored.
+The response is only observed within `(lo, hi)`; out-of-range values are absent from the data rather than censored.
 Use `±∞` for an open side:
 
 ```rust
@@ -301,7 +300,7 @@ Term::offset("log_exposure")
 ### P-Spline (1D Smooth)
 
 A penalized B-spline smooth for nonlinear effects.
-`Smooth::ps` carries sensible defaults (`n_splines = 10`, `degree = 3`, `penalty_order = 2`); chain builders to override.
+`Smooth::ps` has defaults (`n_splines = 10`, `degree = 3`, `penalty_order = 2`); chain builders to override.
 
 ```rust
 Term::smooth(Smooth::ps("x"))                       // all defaults
@@ -393,7 +392,7 @@ The other fields:
 
 Every family has default links (see the table above), and any parameter can take one of 9 named links instead: `identity`, `log`, `logit`, `probit`, `cloglog`, `inverse`, `inverse_square`, `sqrt`, `cauchit`.
 Two exceptions refuse an override: every `Ocat` parameter, and `StudentT`'s `nu`.
-The fit checks that the parameter exists and that the link name is known, but it does **not** check that the link's range suits the parameter; a logit link on a Poisson mean silently pins it into `(0, 1)`.
+The fit checks that the parameter exists and that the link name is known, but it does **not** check that the link's range suits the parameter; a logit link on a Poisson mean pins it into `(0, 1)` and the fit still succeeds.
 
 The same override is a `links` key in the JSON / WASM config (`{"links": {"mu": "probit"}}`) and in the Python config dict.
 
@@ -707,9 +706,9 @@ match GamlssModel::fit(&data, &y, &formula, &Gaussian::new()) {
 
 ## Embedding glissando behind your own FFI
 
-glissando ships three faces: the typed Rust API, the WASM bindings, and the Python extension.
-If you are embedding the crate behind some *other* boundary (a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON service), you do not have to re-implement the wire format.
-The `glissando::json` module (enabled by the `serialization` feature) is the same tested JSON marshalling the WASM bindings use, exposed for any embedder to lean on.
+glissando has three interfaces: the typed Rust API, the WASM bindings, and the Python extension.
+To embed the crate behind a different boundary (a [Rustler](https://github.com/rusterlium/rustler) NIF, a C ABI, a JSON service), you do not need to re-implement the wire format.
+The `glissando::json` module (enabled by the `serialization` feature) exposes the JSON marshaling that the WASM bindings use.
 
 ```rust
 use glissando::json;
@@ -738,10 +737,9 @@ let (restored, family) = json::load(&blob)?;
 
 A formula can also be the structured form, a list of serialized `Term`s per parameter (`{"mu": [{"Intercept": null}, {"Linear": {"col_name": "x"}}]}`).
 
-Want typed dispatch instead of the string facade?
-`glissando::distributions::from_name("Gaussian") -> Box<dyn Distribution>` resolves any stateless family by name: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, `BCCG`, `BCT`, `BCPE`.
+For typed dispatch instead of the string facade, `glissando::distributions::from_name("Gaussian") -> Box<dyn Distribution>` resolves any stateless family by name: `Gaussian`, `Poisson`, `StudentT`, `Gamma`, `NegativeBinomial`, `Beta`, `Weibull`, `BCCG`, `BCT`, `BCPE`.
 `Binomial` (which carries `n_trials`), `Ocat` (which carries its category count), and the structural wrappers (which carry per-row state) are not name-resolvable; build them through the typed API.
-The `json` parsing and serialization helpers (`parse_data`, `parse_formula`, `serialize_predictions`, and friends) are public too, if you want to mix glissando's wire format into your own fitting flow.
+The `json` parsing and serialization helpers (`parse_data`, `parse_formula`, `serialize_predictions`, and others) are also public, for use in a custom fitting flow.
 
 ## Serialization & WASM
 
@@ -771,7 +769,7 @@ For browser-based fitting and prediction, build with the `wasm` feature (and `--
 wasm-pack build --no-default-features --features wasm
 ```
 
-Do not pass `--target web`; it has known issues with wasm-pack 0.14.
+`--target web` had known issues with wasm-pack 0.14; it builds and loads cleanly on 0.15.
 
 ### Fitting in the Browser
 
@@ -950,7 +948,7 @@ The library includes several optimizations for large datasets:
 - **Batched derivatives**: distribution derivatives are computed for all observations at once, enabling SIMD vectorization.
 - **Parallel computation**: special functions (digamma, trigamma) use Rayon parallel iterators for n >= 10,000.
 - **Warm-starting**: L-BFGS optimization reuses previous smoothing parameters for faster convergence.
-- **Efficient matrix operations**: a sqrt-weighted approach avoids O(n²) memory allocation.
+- **Square-root weighting**: a sqrt-weighted approach avoids O(n²) memory allocation.
 
 ## Benchmark (Comparison with R)
 

@@ -32,7 +32,7 @@ import polars as pl
 HERE      = Path(__file__).parent
 REPO_ROOT = HERE.parent
 
-LOGLIK_TOLERANCE = 0.01   # absolute gap in total log-likelihood we'll accept
+LOGLIK_TOLERANCE = 0.01   # max absolute gap in total log-likelihood
 PROB_P95_TARGET  = 0.10   # P95 relative error on (n × 4) probability matrix
 ARGMAX_TARGET    = 0.90   # minimum argmax agreement rate
 

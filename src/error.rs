@@ -40,7 +40,7 @@ pub enum GamlssError {
     #[error("Family mismatch: model was fit with {expected} but predict was called with a different family ({actual})")]
     FamilyMismatch { expected: String, actual: String },
 
-    /// This one is on us, not you. It means a bug in the library, not bad input.
+    /// A bug in the library, not bad input.
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn from_shape_error() {
-        // Force a real ShapeError by reshaping to a size that can't fit.
+        // Get a ShapeError from ndarray by reshaping to a size that can't fit.
         let res: Result<_, _> = Array2::<f64>::zeros((2, 3)).into_shape_with_order((4, 4));
         let err = res.unwrap_err();
         let g: GamlssError = err.into();

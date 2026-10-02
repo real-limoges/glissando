@@ -1,10 +1,10 @@
-// The JSON facade sits behind the `serialization` feature. We exclude `python`
+// The JSON facade sits behind the `serialization` feature. `python` is excluded
 // for the usual PyO3 extension-module linking reason.
 #![cfg(all(feature = "serialization", not(feature = "python")))]
 
-//! Native round-trip of the embedding contract (`glissando::json`). I exercise
-//! the public facade the way a non-WASM, non-Python embedder would, with no wasm
-//! build in the loop. This mirrors the coverage in `tests/wasm.rs`.
+//! Native round-trip of the embedding contract (`glissando::json`). These tests
+//! exercise the public facade the way a non-WASM, non-Python embedder would, with
+//! no wasm build in the loop. This mirrors the coverage in `tests/wasm.rs`.
 
 use glissando::json;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ fn fit_then_predict_round_trip() {
     let preds: HashMap<String, Vec<f64>> = serde_json::from_str(&preds_json).unwrap();
     assert_eq!(preds["mu"].len(), 3);
     assert_eq!(preds["sigma"].len(), 3);
-    // Linear mean, so predictions climb with x. Simple as that.
+    // Linear mean, so predictions increase with x.
     assert!(preds["mu"][0] < preds["mu"][1] && preds["mu"][1] < preds["mu"][2]);
 }
 
@@ -52,7 +52,7 @@ fn config_json_round_trips_step_halving_and_gd_tolerance() {
     let parsed = json::parse_config(cfg).expect("parse config");
     assert!(!parsed.step_halving);
     assert_eq!(parsed.gd_tolerance, 5e-4);
-    // Fields we didn't touch keep their defaults.
+    // Fields left unset keep their defaults.
     assert_eq!(parsed.tolerance, 1e-3);
 }
 
@@ -61,7 +61,7 @@ fn diagnostics_json_exposes_final_deviance() {
     let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let diag_json = json::diagnostics(&model).expect("diagnostics");
     let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
-    // The converged global deviance surfaces through the JSON facade. Check it's there.
+    // The converged global deviance is exposed through the JSON facade.
     assert!(diag["final_deviance"].is_number());
 }
 
@@ -104,7 +104,7 @@ fn save_then_load_preserves_predictions() {
 fn errors_surface_as_gamlss_error() {
     assert!(json::fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
     assert!(json::fit("not json", DATA, FORMULA, "Gaussian", None, None).is_err());
-    assert!(json::parse_data(r#"{"x": [1.0], "z": [1.0, 2.0]}"#).is_err()); // ragged columns, no good
+    assert!(json::parse_data(r#"{"x": [1.0], "z": [1.0, 2.0]}"#).is_err()); // ragged columns
 }
 
 // ============================================================================
@@ -145,7 +145,7 @@ fn covariance_matrix_json_is_square_and_symmetric() {
     for row in &cv {
         assert_eq!(row.len(), p, "covariance must be square");
     }
-    // Symmetry: V[i][j] ≈ V[j][i], both ways.
+    // Symmetry: V[i][j] ≈ V[j][i].
     for (i, row) in cv.iter().enumerate() {
         for (j, &v_ij) in row.iter().enumerate() {
             let diff = (v_ij - cv[j][i]).abs();
@@ -180,8 +180,8 @@ fn predict_samples_seeded_json_is_reproducible() {
     assert_eq!(run1, run2, "seeded runs must be byte-identical");
 
     let run_unseeded = json::predict_samples(&model, family.as_ref(), new_x, 10, None).unwrap();
-    // Unseeded output almost certainly differs. It would take 10 × 3 = 30 exact
-    // float matches to collide by chance, which isn't happening.
+    // Unseeded output almost certainly differs: a chance collision would need
+    // 10 × 3 = 30 exact float matches.
     assert_ne!(run1, run_unseeded, "unseeded run should differ from seeded");
 }
 
@@ -203,7 +203,7 @@ fn gaic_json_is_finite_and_monotone_in_k() {
     };
     let g2 = read(2.0);
     let g_bic = read((10.0_f64).ln());
-    // -2·ll can go negative for a tight Gaussian fit, so all we require here is finiteness…
+    // -2·ll can go negative for a tight Gaussian fit, so this only requires finiteness…
     assert!(g2.is_finite() && g_bic.is_finite());
     // …and that a bigger penalty raises GAIC, since edf > 0.
     assert!(
@@ -267,7 +267,7 @@ fn step_gaic_json_returns_trace_and_loadable_model() {
     .expect("step_gaic");
     let out: serde_json::Value = serde_json::from_str(&out_json).unwrap();
 
-    // The genuine linear term should have landed on mu.
+    // The true linear term should be selected for mu.
     let trace = out["trace"].as_array().unwrap();
     assert!(!trace.is_empty(), "expected at least one accepted move");
     assert!(out["formula"]["mu"].as_array().unwrap().len() >= 2);
@@ -311,7 +311,7 @@ fn quantile_prediction_json_constant_level() {
     let json_out = json::quantile_prediction(&model, family.as_ref(), DATA, p).expect("qpred");
     let predicted: Vec<f64> = serde_json::from_str(&json_out).unwrap();
     assert_eq!(predicted.len(), 10);
-    // 50th percentile is just fitted mu for a Gaussian.
+    // 50th percentile is the fitted mu for a Gaussian.
     let preds = json::predict(&model, family.as_ref(), DATA).unwrap();
     let parsed: std::collections::HashMap<String, Vec<f64>> = serde_json::from_str(&preds).unwrap();
     for i in 0..10 {

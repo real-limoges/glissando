@@ -1,4 +1,4 @@
-// These can't run under the `python` feature. PyO3's extension-module linking won't have it.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -33,7 +33,7 @@ fn test_poisson_recovery() {
 
     let coeffs = &model.models["mu"].coefficients;
 
-    // Did we get the truth back?
+    // Recover the true coefficients.
     assert!(
         (coeffs[0] - true_int).abs() < 0.1,
         "Intercept recovery failed"
@@ -111,7 +111,7 @@ fn test_tensor_product_complexity() {
 
     let edf = model.models["mu"].edf;
 
-    // Check that smoothing actually happened.
+    // Check that smoothing happened.
     // Shouldn't be a flat plane (EDF ~3), shouldn't be unpenalized (EDF 25).
     // REML smooths a touch less aggressively than GCV on this surface, so the
     // upper bound is loose enough to accept either criterion.

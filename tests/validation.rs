@@ -1,4 +1,4 @@
-// Integration tests can't run under the `python` feature, courtesy of PyO3's extension-module linking
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -109,7 +109,7 @@ fn test_intercept_only_model() {
 
 #[test]
 fn test_large_coefficients() {
-    // Make sure the model copes with data on a large scale
+    // Check that the model handles data on a large scale
     let y = Array1::from_vec(vec![
         1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0, 1600.0, 1700.0, 1800.0, 1900.0,
     ]);
@@ -184,7 +184,7 @@ fn test_multiple_linear_terms() {
     let mut rand_gen = Generator::new(42);
 
     let n = 500;
-    // Independent random predictors, so no collinearity to trip us up
+    // Independent random predictors, so no collinearity
     let x1: Vec<f64> = (0..n).map(|_| rand_gen.rng.random::<f64>()).collect();
     let x2: Vec<f64> = (0..n).map(|_| rand_gen.rng.random::<f64>()).collect();
     let y: Vec<f64> = x1

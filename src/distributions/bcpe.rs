@@ -7,7 +7,7 @@
 //! `τ = 2` is the normal (so BCPE reduces to BCCG), `τ < 2` is leptokurtic
 //! (heavier-than-normal peak/tails), `τ > 2` is platykurtic.
 //!
-//! I variance-standardize the power-exponential so `σ` keeps its CV meaning:
+//! The power-exponential is variance-standardized so `σ` keeps its CV meaning:
 //! with `c² = 2^{-2/τ}\,Γ(1/τ)/Γ(3/τ)`,
 //! `log h(z) = N(τ) − ½|z/c|^τ`, `N(τ) = log τ − log 2 − \tfrac{3}{2}\logΓ(1/τ) + \tfrac{1}{2}\logΓ(3/τ)`.
 //! It shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCT.
@@ -133,10 +133,9 @@ impl Distribution for BCPE {
                 (t / (2.0 * c)) * abs_a.powf(t - 1.0) * z.signum()
             };
 
-            // Guard each reciprocal at the power it's actually used at. Take an
-            // already-guarded reciprocal and raise it to a power and it overflows to
-            // infinity for a parameter the log link can still underflow to. And inf · 0
-            // is NaN.
+            // Guard each reciprocal at the power it is used at. Raising an
+            // already-guarded reciprocal to a power overflows to infinity for a
+            // parameter the log link can still underflow to, and inf · 0 is NaN.
             let inv_m = 1.0 / m.max(DENOM_FLOOR);
             let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
             let inv_s = 1.0 / s.max(DENOM_FLOOR);
@@ -153,7 +152,7 @@ impl Distribution for BCPE {
             let n_prime = 1.0 / t + (3.0 / (2.0 * t * t)) * (psi_a - psi_3a);
             let b_coef = LN_2 / t - psi_a / (2.0 * t) + 3.0 * psi_3a / (2.0 * t);
             let gt_ln_gt = if z == 0.0 { 0.0 } else { gt * gt.ln() };
-            // This was already separable, so converting it was just deleting a trailing `t *`.
+            // This was already separable, so converting it meant deleting a trailing `t *`.
             u_tau[i] = n_prime - gt_ln_gt / (2.0 * t) + 0.5 * gt * b_coef;
 
             // Expected Fisher information. I_loc(τ) = E[D²] is the location info
@@ -219,7 +218,7 @@ impl Distribution for BCPE {
     }
 
     /// `Var(Y) ≈ (σμ)²`; `σ` is (approximately) the CV, thanks to the variance-1
-    /// standardization of the PE. I use this only for Pearson residuals.
+    /// standardization of the PE. Used only for Pearson residuals.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;

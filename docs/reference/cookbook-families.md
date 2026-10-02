@@ -7,7 +7,8 @@
   The 4-level example now supplies `delta_3`, without which the fit is rejected.
 
 **What this is:** every distribution family glissando ships, what it models, its parameters, and how to construct it.
-**How to swap:** the fit call is identical across families; only the family value and the set of modeled parameters change. A family with a `nu` parameter (Student-t, the Box-Cox trio) needs a formula entry for `nu`, or the fit is rejected.
+**How to swap:** the fit call is identical across families; only the family value and the set of modeled parameters change.
+A family with a `nu` parameter (Student-t, the Box-Cox trio) needs a formula entry for `nu`, or the fit is rejected.
 **Runnable:** `examples/families.rs` fits a representative family from each group (`cargo run --example families`); `examples/python/families.py` mirrors it.
 
 The parameter names matter: your formula must supply one predictor per parameter the family exposes.
@@ -34,14 +35,14 @@ Three structural wrappers (`Censored`, `Truncated`, `Hurdle`) and finite mixture
 
 ## Continuous, symmetric
 
-**Gaussian** is the default and the one to reach for when the response is real-valued and roughly symmetric.
-Modeling `sigma` on covariates is the GAMLSS move a plain regression cannot make.
+**Gaussian** is the default and the usual choice when the response is real-valued and roughly symmetric.
+Unlike a plain regression, a GAMLSS fit can model `sigma` on covariates.
 
 ```rust
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 ```
 
-**Student-t** trades the Gaussian's thin tails for a `nu` degrees-of-freedom parameter, so it absorbs outliers instead of being dragged by them.
+**Student-t** adds a `nu` degrees-of-freedom parameter that controls tail weight, so outliers pull the fit less than under a Gaussian.
 It has three parameters, so the formula must name `nu`:
 
 ```rust
@@ -55,8 +56,8 @@ let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 ## Continuous, positive
 
 **Gamma** and **Weibull** both model strictly positive responses (durations, costs, concentrations).
-Gamma is the classical right-skewed choice; Weibull is the survival / reliability workhorse.
-Their default links keep `mu` and `sigma` positive, and the newly shipped inverse / sqrt links can be set per parameter through `FitConfig::with_link` if you want a non-default scale.
+Gamma is the classical right-skewed choice; Weibull is the standard choice for survival and reliability data.
+Their default links keep `mu` and `sigma` positive, and the inverse / sqrt links can be set per parameter through `FitConfig::with_link` if you want a non-default scale.
 
 ```rust
 let model = GamlssModel::fit(&data, &y, &formula, &Weibull::new()).unwrap();  // y > 0
@@ -66,12 +67,12 @@ let model = GamlssModel::fit(&data, &y, &formula, &Weibull::new()).unwrap();  //
 
 **Beta** models a response on the open interval (0, 1): rates, fractions, proportions that are neither exactly 0 nor exactly 1.
 Its second parameter is the precision `phi` (larger means less spread), not a `sigma`, so the formula needs a `phi` entry.
-For data with exact zeros or ones you want a zero/one-inflated variant (not yet shipped; see `DIST-5` in the roadmap) or the `Hurdle` wrapper below.
+For data with exact zeros or ones, use a zero/one-inflated variant (not yet shipped; see `DIST-5` in the roadmap) or the `Hurdle` wrapper below.
 
 ## Counts
 
 **Poisson** is the one-parameter count model (`mu` only).
-When the variance exceeds the mean (it usually does), **Negative Binomial** adds a `sigma` dispersion parameter and is the safer default for real count data.
+When the variance exceeds the mean, which is common in observed counts, **Negative Binomial** adds a `sigma` dispersion parameter; it is the safer default.
 
 ```rust
 let model = GamlssModel::fit(&data, &counts, &formula, &NegativeBinomial::new()).unwrap();
@@ -106,9 +107,9 @@ let probs = model.predict_class_probabilities(&data, &family).unwrap();  // n x 
 
 ## The Box-Cox family (skew and kurtosis)
 
-These are the distributions GAMLSS is known for, and the engine behind LMS growth-chart / centile curves.
+These distributions are the basis of LMS growth-chart / centile curves.
 **BCCG** (Cole-Green) adds a `nu` skewness parameter to a positive response; **BCT** adds a `tau` kurtosis parameter on top (Box-Cox-t); **BCPE** replaces the t tail with a power-exponential one.
-Fit them exactly like any other family, then read percentile curves off the fit.
+Fit them like any other family, then read percentile curves off the fit.
 BCCG has three parameters, so the formula names `nu` (BCT and BCPE add a `tau` entry on top):
 
 ```rust
@@ -147,7 +148,7 @@ let upper = Array1::from_elem(n, f64::INFINITY);
 let family = Truncated::new(Box::new(Gaussian::new()), lower, upper);
 ```
 
-**Hurdle** is a two-part structure that adds a `xi` parameter governing a point mass, a clean generalization of zero-inflation:
+**Hurdle** is a two-part structure that adds a `xi` parameter governing a point mass, a generalization of zero-inflation:
 
 ```rust
 use glissando::distributions::Hurdle;
@@ -167,4 +168,4 @@ let mixture = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &FitConfig::
 ## Not yet shipped
 
 Skew/kurtotic families beyond Box-Cox (`DIST-3`), the extra count families (`DIST-4`), zero-inflated / zero-adjusted families (`DIST-5`), and Tweedie (`DIST-7`) are on the roadmap but not implemented.
-For semicontinuous data with exact zeros today, reach for `Hurdle` over a positive base family.
+For semicontinuous data with exact zeros, use `Hurdle` over a positive base family.

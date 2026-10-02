@@ -39,7 +39,7 @@ pub(crate) fn check_state_len(name: &str, stored: usize, n: usize) -> Result<(),
 
 /// Emit `Distribution` methods that are pure one-line passthroughs to `self.base`.
 ///
-/// Each wrapper lists only the methods it genuinely forwards unchanged; anything
+/// Each wrapper lists only the methods it forwards unchanged; anything
 /// the wrapper reshapes (e.g. `Truncated::cdf`, which renormalizes) stays
 /// hand-written. Requires `Array1`, `HashMap`, `Link` and `GamlssError` in scope
 /// at the call site.
@@ -154,8 +154,8 @@ pub(crate) fn cdf_eta_grads(
 ///
 /// **Both the link and η come from `ctx`, and the perturbation stays on η.**
 ///
-/// Reading the link from `ctx` rather than `base.default_link` is what makes this
-/// path honor a link override. Taking η from `ctx` too, rather than
+/// Reading the link from `ctx` rather than `base.default_link` makes this path
+/// honor a link override. Taking η from `ctx` too, rather than
 /// recovering it as `link.link(θ)`, matters wherever that round trip is not the
 /// identity: [`SqrtLink`](super::links::SqrtLink) maps η < 0 to a positive μ and
 /// recovers `|η|`, and [`InverseSquareLink`](super::links::InverseSquareLink) is
@@ -164,7 +164,7 @@ pub(crate) fn cdf_eta_grads(
 /// Differencing η rather than θ is also deliberate, and is *not* an oversight left
 /// from the natural-scale conversion of the analytic path. `FD_EPS` on η through a
 /// log link is a *relative* step (`σ·e^{±FD_EPS}`), where ±`FD_EPS` on θ is an
-/// absolute one: for σ ≈ 1e-3 that is a 1% perturbation, a completely different
+/// absolute one: for σ ≈ 1e-3 that is a 1% perturbation, a different
 /// truncation-error regime, and for σ ≲ `FD_EPS` the minus side lands at or below
 /// zero and feeds an invalid parameter into `base.cdf`.
 fn numeric_cdf_grad(

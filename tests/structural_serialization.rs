@@ -48,7 +48,7 @@ fn censored_descriptor_round_trips() {
     let json = model.to_json(&family).unwrap();
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
     assert_eq!(desc.build().unwrap().name(), "Censored");
-    // The descriptor holds onto the per-row status, so the base stays Gaussian.
+    // The descriptor keeps the per-row status, so the base stays Gaussian.
     match &desc {
         FamilyDescriptor::Censored {
             base, status: s, ..
@@ -81,7 +81,7 @@ fn truncated_descriptor_round_trips_with_infinite_bounds() {
 
     let json = model.to_json(&family).unwrap();
     let (_, desc) = GamlssModel::from_json(&json).unwrap();
-    // The +∞ upper bound makes it through via the sentinel encode/decode.
+    // The +∞ upper bound survives via the sentinel encode/decode.
     let rebuilt = desc.build().unwrap();
     assert_eq!(rebuilt.name(), "Truncated");
     // Rebuilt loglik equals the original on the data, which means the bounds match.
@@ -126,7 +126,7 @@ fn ocat_descriptor_round_trips() {
         ((state >> 32) as f64) / (u32::MAX as f64 + 1.0)
     };
     // eta is constant for this intercept-only case, so the category
-    // probabilities are fixed; compute them once, then just draw per row.
+    // probabilities are fixed; compute them once, then draw per row.
     let thresholds = [-1.0_f64, 0.0, 1.2];
     let cum: Vec<f64> = thresholds
         .iter()
@@ -154,7 +154,7 @@ fn ocat_descriptor_round_trips() {
     }
 
     // Guard the data itself: all four categories must be present, or this would
-    // silently fit a 4-category Ocat on degenerate data and prove nothing.
+    // fit a 4-category Ocat on degenerate data and prove nothing.
     let present: std::collections::BTreeSet<i64> = y.iter().map(|&v| v as i64).collect();
     assert_eq!(
         present.len(),

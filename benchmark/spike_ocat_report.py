@@ -154,7 +154,7 @@ def main() -> None:
     cand_probs = np.array(rust["probs"], dtype=float)        # (n, 4)
     mgcv_probs = np.array(mgcv_res["probs"], dtype=float)    # (n, 4)
 
-    # true DGP probs, straight from the test parquet
+    # true DGP probs, read from the test parquet
     test_df = pl.read_parquet(test_parquet)
     true_probs = np.column_stack(
         [test_df[c].to_numpy() for c in ["p1", "p2", "p3", "p4"]]

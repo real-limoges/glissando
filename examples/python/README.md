@@ -27,4 +27,4 @@ python examples/python/families.py      # a fit from each distribution group
 - `formula` is a dict of parameter name to a formula string (`{"mu": "y ~ s(x)", "sigma": "~ 1"}`) or a list of term tuples (`{"mu": [("intercept",), ("linear", "x")]}`).
 - `predict` returns a dict of parameter name to numpy array.
 
-One trap worth knowing: `glissando.Binomial(...)` takes a *list* of per-row trial counts, not a scalar integer.
+`glissando.Binomial(...)` takes a *list* of per-row trial counts, not a scalar integer.

@@ -89,7 +89,7 @@ test_wasm() {
 stage test-wasm test_wasm
 
 # --- test-python (maturin develop + pytest, isolated uv venv) --------------
-# Uses `maturin develop` instead of `build`+`install` so we skip wheel-repair
+# Uses `maturin develop` instead of `build`+`install` to skip wheel-repair
 # (which fails on macOS for the openblas → libquadmath chain). CI on Linux
 # uses `maturin build --out dist` because audited wheels are needed there.
 test_python() {

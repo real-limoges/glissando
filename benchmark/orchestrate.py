@@ -68,7 +68,7 @@ def gen_gaussian_smooth(rng, n):
 
 def gen_gaussian_sigma_smooth(rng, n):
     # Constant mean, with a full sine period of structure in log σ. This is the
-    # scale-smooth cousin of gen_gaussian_smooth, for the gaulss comparison.
+    # scale-smooth counterpart of gen_gaussian_smooth, for the gaulss comparison.
     x = np.linspace(0, 1, n)
     log_sigma = -0.7 + 0.8 * np.sin(2 * np.pi * x)
     y = 2.0 + rng.normal(0.0, np.exp(log_sigma), n)
@@ -296,8 +296,8 @@ SCENARIOS: list[Scenario] = [
     Scenario("poisson_smooth",           True,  True,  None,   gen_poisson_smooth),
     Scenario("gamma_linear",             False, True,  None,   gen_gamma_linear),
     Scenario("gamma_smooth",             True,  True,  None,   gen_gamma_smooth),
-    # Student-t: the real oracle is gamlss TF() (same RS algorithm). mgcv_capable=True
-    # just keeps scat() around as a loose, mu-only cross-method sanity check.
+    # Student-t: the primary oracle is gamlss TF() (same RS algorithm). mgcv_capable=True
+    # keeps scat() as a loose, mu-only cross-method sanity check.
     Scenario("studentt_linear",          False, True,  None,   gen_studentt_linear),
     Scenario("studentt_smooth",          True,  True,  None,   gen_studentt_smooth),
     Scenario("negative_binomial_linear", False, True,  None,   gen_negative_binomial_linear),
@@ -347,8 +347,8 @@ def scenario_rng(sub_seed: int, name: str, rep: int) -> np.random.Generator:
 
 
 # Per-fit wall-clock budget. A well-behaved fit is done in seconds; a hung
-# solver (or R session) shouldn't get to stall the whole run. Kill it and mark
-# the scenario failed instead.
+# solver (or R session) shouldn't stall the whole run, so it is killed and the
+# scenario marked failed instead.
 FIT_TIMEOUT_S = 600
 
 

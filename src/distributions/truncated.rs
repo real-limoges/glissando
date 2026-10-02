@@ -13,8 +13,7 @@
 //! `(−∞, ∞)` the wrapper reduces exactly to the base family. `cdf` / `quantile`
 //! are renormalized onto the truncated support; `variance` / `expected_value`
 //! delegate to the base family. Those report the *untruncated* parameter moments:
-//! the truncated moments would need numerical integration, and I've left that out
-//! of scope.
+//! the truncated moments would need numerical integration, which is out of scope.
 //!
 //! Like the other structural wrappers it carries per-row state and is excluded
 //! from [`from_name`](super::from_name).
@@ -295,9 +294,9 @@ mod tests {
     #[test]
     fn derivative_keys_and_weights_are_well_formed() {
         // See the matching test in `censored.rs`: the wrappers had no
-        // `derivative_keys_match_parameters_observed_info` coverage at all. A two-sided
-        // truncation is used so the normalizer `D = F(hi) − F(lo)` is a genuine
-        // difference rather than collapsing to `1 − F(lo)`.
+        // `derivative_keys_match_parameters_observed_info` coverage. A two-sided
+        // truncation is used so the normalizer `D = F(hi) − F(lo)` is a difference of
+        // two CDF values rather than collapsing to `1 − F(lo)`.
         let y = array![1.0, 2.0, 1.5, 3.0];
         let owned = [
             ("mu", array![1.0, 1.5, 1.0, 2.0]),

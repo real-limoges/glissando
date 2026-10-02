@@ -58,7 +58,7 @@ impl Distribution for StudentT {
     /// enforced by a KKT-style aggregate projection that only makes sense
     /// against [`FlooredLogLink`], whose `mu_eta` is a hard zero below the
     /// floor. Under any other link the projection's freeze branch would fire on
-    /// the wrong condition, which is exactly the lift-off case it exists to
+    /// the wrong condition, which is the lift-off case it exists to
     /// handle. μ and σ go through `chain_to_eta` like any other family.
     fn allows_link_override(&self, param: &str) -> bool {
         param != "nu"
@@ -100,7 +100,7 @@ impl Distribution for StudentT {
     /// aggregate* (`u_ν[i]` depends on a sum of scores over every pinned row), so it
     /// is not element-wise, and [`FlooredLogLink::mu_eta`] returns 0 below the
     /// floor, so the generic rule would force the freeze branch unconditionally,
-    /// which is wrong in exactly the lift-off case the projection exists to handle.
+    /// which is wrong in the lift-off case the projection exists to handle.
     ///
     /// Consequently `allows_link_override("nu")` is false.
     fn eta_derivatives(
@@ -158,8 +158,8 @@ impl Distribution for StudentT {
         Ok(out)
     }
 
-    /// `Var(Y) = σ²·ν/(ν−2)` for `ν > 2`. For `ν ≤ 2` the variance is undefined; we
-    /// clamp the denominator at `MIN_POSITIVE` so Pearson residuals stay finite.
+    /// `Var(Y) = σ²·ν/(ν−2)` for `ν > 2`. For `ν ≤ 2` the variance is undefined; the
+    /// denominator is clamped at `MIN_POSITIVE` so Pearson residuals stay finite.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let sigma = require(self, params, "sigma")?;
         let nu = require(self, params, "nu")?;
@@ -285,8 +285,8 @@ impl Distribution for StudentT {
 /// The standardized-residual block every Student-t derivative body starts from.
 ///
 /// Built once per [`Distribution::eta_derivatives`] call and shared by the μ/σ and
-/// ν halves, which both need `(z², w_robust)`. Keeping it in one place is also what
-/// keeps the two halves *agreeing*: the σ guard below has to be the same on both
+/// ν halves, which both need `(z², w_robust)`. Keeping it in one place also keeps
+/// the two halves *consistent*: the σ guard below has to be the same on both
 /// sides or a saturated σ leaves one block finite and the other NaN.
 struct Standardized {
     z: Array1<f64>,
@@ -393,7 +393,7 @@ impl StudentT {
         let dl_dnu = 0.5 * (&d1 - &d2 - &term3 + &term4);
         // Chain rule for log link: u_η = ν · dl/dν, with an *aggregate* boundary
         // projection at the ν-floor. Where `FlooredLogLink` binds (ν pinned at
-        // NU_FLOOR), dν/dη is genuinely 0, so per-row scores must not be forwarded
+        // NU_FLOOR), dν/dη is exactly 0, so per-row scores must not be forwarded
         // blindly: a negative aggregate walks η_ν downward forever (Δβ never
         // converges), while a per-row one-sided projection biases the aggregate
         // upward and produces a limit cycle of lift-off/fall-back at the boundary.
@@ -404,8 +404,8 @@ impl StudentT {
         // rule so the aggregate pull is preserved.
         //
         // Scope: the single summed score is the exact KKT test only when η_ν is
-        // an intercept (the standard TF usage, and all this crate's ν formulas
-        // in practice). Under a covariate/smooth model on ν the pinned rows
+        // an intercept (the standard TF usage, and every ν formula this crate
+        // currently uses). Under a covariate/smooth model on ν the pinned rows
         // load on different coefficients and a per-coefficient projected
         // gradient X'g⁺ would be needed; theta_derivatives() has no design-matrix
         // access, so that refinement belongs in the scoring layer if ν
@@ -570,9 +570,10 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // Covers the two parameters that go through the generic chain rule. μ is identity-linked, so the default-link check above is
-        // vacuous for it; a log link is what makes it bite (μ is positive here so
-        // the link is well defined).
+        // Covers the two parameters that go through the generic chain rule. μ is
+        // identity-linked, so the default-link check above is vacuous for it; a log
+        // link makes the check discriminate (μ is positive here so the link is well
+        // defined).
         //
         // ν is deliberately absent: it keeps its hand-written η-scale entry against
         // `FlooredLogLink`, and overriding its link is rejected as unsupported (see
@@ -664,8 +665,8 @@ mod tests {
     #[test]
     fn natural_derivatives_omit_nu_but_eta_derivatives_supply_it() {
         // The hybrid contract: `theta_derivatives` covers only the two separable
-        // parameters, and `eta_derivatives` fills ν back in. A family that silently
-        // dropped ν from the η-scale map would freeze the ν block with no error.
+        // parameters, and `eta_derivatives` fills ν back in. A family that
+        // dropped ν from the η-scale map would silently freeze the ν block.
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
             ("mu", array![0.0, 0.5, 1.0]),

@@ -1,7 +1,7 @@
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking blocks it.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
-//! This one mops up the gaps the rest of the suite left open: the input-validation
+//! Covers gaps the rest of the suite leaves open: the input-validation
 //! error paths (`preprocessing::validate_inputs`), degenerate-size robustness (n = 1,
 //! perfect separation), and one end-to-end smoke test that drives the whole public
 //! pipeline (`fit → predict → predict_with_se → JSON round-trip`).
@@ -104,8 +104,8 @@ fn single_observation_intercept_only_does_not_panic() {
     f.add_terms("mu", vec![Term::Intercept]);
     f.add_terms("sigma", vec![Term::Intercept]);
 
-    // One observation is degenerate for σ. Doesn't matter, the call has to return a
-    // Result and not panic. If it does converge, the mean intercept should land on y[0].
+    // One observation is degenerate for σ, but the call must return a Result and
+    // not panic. If it does converge, the mean intercept should land on y[0].
     match GamlssModel::fit(&data, &y, &f, &Gaussian::new()) {
         Ok(model) => {
             let mu0 = model.models["mu"].coefficients[0];
@@ -195,7 +195,7 @@ fn fit_predict_se_and_json_roundtrip() {
     }
 }
 
-/// JSON round-trip carries the smoke test on through the `serialization` surface:
+/// JSON round-trip extends the smoke test through the `serialization` surface:
 /// a reloaded model has to reproduce the original predictions bit-for-bit.
 #[cfg(feature = "serialization")]
 #[test]

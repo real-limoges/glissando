@@ -1,4 +1,4 @@
-// Integration tests can't run under the `python` feature. PyO3's extension-module linking blocks it.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -144,8 +144,8 @@ fn gaic_matches_aic_and_bic_at_canonical_k() {
 
 #[test]
 fn gaic_works_for_a_discrete_family() {
-    // GAIC doesn't care which family it's fed. It has to produce a finite score for
-    // a Poisson fit and stay consistent with AIC/BIC at the canonical penalties.
+    // GAIC is family-agnostic: it must produce a finite score for a Poisson fit
+    // and stay consistent with AIC/BIC at the canonical penalties.
     let mut rng = Generator::new(17);
     let (y, data) = rng.poisson_data(200, 0.5, 0.3);
     let formula = intercept_only(&["mu"]);
@@ -168,7 +168,7 @@ fn gaic_is_monotone_in_k() {
     let formula = linear_intercepts("x", &["mu", "sigma"]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    // edf > 0, so a bigger penalty strictly raises GAIC. No way for it to go the other way.
+    // edf > 0, so a bigger penalty strictly raises GAIC.
     let g2 = model.gaic(&Gaussian::new(), &y, 2.0).unwrap();
     let g4 = model.gaic(&Gaussian::new(), &y, 4.0).unwrap();
     assert!(g4 > g2, "GAIC(4) {} should exceed GAIC(2) {}", g4, g2);

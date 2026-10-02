@@ -1,4 +1,4 @@
-// These can't run under the `python` feature. PyO3's extension-module linking won't have it.
+// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
 #![cfg(not(feature = "python"))]
 
 mod common;
@@ -61,7 +61,7 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
 // ----------------------------------------------------------------------------
 
 /// `mu ~ 1 + Linear(x1) + Linear(noise_col)`, `sigma ~ 1`: the correct model
-/// (`linear_intercepts("x1", ..)`) with one extra noise predictor bolted onto `mu`.
+/// (`linear_intercepts("x1", ..)`) with one extra noise predictor added to `mu`.
 fn mu_x1_plus_noise(noise_col: &str) -> Formula {
     let mut f = Formula::new();
     f.add_terms(
@@ -101,14 +101,14 @@ fn lr_test_noise_term_is_weaker_than_genuine_term() {
     let mut rng = Generator::new(99);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
-    // Correct model mu ~ x1, then pile the pure-noise column x2 on top.
+    // Correct model mu ~ x1, then add the pure-noise column x2.
     let correct = linear_intercepts("x1", &["mu", "sigma"]);
     let with_noise = mu_x1_plus_noise("x2");
     let small = GamlssModel::fit(&data, &y, &correct, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &with_noise, &Gaussian::new()).unwrap();
 
     let test = lr_test(&small, &big, &Gaussian::new(), &y).unwrap();
-    // A noise column barely nudges the deviance: small LR, non-tiny p-value.
+    // A noise column barely changes the deviance: small LR, non-tiny p-value.
     assert!(
         test.lr_stat < 10.0,
         "noise column should give a small LR, got {}",
@@ -171,10 +171,10 @@ fn step_gaic_forward_selects_signal_rejects_noise() {
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
     let start = intercept_only(&["mu", "sigma"]);
-    // BIC penalty (k = log n) is the parsimonious knob: it reliably keeps the
-    // genuine predictor and rejects the pure-noise columns. (AIC's k = 2 is loose
+    // BIC penalty (k = log n) is the parsimonious choice: it reliably keeps the
+    // true predictor and rejects the pure-noise columns. (AIC's k = 2 is loose
     // enough that a noise column's deviance drop sometimes clears the penalty.
-    // That's expected, not a selection bug.)
+    // That is expected, not a selection bug.)
     let k = (y.len() as f64).ln();
     let result = step_gaic(
         &data,
@@ -353,9 +353,8 @@ fn lr_test_p_value_matches_chi_squared_survival() {
 fn lr_test_handles_fractional_df_from_a_penalized_smooth() {
     use statrs::distribution::{ChiSquared, ContinuousCDF};
     let mut rng = Generator::new(21);
-    // A genuinely nonlinear (sinusoidal) mean so the P-spline can't collapse to a
-    // straight line. Its effective df stays solidly fractional on either
-    // linear-algebra backend.
+    // A nonlinear (sinusoidal) mean so the P-spline can't collapse to a straight
+    // line. Its effective df stays fractional on either linear-algebra backend.
     let (y, data) = rng.sinusoidal_gaussian(200, 0.3);
     let linear_mu = linear_intercepts("x", &["mu", "sigma"]);
     let smooth_mu = smooth_intercepts("x", 12, &["mu", "sigma"]);
@@ -524,7 +523,7 @@ fn step_gaic_both_adds_signal_and_drops_noise() {
 #[test]
 fn step_gaic_selects_a_term_on_sigma() {
     let mut rng = Generator::new(31);
-    // Heteroskedastic: σ depends on x, so a term on sigma is genuine signal.
+    // Heteroskedastic: σ depends on x, so a term on sigma is true signal.
     let (y, data) = rng.heteroskedastic_gaussian(400);
     let start = linear_intercepts("x", &["mu", "sigma"]); // mu~x, sigma~1
     let scope = vec![StepScope {
@@ -736,7 +735,7 @@ fn step_gaic_is_deterministic_at_formula_level_across_seeds_and_k() {
                 assert_eq!(a.move_, b.move_);
                 assert!((a.gaic - b.gaic).abs() < 1e-12);
             }
-            // Formula-level replayability, not just matching trace structure.
+            // Formula-level replayability, beyond matching trace structure.
             assert_eq!(
                 mu_term_names(&r1),
                 mu_term_names(&r2),

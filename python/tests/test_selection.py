@@ -72,7 +72,7 @@ def test_step_gaic_forward_selects_signal(synthetic_gaussian):
     model = out["model"]
     trace = out["trace"]
     assert model.converged()
-    # the genuine linear term should have been added.
+    # the true linear term should have been added.
     assert len(trace) >= 1
     assert any("x" in step["move"] for step in trace)
     # and the selected model should predict a mean that rises in x.

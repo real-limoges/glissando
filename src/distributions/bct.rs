@@ -6,8 +6,8 @@
 //! As `τ → ∞` the `t` approaches the normal and BCT reduces to BCCG.
 //!
 //! It shares the Box-Cox spine ([`super::boxcox`]) with BCCG and BCPE; only the
-//! distribution `z` follows (here Student-`t`) and the extra `τ` column differ. I
-//! reuse [`StudentT`](super::StudentT)'s df parameter for the `τ` score/Fisher pair.
+//! distribution `z` follows (here Student-`t`) and the extra `τ` column differ. The
+//! `τ` score/Fisher pair reuses [`StudentT`](super::StudentT)'s df parameter.
 
 use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
@@ -56,8 +56,8 @@ impl Distribution for BCT {
     }
 
     /// Robust seeds: `μ₀ = median(y)`, `σ₀` = robust CV, `ν₀ = 1` (symmetric), and
-    /// `τ₀` a fixed moderate df (see `TAU_INIT`). I prefer a fixed `τ` seed over a
-    /// kurtosis estimate, for the same reason as [`StudentT`](super::StudentT).
+    /// `τ₀` a fixed moderate df (see `TAU_INIT`). A fixed `τ` seed is used instead
+    /// of a kurtosis estimate, for the same reason as [`StudentT`](super::StudentT).
     fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
         boxcox_seed(param, y).unwrap_or_else(|| {
             if param != "tau" {
@@ -109,10 +109,9 @@ impl Distribution for BCT {
             let w_t = (t + 1.0) / (t + z2); // t robustifying weight
             let big_t = 1.0 + nu_i * s * z; // T = (y/μ)^ν
 
-            // Guard each reciprocal at the power it's actually used at. Take an
-            // already-guarded reciprocal and raise it to a power and it overflows to
-            // infinity for a parameter the log link can still underflow to. And inf · 0
-            // is NaN.
+            // Guard each reciprocal at the power it is used at. Raising an
+            // already-guarded reciprocal to a power overflows to infinity for a
+            // parameter the log link can still underflow to, and inf · 0 is NaN.
             let inv_m = 1.0 / m.max(DENOM_FLOOR);
             let inv_m_sq = 1.0 / (m * m).max(DENOM_FLOOR);
             let inv_s = 1.0 / s.max(DENOM_FLOOR);
@@ -123,7 +122,7 @@ impl Distribution for BCT {
             u_nu[i] = -w_t * z * dz_dnu + l;
 
             // τ score: the same digamma form as StudentT's df parameter. It was
-            // already separable, so converting it was just deleting the trailing `t *`.
+            // already separable, so converting it meant deleting the trailing `t *`.
             u_tau[i] = 0.5
                 * (digamma((t + 1.0) / 2.0) - digamma(t / 2.0) - (1.0 + z2 / t).ln()
                     + (w_t * z2 - 1.0) / t);
@@ -180,8 +179,8 @@ impl Distribution for BCT {
     }
 
     /// `Var(Y) ≈ (σμ)²·τ/(τ−2)` for `τ > 2`: the BCCG CV approximation inflated by
-    /// the `t` variance factor. I floor the denominator so it stays finite for
-    /// `τ ≤ 2`, and I use it only for Pearson residuals.
+    /// the `t` variance factor. The denominator is floored so it stays finite for
+    /// `τ ≤ 2`. Used only for Pearson residuals.
     fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;

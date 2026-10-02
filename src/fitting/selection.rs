@@ -1,18 +1,17 @@
 //! Model selection and comparison over fitted [`GamlssModel`]s.
 //!
-//! Three facilities, one mechanism underneath: compare models by a penalized
-//! log-likelihood (an information criterion) or by a deviance difference, both
-//! riding on the same substrate, the global deviance `−2·ℓ̂` and total effective
-//! degrees of freedom that [`fitting::diagnostics`](crate::diagnostics) already
-//! computed:
+//! Models are compared by a penalized log-likelihood (an information criterion) or
+//! by a deviance difference. Both use the global deviance `−2·ℓ̂` and total
+//! effective degrees of freedom that [`fitting::diagnostics`](crate::diagnostics)
+//! already computes:
 //!
 //! - [`ic_table`] ranks any set of models (nested or not) by EDF / global
 //!   deviance / GAIC. A comparison, not a test.
 //! - [`lr_test`] runs a likelihood-ratio χ² test for a nested pair.
 //! - [`step_gaic`] greedily adds/drops one term at a time to minimize GAIC(k).
 //!
-//! Every score runs through [`compute_gaic`], so these comparisons stay in step
-//! with `diagnostics(..).aic`/`.bic` rather than drifting off on their own.
+//! Every score runs through [`compute_gaic`], so these comparisons stay consistent
+//! with `diagnostics(..).aic`/`.bic`.
 
 use super::diagnostics::{compute_gaic, total_edf};
 use crate::distributions::Distribution;
@@ -63,9 +62,9 @@ pub struct LrTest {
 /// Tabulate a set of models by EDF, global deviance, and GAIC(`k`).
 ///
 /// A ranking, not a test: it works for any models fit to the same response `y`,
-/// nested or not, which is exactly how you compare different families or
-/// non-nested term sets. The rows come back in the order you passed the models;
-/// sort by `gaic` (or `global_deviance`) to actually rank them.
+/// nested or not, so it can compare different families or non-nested term sets.
+/// The rows come back in the order the models were passed; sort by `gaic` (or
+/// `global_deviance`) to rank them.
 ///
 /// # Errors
 ///
@@ -103,8 +102,8 @@ pub fn ic_table<D: Distribution + ?Sized>(
 /// # Caveat
 ///
 /// Penalized smooths have non-integer effective df, so `ν` is generally fractional
-/// and the χ² reference is **approximate**. That is the same caveat
-/// `anova.gam`/`summary.gam` carry in mgcv, no better and no worse. For unpenalized
+/// and the χ² reference is **approximate**. `anova.gam`/`summary.gam` in mgcv
+/// carry the same caveat. For unpenalized
 /// (integer-df) nested linear models it is exact up to the asymptotics.
 ///
 /// # Errors
@@ -239,12 +238,12 @@ fn with_dropped(f: &Formula, param: &str, t: &Term) -> Formula {
 ///
 /// At each step it tries every single-term add/drop that `scope` and `direction`
 /// allow, refits each, and takes the move that lowers GAIC the most, stopping once
-/// no move buys more than a small tolerance. The penalty `k` is the knob you tune:
-/// `k = 2` (AIC) is permissive, `k = log n` (BIC) is parsimonious.
+/// no move lowers it by more than a small tolerance. The penalty `k` sets the
+/// criterion: `k = 2` (AIC) is permissive, `k = log n` (BIC) is parsimonious.
 ///
-/// The search is **greedy and single-term** (no look-ahead, no interaction
-/// synthesis), matching gamlss's `stepGAIC`, so what you get is a **local** optimum,
-/// not necessarily the global one. Candidate moves are enumerated in a deterministic
+/// The search is greedy and single-term (no look-ahead, no interaction synthesis),
+/// matching gamlss's `stepGAIC`, so the result is a **local** optimum, not
+/// necessarily the global one. Candidate moves are enumerated in a deterministic
 /// order (scope order, then candidate order), so identical inputs give back an
 /// identical [`StepResult::trace`]. A trial fit that errors (non-convergence,
 /// singular system) is skipped, not treated as a reason to abort the whole search.
@@ -267,7 +266,8 @@ pub fn step_gaic<D: Distribution + ?Sized>(
     direction: Direction,
     config: FitConfig,
 ) -> Result<StepResult, GamlssError> {
-    // Keep the search from churning when a move barely moves the score (ties, say).
+    // Minimum GAIC improvement for a move to count, so near-ties do not keep the
+    // search going.
     const EPS: f64 = 1e-6;
 
     let mut current = start;

@@ -1,7 +1,7 @@
 //! GAMLSS comparison framework: the Rust fitting binary.
 //!
-//! I read parquet data, fit the models with glissando, and write standardized
-//! JSON so the results line up against R/mgcv.
+//! Reads parquet data, fits the models with glissando, and writes standardized
+//! JSON for comparison against R/mgcv.
 //!
 //! Usage:
 //!   cargo run -p glissando_benchmark --bin compare_fit -- \
@@ -309,7 +309,7 @@ fn fit_gaussian_quadratic(df: &DataFrame) -> FitResult {
     fit_gaussian_smooth(df)
 }
 
-/// Smooth on the *scale* parameter: μ constant, log σ a P-spline of x. The
+/// Smooth on the scale parameter: μ constant, log σ a P-spline of x. The
 /// scale-smooth analog of `gaussian_smooth`; compared against mgcv `gaulss`.
 fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
     let start = Instant::now();
@@ -948,10 +948,10 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
         .with_terms("sigma", vec![Term::Intercept]);
 
     let family = Gaussian::new();
-    // REML, to match mgcv's method="REML" on the same model. This one used to
-    // run GCV as a hack around L-BFGS stalling on the flat LAML ridges of the
-    // weak smooths. The Fellner-Schall polish fixed the stall, and GCV's
-    // different criterion was visibly wandering off from mgcv at some seeds.
+    // REML, to match mgcv's method="REML" on the same model. This scenario used
+    // to run GCV as a workaround for L-BFGS stalling on the flat LAML ridges of
+    // the weak smooths. The Fellner-Schall polish fixed the stall, and GCV's
+    // different criterion drifted visibly away from mgcv at some seeds.
     let config = FitConfig::default();
     match GamlssModel::fit_with_config(&data, &y, Some(&weights), &formula, &family, config) {
         Ok(model) => build_result(

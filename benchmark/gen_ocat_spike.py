@@ -41,14 +41,14 @@ def generate(rng: np.random.Generator, n: int):
     p3 = np.clip(cum[:, 2] - cum[:, 1], 0.0, 1.0)
     p4 = np.clip(1.0 - cum[:, 2], 0.0, 1.0)
 
-    # renormalize, just to mop up float rounding
+    # renormalize to absorb float rounding
     total = p1 + p2 + p3 + p4
     p1 /= total
     p2 /= total
     p3 /= total
     p4 /= total
 
-    # draw y ∈ {0..3}, then bump to {1..4}
+    # draw y ∈ {0..3}, then shift to {1..4}
     probs_mat = np.stack([p1, p2, p3, p4], axis=1)  # (n, 4)
     y_idx = np.array(
         [rng.choice(4, p=probs_mat[i]) for i in range(n)], dtype=float

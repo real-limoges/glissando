@@ -6,8 +6,9 @@
 //!   θ₁ = δ₁  (identity link, unconstrained)
 //!   θ_k = θ_{k-1} + exp(δ_k)  for k ≥ 2  (log link, increment always > 0)
 //!
-//! The fitting loop treats each threshold as an intercept-only formula, so I need
-//! no new machinery beyond what already drives the RS update for scalar parameters.
+//! The fitting loop treats each threshold as an intercept-only formula, so no new
+//! machinery is needed beyond what already drives the RS update for scalar
+//! parameters.
 //!
 //! # Supported category counts
 //! R = 2, 3, 4, 5.
@@ -25,8 +26,8 @@ use crate::distributions::{MAX_ETA, MIN_ETA};
 use ndarray::Array1;
 use std::collections::HashMap;
 
-/// Floor for cumulative/category probabilities. I keep it deliberately larger (and
-/// local to this file) than the shared `distributions::PROB_EPS` (`1e-12`):
+/// Floor for cumulative/category probabilities, local to this file and deliberately
+/// larger than the shared `distributions::PROB_EPS` (`1e-12`):
 /// probabilities here are summed and renormalized across up to 5 categories, so a
 /// `1e-12` floor would still underflow after normalization.
 const MIN_PROB: f64 = 1e-10;
@@ -165,7 +166,7 @@ impl Distribution for Ocat {
     /// The `eta_derivatives` override below is written against this family's own
     /// links and cannot be lifted to a generic chain rule: `params["mu"]` holds
     /// η rather than μ, and `jac_k` is `exp(η_k)` only because `delta_k` uses a
-    /// log link. Substituting any other link leaves both wrong with no error.
+    /// log link. Substituting any other link leaves both wrong.
     fn allows_link_override(&self, _param: &str) -> bool {
         false
     }
