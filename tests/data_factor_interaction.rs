@@ -1,4 +1,4 @@
-//! DATA-1 factors and DATA-2 interactions, tested through the public API.
+//! Factors and interactions, tested through the public API.
 //!
 //! Contrast coding is locked at the unit level against R's `contr.treatment` /
 //! `contr.sum` (see `assembler::tests`). Here I check the end-to-end story:

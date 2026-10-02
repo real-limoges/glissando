@@ -1,4 +1,4 @@
-// Characterization snapshots (TEST-4) for model selection: the GAIC information
+// Characterization snapshots for model selection: the GAIC information
 // table and the likelihood-ratio test over nested Gaussian models. Frozen behavior,
 // not expectations (see `tests/regression.rs`); floats are rounded so the snapshot
 // survives openblas/pure-rust drift.

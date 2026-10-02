@@ -19,7 +19,7 @@ type CompleteFrame = (DataSet, Array1<f64>, Option<Array1<f64>>);
 /// Drop every row that carries a missing (non-finite) value in `y`, a
 /// formula-referenced column, or (when present) its prior weight, and return
 /// owned, row-aligned copies of the response, the referenced columns, and the
-/// weights (DATA-4, `NaAction::DropRows`). This is R's `na.omit` over the model
+/// weights (`NaAction::DropRows`). This is R's `na.omit` over the model
 /// frame: only the variables the formula actually references count toward
 /// completeness, so an unrelated column full of holes never costs you a single
 /// row.

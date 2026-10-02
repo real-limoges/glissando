@@ -1,4 +1,4 @@
-//! Per-parameter link selection (LINK-1..6).
+//! Per-parameter link selection.
 //!
 //! Exercises the public surface of the link-selection feature:
 //! - `FitConfig::with_link` overrides a parameter's link at fit time;
@@ -367,8 +367,8 @@ fn json_roundtrip_preserves_overridden_link() {
 
     let json = model.to_json(&family).unwrap();
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
-    // SER-1: Binomial now round-trips through the descriptor (it carries n_trials),
-    // where a bare name string previously could not rebuild it.
+    // Binomial round-trips through the descriptor, which carries n_trials; a bare
+    // name string could not rebuild it.
     assert_eq!(desc.build().unwrap().name(), "Binomial");
     // The persisted link survives the round-trip...
     assert_eq!(reloaded.models["mu"].link.as_deref(), Some("probit"));

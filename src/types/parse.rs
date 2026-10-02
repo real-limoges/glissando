@@ -1,4 +1,4 @@
-//! DATA-5 · string formula parser.
+//! String formula parser.
 //!
 //! Parses an R/mgcv-style formula string such as
 //! `"y ~ s(x) + region + age:sex + offset(log_e)"` into the same `Vec<Term>` the

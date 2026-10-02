@@ -1,5 +1,5 @@
 //! [`FamilyDescriptor`] is a serializable description of a distribution family,
-//! the descriptor-aware successor to [`from_name`](super::from_name) (SER-1).
+//! the descriptor-aware successor to [`from_name`](super::from_name).
 //!
 //! A bare name round-trips the stateless families, but [`Binomial`] / [`Ocat`]
 //! carry per-observation state, and the structural wrappers carry both state and

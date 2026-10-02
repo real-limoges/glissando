@@ -17,7 +17,7 @@ def test_unknown_family_object_rejected(synthetic_gaussian, gaussian_formula):
 
 
 def test_non_finite_response_rejected_with_na_fail(gaussian_formula):
-    """Under na_action='fail' a missing response is a hard error (DATA-4)."""
+    """Under na_action='fail' a missing response is a hard error."""
     n = 50
     y = np.linspace(0.0, 1.0, n)
     y[5] = np.nan
@@ -33,7 +33,7 @@ def test_non_finite_response_rejected_with_na_fail(gaussian_formula):
 
 
 def test_non_finite_response_dropped_by_default(gaussian_formula):
-    """The default na_action drops the missing row and fits the rest (DATA-4)."""
+    """The default na_action drops the missing row and fits the rest."""
     n = 50
     y = np.linspace(0.0, 1.0, n)
     y[5] = np.nan

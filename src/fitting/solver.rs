@@ -170,8 +170,7 @@ impl<'a> GamlssCost<'a> {
     ///
     /// The gradient carries the full chain rule: β itself depends on λ through
     /// the penalized normal equations, so dRSS/dλ and dEDF/dλ each have more
-    /// terms than they first look. See docs/math/mathematics.md for the
-    /// derivation. Computing score and gradient together reuses one
+    /// terms than they first look. Computing score and gradient together reuses one
     /// `fit_pwls_with_grad_info` solve rather than paying for two.
     fn objective_and_grad(&self, rho: &Array1<f64>) -> Result<(f64, Array1<f64>), GamlssError> {
         let lambdas = rho.mapv(f64::exp);

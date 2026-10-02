@@ -1,4 +1,4 @@
-//! Finite mixture models (STRUCT-4): the EM capstone sitting on top of the weighted RS fit.
+//! Finite mixture models: the EM capstone sitting on top of the weighted RS fit.
 //!
 //! A `K`-component mixture `f(y) = Σ_k w_k · g_k(y)` ties the observations together
 //! through the components' responsibilities, so (unlike the per-row likelihood

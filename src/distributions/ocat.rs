@@ -10,7 +10,7 @@
 //! no new machinery beyond what already drives the RS update for scalar parameters.
 //!
 //! # Supported category counts
-//! R = 2, 3, 4, 5.  R = 4 is the B3 use case.
+//! R = 2, 3, 4, 5.
 //!
 //! # Exclusion from name-based routes
 //! Like `Binomial`, `Ocat` carries state (`n_categories`) that cannot be recovered
@@ -220,8 +220,7 @@ impl Distribution for Ocat {
     ///
     /// Relatedly, this family's `params["mu"]` already holds **η**, not μ, and
     /// `jac_k` below is `exp(η_k)` only under the log link, which is why
-    /// [`Self::allows_link_override`] rejects every parameter. See the
-    /// `[CHAIN-GENERIC]` section of `docs/math/mathematics.md`.
+    /// [`Self::allows_link_override`] rejects every parameter.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,

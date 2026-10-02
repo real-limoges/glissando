@@ -1,4 +1,4 @@
-//! Hurdle / two-part models (STRUCT-3): a point mass at zero combined with a
+//! Hurdle / two-part models: a point mass at zero combined with a
 //! zero-truncated base for the positive part.
 //!
 //! ```text
@@ -7,7 +7,7 @@
 //! ```
 //!
 //! I think of this as a clean generalization of zero-inflation. Contrast it with
-//! zero-*inflation* (DIST-5), where the base can still emit zero
+//! zero-*inflation*, where the base can still emit zero
 //! (`P(Y=0) = π + (1−π)·g(0)`): a hurdle's positive process is structurally
 //! separate from the zero process. I reach for a hurdle when the zero-generating
 //! mechanism is genuinely distinct (a true two-part model), and for zero-inflation
@@ -15,7 +15,7 @@
 //!
 //! The wrapper adds one fitted parameter `xi` (the zero probability, logit link)
 //! on top of the base family's parameters, and the positive part reuses the
-//! zero-truncation machinery (STRUCT-2) rather than reinventing it. Like the other
+//! zero-truncation machinery rather than reinventing it. Like the other
 //! structural wrappers it is excluded from [`from_name`](super::from_name).
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
@@ -149,7 +149,7 @@ impl Distribution for Hurdle {
                     // Zero rows carry no information about the positive-part params.
                     //
                     // This `MIN_WEIGHT` is a *sentinel*, not a floor, and is the one
-                    // family-level use of the constant that survives Altitude #1.
+                    // family-level use of the constant.
                     // Writing 0.0 here and letting `scoring::step` floor it would be
                     // numerically identical (`u/w = 0` either way), but it would tally
                     // one `weight_floor_hits` per structural zero on every iteration,
@@ -168,7 +168,7 @@ impl Distribution for Hurdle {
 
         // xi atom: a Bernoulli on the zero indicator. Unlike the base parameters
         // above, this one *is* expected Fisher information, so it has a separable
-        // natural scale and goes through the generic chain rule (Altitude #1):
+        // natural scale and goes through the generic chain rule:
         //   ∂l/∂ξ = (I(y=0) − ξ) / (ξ(1−ξ)),   i_ξ = 1 / (ξ(1−ξ)).
         // Under the default logit link `mu_eta = ξ(1−ξ)`, so `chain_to_eta`
         // recovers the classic `u_η = I(y=0) − ξ` and `w_η = ξ(1−ξ)`.
@@ -296,8 +296,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_a_non_default_link() {
-        // Altitude #1 Phase 3 acceptance gate, covering both of this wrapper's
-        // hardcoded-link sites in one fixture:
+        // Covers both of this wrapper's link-dependent sites in one fixture:
         //   μ on `sqrt`:   the zero-truncation normalizer's `F'(0)/D` term, built
         //                  from Gamma's analytic CDF derivative;
         //   ξ on `probit`: the zero atom, which used to write the logit chain rule
@@ -312,9 +311,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
-        // Altitude #1 Phase 3, gate (d). ξ at both rails is the new exposure: the
-        // natural-scale atom divides by ξ(1−ξ), which the folded `u = I − ξ`,
-        // `w = ξ(1−ξ)` never did, and `DENOM_FLOOR` is what keeps it finite there.
+        // ξ at both rails: the natural-scale atom divides by ξ(1−ξ), and
+        // `DENOM_FLOOR` is what keeps it finite there.
         // μ and σ sweep the log link's reach at the same time so the zero-truncation
         // normalizer's `F'(0)/D` is evaluated in the saturated tail too.
         let y = array![0.0, 2.0, 0.0, 3.0];

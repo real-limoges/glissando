@@ -104,7 +104,7 @@ pub fn parse_data(json: &str) -> Result<DataSet, GamlssError> {
     DataSet::from_vecs(raw)
 }
 
-/// Parse a formula from JSON, accepting either spelling (DATA-5):
+/// Parse a formula from JSON, accepting either spelling:
 ///
 /// - **term-list**: the structured `{ "mu": [ {"Linear": {"col_name": "x"}}, … ] }`
 ///   form matching the [`Term`](crate::Term) schema; or
@@ -344,7 +344,7 @@ pub fn diagnostics(model: &GamlssModel) -> Result<String, GamlssError> {
     serde_json::to_string(&model.diagnostics).map_err(json_err)
 }
 
-// --- Distributional inference (INFER-1 / INFER-2) ---
+// --- Distributional inference ---
 
 /// Randomized normalized quantile residuals against the response `y` the model
 /// was fit on, serialized as a JSON array. `seed` makes the discrete-family
@@ -402,7 +402,7 @@ pub fn quantile_prediction(
     serde_json::to_string(&predicted.to_vec()).map_err(json_err)
 }
 
-// --- Model selection & comparison (INFER-3 / INFER-7 / INFER-4) ---
+// --- Model selection & comparison ---
 
 /// Generalized AIC at penalty `k`, serialized as `{"gaic": value}`. Evaluate
 /// against the same response `y` the model was fit on.
@@ -529,7 +529,7 @@ mod tests {
         assert!(fit(Y, DATA, FORMULA, "Wishart", None, None).is_err());
     }
 
-    /// DATA-5: the string-formula spelling is accepted by `parse_formula` and
+    /// The string-formula spelling is accepted by `parse_formula` and
     /// fits identically to the equivalent term-list payload.
     #[test]
     fn string_formula_fits_like_term_list() {

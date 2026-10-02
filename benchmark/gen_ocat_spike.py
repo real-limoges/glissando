@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate synthetic ordered-categorical (ocat) train/test parquets for the
-Phase 0 spike (Guide 3).
+ocat spike.
 
 DGP:
   latent f(x1, x2) = sin(x1) + 0.4 * x2^2

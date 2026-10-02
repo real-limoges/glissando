@@ -144,7 +144,7 @@ pub fn lr_test<D: Distribution + ?Sized>(
 }
 
 // ----------------------------------------------------------------------------
-// INFER-4: stepwise term selection (stepGAIC analog)
+// Stepwise term selection (stepGAIC analog)
 // ----------------------------------------------------------------------------
 
 /// The moves the stepwise search may make for one distribution parameter.

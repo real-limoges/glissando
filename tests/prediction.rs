@@ -350,7 +350,7 @@ fn predict_samples_shape_matches_request_for_poisson() {
 }
 
 // ============================================================================
-// Guide 1: design_matrix / covariance_matrix / term_index_map / seed
+// design_matrix / covariance_matrix / term_index_map / seed
 // ============================================================================
 
 /// design_matrix identity: X · β has to equal the fitted linear predictor on
@@ -649,7 +649,7 @@ fn cr_spline_prediction_reuses_training_knots() {
     }
 }
 
-// --- INFER-2: centiles / quantile prediction ---
+// --- Centiles / quantile prediction ---
 
 #[test]
 fn centiles_median_equals_fitted_mu_for_gaussian() {

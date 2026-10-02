@@ -1,4 +1,4 @@
-//! DATA-3 offsets, tested through the public API.
+//! Offsets, tested through the public API.
 //!
 //! An offset enters the linear predictor as `η = X·β + offset` with a fixed
 //! coefficient of 1. The load-bearing correctness check is a closed-form

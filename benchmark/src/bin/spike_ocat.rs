@@ -1,4 +1,4 @@
-//! Phase 0 ocat spike, Candidate A: three independent Binomial(1)/logit models.
+//! Ocat spike, Candidate A: three independent Binomial(1)/logit models.
 //!
 //! I fit three cumulative threshold models on the train data:
 //!   model k: y_k = (y <= k), Binomial(n_trials=1), logit link, formula mu ~ s(x1)+s(x2)

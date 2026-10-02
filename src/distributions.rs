@@ -104,7 +104,7 @@ fn saturate(v: f64) -> f64 {
 pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
 
 /// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name: the same
-/// shape as a derivatives map, used by the structural wrappers (SER-1 / STRUCT).
+/// shape as a derivatives map, used by the structural wrappers.
 ///
 /// This is the *chained* map, produced by `structural::cdf_eta_grads`. A family's
 /// own [`Distribution::cdf_theta_derivatives`] returns the natural-scale
@@ -303,7 +303,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// loop calls.
     ///
     /// It carried the plain name `derivatives` and returned *η-scale* pairs until the
-    /// generic-chain-rule refactor (Altitude #1). The rename is the point: an
+    /// generic-chain-rule refactor. The rename is the point: an
     /// embedder calling the old name against the new contract would otherwise have
     /// read natural-scale numbers as η-scale ones, or hit the error default at
     /// runtime, with nothing failing at compile time. Same reasoning as the
@@ -394,7 +394,7 @@ pub trait Distribution: Debug + Send + Sync {
     }
 
     /// Whether the response is discrete (counts / categories) rather than
-    /// continuous. Drives the randomized branch of quantile residuals (INFER-1),
+    /// continuous. Drives the randomized branch of quantile residuals,
     /// which needs both `F(y)` and `F(y−1)` to de-lump each atom. Default: continuous.
     fn is_discrete(&self) -> bool {
         false
@@ -430,7 +430,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// derivative w.r.t. the parameter itself and let the caller apply the link;
     /// `structural::cdf_eta_grads` chains to η generically via
     /// [`Link::mu_eta`] and [`Link::mu_eta2`], so an overridden link is honored
-    /// rather than silently ignored (Altitude #1). Baking a default-link chain
+    /// rather than silently ignored. Baking a default-link chain
     /// rule in here is exactly the bug this contract replaced.
     ///
     /// Only parameters with a closed form are included; the default returns an
@@ -441,7 +441,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// parameter a family omits. Location/scale parameters are analytic
     /// (Gaussian μ/σ, Student-t μ/σ, Gamma μ); shape parameters whose CDF
     /// derivative is non-elementary (Gamma σ, Student-t ν, both Beta params) are
-    /// left to the numeric fallback. See the structural-likelihoods guide.
+    /// left to the numeric fallback.
     fn cdf_theta_derivatives(
         &self,
         _y: &Array1<f64>,
@@ -463,7 +463,7 @@ pub trait Distribution: Debug + Send + Sync {
     fn name(&self) -> &'static str;
 
     /// A serializable description of this family, sufficient to rebuild it via
-    /// [`FamilyDescriptor::build`] (SER-1).
+    /// [`FamilyDescriptor::build`].
     ///
     /// The default, `FamilyDescriptor::Named(self.name())`, round-trips every
     /// stateless family through [`from_name`]. Stateful families ([`Binomial`],
@@ -773,10 +773,7 @@ pub(crate) mod test_helpers {
     ///
     /// This does not reach the solver. `scoring::step` floors with `w < MIN_WEIGHT`,
     /// which catches negatives as well as small positives, and it is the only floor
-    /// in the pipeline (the floor-once rule of Altitude #1). Until Phase 3 the
-    /// wrappers pre-floored these rows themselves, which produced the same number
-    /// but hid them from `weight_floor_hits`; that is the Altitude #4 half of the
-    /// same work.
+    /// in the pipeline, so every floored row is counted in `weight_floor_hits`.
     pub fn derivative_keys_match_parameters_observed_info<D: Distribution>(
         d: &D,
         params: HashMap<&str, &Array1<f64>>,
@@ -852,9 +849,7 @@ pub(crate) mod test_helpers {
     ///    BCCG/BCT/BCPE ν, Ocat μ and `delta_1`) a non-trivial check at all:
     ///    under the identity link `∂l/∂η ≡ ∂l/∂θ`, so the default-link check is
     ///    vacuously satisfied by any correct natural-scale score.
-    /// 2. It is the post-refactor contract for the generic chain rule
-    ///    (Altitude #1), so call sites written against it stay valid across the
-    ///    change.
+    /// 2. It is the contract for the generic chain rule.
     ///
     /// Note this asserts on the *score* only. The Fisher weight has no generic
     /// finite-difference oracle (several families deliberately return expected
@@ -1251,7 +1246,7 @@ mod tests {
         }
     }
 
-    // --- Altitude #1: the non-default-link contract ---
+    // --- The non-default-link contract ---
     //
     // The derivative-level gate for this lives with each family, not here: every
     // family file has a `score_matches_finite_diff_under_non_default_links` test

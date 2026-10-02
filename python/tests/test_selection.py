@@ -80,7 +80,7 @@ def test_step_gaic_forward_selects_signal(synthetic_gaussian):
     assert preds["mu"][1] > preds["mu"][0]
 
 
-# --- INFER-1 / INFER-2 bindings: quantile_residuals, centiles, quantile_prediction ---
+# --- Bindings: quantile_residuals, centiles, quantile_prediction ---
 
 
 def test_quantile_residuals_gaussian_calibrated(rng):

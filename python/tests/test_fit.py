@@ -16,7 +16,7 @@ def test_fit_linear_gaussian(synthetic_gaussian, gaussian_formula):
 
 
 def test_fit_string_formula_matches_term_list(synthetic_gaussian, gaussian_formula):
-    """DATA-5: a parameter's formula may be an R/mgcv-style string, fitting
+    """A parameter's formula may be an R/mgcv-style string, fitting
     identically to the equivalent list-of-tuples encoding."""
     data = {"x": synthetic_gaussian["x"]}
     y = synthetic_gaussian["y"]

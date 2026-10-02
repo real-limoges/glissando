@@ -52,7 +52,7 @@ impl Distribution for Weibull {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // z = (y/μ)^σ ~ Exp(1) at the truth. Natural scale (Altitude #1):
+        // z = (y/μ)^σ ~ Exp(1) at the truth. Natural scale:
         //   μ: ∂l/∂μ = σ(z−1)/μ,                    i_μ = σ²/μ².
         //   σ: ∂l/∂σ = [1 + σ·ln(y/μ)·(1−z)]/σ,     i_σ = (π²/6 + (1−γ)²)/σ².
         // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
@@ -61,8 +61,8 @@ impl Distribution for Weibull {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
-        const EULER: f64 = 0.577_215_664_901_532_9;
-        let i_sigma_numer = std::f64::consts::PI.powi(2) / 6.0 + (1.0 - EULER).powi(2);
+        let i_sigma_numer =
+            std::f64::consts::PI.powi(2) / 6.0 + (1.0 - std::f64::consts::EULER_GAMMA).powi(2);
 
         // Guard each reciprocal rather than clamping μ or σ, so the value the chain
         // rule multiplies back in stays exactly the caller's parameter. Guard each
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate: both parameters default to a log link, under which
+        // Both parameters default to a log link, under which
         // `∂l/∂η` and the folded form agree by construction. `sqrt` and `inverse`
         // want a different `dμ/dη`, which this family no longer hardcodes.
         let y = array![1.0, 2.5, 5.0];

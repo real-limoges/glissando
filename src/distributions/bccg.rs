@@ -5,7 +5,7 @@
 //! approximate coefficient of variation `σ`, and the skewness `ν`. It is the engine
 //! behind LMS centile curves (growth charts); see `model.centiles`.
 //!
-//! I treat this file as the worked-example template for the Box-Cox family (DIST-1).
+//! I treat this file as the worked-example template for the Box-Cox family.
 //! BCT (Student-t tail) and BCPE (power-exponential kurtosis) extend the same spine,
 //! changing only the distribution `z` follows and the extra parameter column.
 
@@ -70,8 +70,8 @@ impl Distribution for BCCG {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
-        // Box-Cox z-score plus the natural-scale score/Fisher pairs. Full derivation
-        // in docs/math/mathematics.md [BCCG]. By the definition of z, T = (y/μ)^ν = 1+νσz,
+        // Box-Cox z-score plus the natural-scale score/Fisher pairs. By the definition
+        // of z, T = (y/μ)^ν = 1+νσz,
         // so the bracketed numerators collapse to the clean forms below.
         //   dl/dμ = [z/σ + ν(z²−1)] / μ
         //   dl/dσ = (z²−1) / σ
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. μ, σ (and τ) default to log, ν to identity, so
+        // μ, σ (and τ) default to log, ν to identity, so
         // only a non-default link can tell a natural-scale score from an η-scale
         // one. ν is held positive here so a log link is well defined on it; the
         // default-link test above covers the negative and near-zero branches.

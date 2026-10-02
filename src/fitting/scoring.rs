@@ -34,7 +34,7 @@ use std::collections::HashMap;
 /// Cap on the per-element Fisher-scoring step `u/w` (in η units). This is purely
 /// an anti-overflow guard for degenerate score/information combinations, NOT a
 /// robustness device. Overshoot control belongs to the deviance-guarded
-/// step-halving (FIT-1), and for what it's worth neither mgcv nor gamlss clips the
+/// step-halving, and for what it's worth neither mgcv nor gamlss clips the
 /// working response at all.
 ///
 /// The value has to thread between two failure modes. Too tight and it inverts the
@@ -58,7 +58,7 @@ const MAX_STEP: f64 = 1e6;
 /// path has.
 pub(super) const MAX_STEP_NO_HALVING: f64 = 20.0;
 
-/// Backtracking floor for step-halving (FIT-1): `2^-10`. Below this the damped
+/// Backtracking floor for step-halving: `2^-10`. Below this the damped
 /// step is accepted regardless so the loop always makes progress.
 pub(super) const MIN_STEP_ALPHA: f64 = 1.0 / 1024.0;
 
@@ -117,7 +117,7 @@ pub(super) struct Halved {
 }
 
 /// Backtrack a proposed block update on the PENALIZED global deviance, holding
-/// the other parameters fixed (FIT-1).
+/// the other parameters fixed.
 ///
 /// The Fisher-scoring direction `d_k = β_new − β_old` is an ascent direction for
 /// the **penalized** log-likelihood, i.e. a descent direction for
@@ -172,7 +172,7 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     let (mut alpha, mut hits) = (1.0_f64, 0usize);
     loop {
         let beta_a = &model.beta.0 + &(alpha * &dir);
-        let eta_a = x.dot(&beta_a) + &model.offset; // η = X·β + offset (DATA-3)
+        let eta_a = x.dot(&beta_a) + &model.offset; // η = X·β + offset
         let mu_a = eta_a.mapv(|e| link.inv_link(e));
         let gd_a = global_deviance_with(family, y, prior_weights, models, param, &mu_a)?;
         let delta_pen = 2.0 * alpha * pen_cross + alpha * alpha * pen_dir;
@@ -236,8 +236,8 @@ pub(super) fn step<D: Distribution + ?Sized>(
     // 2. Score and Fisher info for the target parameter, on the η scale.
     //    Materialize the link derivatives once per step from each parameter's
     //    resolved link and live η, so a family with a separable natural scale can
-    //    apply the chain rule generically rather than hardcoding its default link
-    //    (Altitude #1). Each pass is O(n) per parameter, so only the structural
+    //    apply the chain rule generically rather than hardcoding its default link.
+    //    Each pass is O(n) per parameter, so only the structural
     //    wrappers (the only readers of `mu_eta2`) pay for the second one.
     let entries = family.parameters().iter().map(|name| {
         let param = &models[*name];
@@ -311,7 +311,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
 
     // The solver fits X·β to z, so the fixed offset (which enters η but not β) gets
     // subtracted out here: the adjusted working response becomes (η + u/w) − offset
-    // = X·β_old + u/w. η is rebuilt as X·β_new + offset below (DATA-3). A no-op when
+    // = X·β_old + u/w. η is rebuilt as X·β_new + offset below. A no-op when
     // there is no offset, since the vector is all zeros.
     z -= &target.offset;
 

@@ -1,11 +1,10 @@
 // Golden characterization tables for `Distribution::theta_derivatives`.
 //
 // PURPOSE. These snapshots freeze the exact `(score, weight)` arrays every
-// family returns today, per parameter, at a fixed fixture. They're here to gate
-// the generic-link-chain-rule refactor (Altitude #1): that refactor hauls the
-// `dμ/dη` chain rule out of each family and into `fitting/scoring.rs`, and it
-// is *required* to leave the default-link numbers untouched. So any drift here
-// is a defect, not a snapshot to re-accept.
+// family returns, per parameter, at a fixed fixture. Families return natural-scale
+// pairs and `fitting/scoring.rs` applies the `dμ/dη` chain rule, so under
+// default links these numbers must not move. Any drift here is a defect, not a
+// snapshot to re-accept.
 //
 // WHY SNAPSHOTS RATHER THAN A FINITE-DIFFERENCE ORACLE. The score `u` already
 // has finite-difference coverage in each family's unit tests. The Fisher
@@ -109,8 +108,7 @@ impl DefaultLinks {
 ///
 /// Goes through the η-scale adapter rather than `theta_derivatives` because that is the
 /// method the Fisher-scoring step calls. Under default links the two agree by
-/// construction, so these snapshots keep their Phase 0 values while gaining the
-/// property that they pin the *seam* rather than one side of it.
+/// construction, so these snapshots pin the *seam* rather than one side of it.
 ///
 /// Iterates `family.parameters()` rather than the returned map's keys so a
 /// family that silently stops emitting a parameter fails loudly here.
@@ -355,16 +353,12 @@ fn golden_censored_all_statuses() {
     // Exercises all four `CensorStatus` arms in one table, including `Interval`,
     // which drives the `with_upper` path and the second-derivative difference.
     //
-    // This table was regenerated once, on purpose, in Altitude #1 Phase 3, and
-    // it is the only one of the 36 that budged across Phases 1-3. Two `sigma`
-    // weights read `1.0000000000e-6`, `MIN_WEIGHT` exactly, because `censored.rs`
-    // pre-floored them; they now read the unfloored observed information the
-    // wrapper actually computes: `-1.1406392216e-1` on the right-censored row
-    // (observed information is not a variance and is legitimately negative) and
+    // The `sigma` weights are the unfloored observed information the wrapper
+    // computes: `-1.1406392216e-1` on the right-censored row (observed
+    // information is not a variance and is legitimately negative) and
     // `0.0000000000e0` on the left-censored row, where z = 0 makes both `d1` and
-    // `d2` vanish identically. That is the Altitude #4 half of the work: the floor
-    // now happens once, in `scoring::step`, which is why all 20 fit snapshots were
-    // unaffected. Any *further* drift here is a defect, not a snapshot to accept.
+    // `d2` vanish identically. Flooring happens once, in `scoring::step`. Any drift
+    // here is a defect, not a snapshot to accept.
     let (y, owned) = wrapper_base_fixture();
     let status = Array1::from_vec(vec![
         CensorStatus::Event,

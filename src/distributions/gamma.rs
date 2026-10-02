@@ -61,7 +61,7 @@ impl Distribution for Gamma {
     ) -> DerivativesResult {
         // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
         // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
-        // Natural scale (Altitude #1):
+        // Natural scale:
         //   μ: ∂l/∂μ = (y−μ)/(μ²σ²),   i_μ = 1/(μ²σ²).
         //   σ: ∂l/∂σ = (2/σ³)·[ψ(α) + 2 log σ − log(y/μ) + y/μ − 1],
         //      i_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴.
@@ -176,7 +176,7 @@ impl Distribution for Gamma {
         // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ², so ∂x/∂μ = −x/μ
         // holds the shape α fixed and the shape-derivative that blocks σ never
         // appears. Writing `mass` for the γ-density factor xᵅ·e⁻ˣ/Γ(α), the
-        // natural-scale derivatives (Altitude #1) are:
+        // natural-scale derivatives are:
         //   ∂F/∂μ  = −mass/μ
         //   ∂²F/∂μ² = mass·(1 + α − x)/μ²
         // The caller chains to η. Under the default log link mu_eta = mu_eta2 = μ,
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. `inverse` on μ is the link behind the largest of the
+        // `inverse` on μ is the link behind the largest of the
         // four `link_mle_oracle` shortfalls (45.5 in fitted log-likelihood), so it is
         // the one this family most needs covered.
         let y = array![1.0, 2.5, 5.0];

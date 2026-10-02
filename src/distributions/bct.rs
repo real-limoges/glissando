@@ -75,9 +75,8 @@ impl Distribution for BCT {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The `t` robustifying weight
-        // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG). Full
-        // derivation in docs/math/mathematics.md [BCCG]. Natural-scale scores
-        // (Altitude #1); chain_to_eta reapplies the default links (log, log,
+        // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG).
+        // Natural-scale scores; chain_to_eta reapplies the default links (log, log,
         // identity, log) and recovers the old η-scale values exactly:
         //   dl/dμ = [w_t·z·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [w_t·z² − 1] / σ
@@ -308,7 +307,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. μ, σ (and τ) default to log, ν to identity, so
+        // μ, σ (and τ) default to log, ν to identity, so
         // only a non-default link can tell a natural-scale score from an η-scale
         // one. ν is held positive here so a log link is well defined on it; the
         // default-link test above covers the negative and near-zero branches.

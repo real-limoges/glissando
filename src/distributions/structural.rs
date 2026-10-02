@@ -113,7 +113,7 @@ pub(crate) use delegate_to_base;
 /// `(∂F/∂η, ∂²F/∂η²)` at the points `at`, for every parameter of `base`.
 ///
 /// Two paths, both landing on the η scale of the link the *fit* resolved, which
-/// `ctx` carries, not the family's default link (Altitude #1):
+/// `ctx` carries, not the family's default link:
 ///
 /// - Analytic, for the parameters [`Distribution::cdf_theta_derivatives`]
 ///   supplies. Those come back on the natural scale θ and are chained here by
@@ -155,7 +155,7 @@ pub(crate) fn cdf_eta_grads(
 /// **Both the link and η come from `ctx`, and the perturbation stays on η.**
 ///
 /// Reading the link from `ctx` rather than `base.default_link` is what makes this
-/// path honor a link override (Altitude #1). Taking η from `ctx` too, rather than
+/// path honor a link override. Taking η from `ctx` too, rather than
 /// recovering it as `link.link(θ)`, matters wherever that round trip is not the
 /// identity: [`SqrtLink`](super::links::SqrtLink) maps η < 0 to a positive μ and
 /// recovers `|η|`, and [`InverseSquareLink`](super::links::InverseSquareLink) is

@@ -41,10 +41,9 @@ impl Distribution for Gaussian {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
-        // Natural scale (Altitude #1; no link folded in):
+        // Natural scale (no link folded in):
         //   μ:  ∂l/∂μ = (y−μ)/σ²,               i_μ = 1/σ².
         //   σ:  ∂l/∂σ = ((y−μ)² − σ²)/σ³,       i_σ = 2/σ².
-        // Full derivation in docs/math/mathematics.md.
         //
         // `chain_to_eta` recovers the classic η-scale pairs under the default
         // links. μ is identity (`mu_eta = 1`, so its entries pass through
@@ -113,7 +112,7 @@ impl Distribution for Gaussian {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> super::CdfThetaResult {
-        // Natural-scale (Altitude #1) location-scale derivatives of F = Φ(z),
+        // Natural-scale location-scale derivatives of F = Φ(z),
         // z = (y−μ)/σ, std-normal pdf φ, φ'(z) = −z·φ(z). ∂z/∂μ = −1/σ and
         // ∂z/∂σ = −z/σ, so:
         //   μ:  ∂F/∂μ = −φ/σ,    ∂²F/∂μ² = φ'/σ² = −zφ/σ².
@@ -172,7 +171,7 @@ impl Distribution for Gaussian {
     ) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
-        // Q(p) = μ + σ·Φ⁻¹(p); Φ⁻¹ is shared with the quantile residuals (INFER-1).
+        // Q(p) = μ + σ·Φ⁻¹(p); Φ⁻¹ is shared with the quantile residuals.
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
             mui + si * std_normal_quantile(pi)
         }))
@@ -251,11 +250,9 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. Gaussian μ is identity-linked, so a default-link
+        // Gaussian μ is identity-linked, so a default-link
         // finite difference can't tell `∂l/∂μ` from `∂l/∂η` at all. A log link on μ
-        // is what makes the check bite. This replaces
-        // `identity_link_parameters_are_only_checked_vacuously_today`, the Phase 0
-        // characterization test that asserted the opposite.
+        // is what makes the check bite.
         //
         // μ stays positive throughout the fixture so the log and sqrt links are
         // well defined on it.

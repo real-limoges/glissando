@@ -1,4 +1,4 @@
-//! STRUCT-1 integration tests. Here I want a `Censored` wrapper to fit end-to-end
+//! Censored integration tests. Here I want a `Censored` wrapper to fit end-to-end
 //! through the standard RS loop, recover known parameters under right-censoring, and
 //! collapse back to the base family when every row is an event.
 

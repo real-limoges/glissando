@@ -314,7 +314,7 @@ fn factor_columns(
 
 /// Design columns for a single term used as an operand of an `Interaction`
 /// (`Intercept`, `Linear`, `Factor`, or a nested `Interaction`). Smooth and offset
-/// operands are rejected: smooth-by-factor interactions are SMOOTH-3 territory, and
+/// operands are rejected: smooth-by-factor interactions are not supported, and
 /// an offset has no design column to multiply in the first place.
 fn term_columns(data: &DataSet, n_obs: usize, term: &Term) -> Result<Array2<f64>, GamlssError> {
     match term {
@@ -332,8 +332,8 @@ fn term_columns(data: &DataSet, n_obs: usize, term: &Term) -> Result<Array2<f64>
             Ok(row_kronecker_block(&lc, &rc, n_obs))
         }
         Term::Smooth(_) => Err(GamlssError::Input(
-            "smooth terms cannot appear inside an interaction (see SMOOTH-3, \
-             by-factor smooths)"
+            "smooth terms cannot appear inside an interaction (by-factor smooths are \
+             not supported)"
                 .to_string(),
         )),
         Term::Offset { .. } => Err(GamlssError::Input(
@@ -838,7 +838,7 @@ mod tests {
     }
 
     /// A smooth operand inside an interaction is rejected with a clear message
-    /// (smooth-by-factor is SMOOTH-3, out of scope here).
+    /// (smooth-by-factor is not supported).
     #[test]
     fn interaction_rejects_smooth_operand() {
         let mut data = DataSet::new();

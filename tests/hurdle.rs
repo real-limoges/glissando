@@ -1,4 +1,4 @@
-//! STRUCT-3 integration tests. What I want here is for a `Hurdle` wrapper to fit
+//! Hurdle integration tests. What I want here is for a `Hurdle` wrapper to fit
 //! end-to-end and recover both the zero-atom probability and the positive-part
 //! parameters. If either half drifts, the wrapper isn't doing its job.
 
