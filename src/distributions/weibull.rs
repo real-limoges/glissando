@@ -61,8 +61,8 @@ impl Distribution for Weibull {
         let mu = require(self, params, "mu")?;
         let sigma = require(self, params, "sigma")?;
 
-        const EULER: f64 = 0.577_215_664_901_532_9;
-        let i_sigma_numer = std::f64::consts::PI.powi(2) / 6.0 + (1.0 - EULER).powi(2);
+        let i_sigma_numer =
+            std::f64::consts::PI.powi(2) / 6.0 + (1.0 - std::f64::consts::EULER_GAMMA).powi(2);
 
         // Guard each reciprocal rather than clamping μ or σ, so the value the chain
         // rule multiplies back in stays exactly the caller's parameter. Guard each
