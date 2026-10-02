@@ -198,7 +198,7 @@ impl GamlssModel {
         family: &D,
         config: FitConfig,
     ) -> Result<Self, GamlssError> {
-        // DATA-4: under `NaAction::DropRows` (the default) we drop any row missing a
+        // Under `NaAction::DropRows` (the default) we drop any row missing a
         // value in `y` or a referenced column here, before validation and assembly,
         // so the design, working response, and weights all wind up on one shared row
         // mask. `NaAction::Fail` skips the drop entirely and lets `validate_inputs`
@@ -292,7 +292,7 @@ impl GamlssModel {
 
     /// Serializes the model to JSON, and tucks a
     /// [`FamilyDescriptor`](crate::distributions::FamilyDescriptor) in alongside
-    /// it so the family can be rebuilt on load (SER-1). That descriptor is what lets
+    /// it so the family can be rebuilt on load. That descriptor is what lets
     /// stateful families and the structural wrappers come back intact, not just the
     /// simple named ones.
     ///
@@ -380,7 +380,7 @@ impl GamlssModel {
                 design.x.0.ncols(),
                 fitted_param.coefficients.0.len(),
             )?;
-            // η = X·β + offset (DATA-3). The offset is all zeros unless the formula
+            // η = X·β + offset. The offset is all zeros unless the formula
             // carries a Term::Offset; when it does, `new_data` has to supply its column.
             let eta = design.x.0.dot(&fitted_param.coefficients.0) + &design.offset;
             let link = resolve_link(family, param_name, fitted_param)?;
@@ -420,7 +420,7 @@ impl GamlssModel {
                 fitted_param.coefficients.0.len(),
             )?;
             // η = X·β + offset. The offset is just a fixed shift, so it leaves the
-            // SEs alone; those ride only on the random β (DATA-3).
+            // SEs alone; those ride only on the random β.
             let eta = x_matrix.0.dot(&fitted_param.coefficients.0) + &design.offset;
 
             let v = &fitted_param.covariance.0;

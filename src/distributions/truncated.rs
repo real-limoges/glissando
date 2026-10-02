@@ -1,4 +1,4 @@
-//! Truncated responses (STRUCT-2): a wrapper distribution observed only within
+//! Truncated responses: a wrapper distribution observed only within
 //! per-observation bounds `(lo, hi)`.
 //!
 //! Unlike censoring, out-of-range values are *absent*, not recorded, so the
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_a_non_default_link() {
-        // Altitude #1 Phase 3 acceptance gate: the normalizer's `D'/D` term has to
+        // The normalizer's `D'/D` term has to
         // be built from the link the fit resolved, not from Gaussian's default.
         // `inverse` puts η = 1/σ, so a positive σ stays in the link's domain; μ
         // stays on identity because this fixture allows μ ≤ 0 under perturbation.
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
-        // Altitude #1 Phase 3, gate (d). Covers a degenerate normalizer (bounds so
+        // Covers a degenerate normalizer (bounds so
         // far out that `F(hi) − F(lo)` saturates and `PROB_EPS` binds), the ±∞
         // short-circuit in `cdf_and_grads_at`, and a σ at both ends of the log
         // link's reach. Finiteness only: these weights are observed information and

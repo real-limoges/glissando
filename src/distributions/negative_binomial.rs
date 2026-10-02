@@ -69,7 +69,7 @@ impl Distribution for NegativeBinomial {
         // NB2 log-likelihood:
         //   l = log Γ(y + 1/σ) − log Γ(1/σ) − log y!
         //       + (1/σ)·log(1/(1+σμ)) + y·log(σμ/(1+σμ)).
-        // Natural scale (Altitude #1):
+        // Natural scale:
         //   μ: ∂l/∂μ = (y−μ)/(μ(1+σμ)),   i_μ = 1/(μ(1+σμ)).
         // Under the default log link `mu_eta = μ`, so `chain_to_eta` recovers the
         // previous `u_μ = (y−μ)/(1+σμ)` and `w_μ = μ/(1+σμ)`. Weights are returned
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. Both parameters default to log, so a non-log link
+        // Both parameters default to log, so a non-log link
         // is the only thing that can tell a natural-scale score from an η-scale one.
         let y = array![0.0, 4.0, 10.0];
         let owned = [

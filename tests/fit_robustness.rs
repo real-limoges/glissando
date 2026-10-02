@@ -1,6 +1,6 @@
 // Behavioral tests for the RS-loop robustness fixes:
-//   FIT-1: step-halving / line-search on the global deviance (monotone descent)
-//   FIT-2: global-deviance outer convergence
+//   step-halving / line-search on the global deviance (monotone descent)
+//   global-deviance outer convergence
 //
 // The headline guarantees are monotone descent on a stress case and an
 // unchanged solution on well-behaved data; both are checked here against the
@@ -141,7 +141,7 @@ fn step_halving_default_converges_on_heavy_tailed_data() {
 
 #[test]
 fn final_deviance_matches_minus_two_loglik() {
-    // FIT-2's reported deviance is exactly −2·loglik of the converged fit, tying
+    // The reported final deviance is exactly −2·loglik of the converged fit, tying
     // the in-loop helper to the public diagnostics path.
     let (y, data) = heavy_tailed_stress();
     let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
@@ -162,7 +162,7 @@ fn final_deviance_matches_minus_two_loglik() {
 #[test]
 fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
     // On well-conditioned Gaussian data no halving is needed, so toggling the
-    // flag must not move the converged solution (parity guard for FIT-1).
+    // flag must not move the converged solution (parity guard for step-halving).
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(200, 1.0, 2.0, 0.5);
     let formula = linear_intercepts("x", &["mu", "sigma"]);

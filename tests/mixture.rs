@@ -1,4 +1,4 @@
-//! STRUCT-4 integration tests. Finite mixtures fit by EM should recover a known
+//! Mixture integration tests. Finite mixtures fit by EM should recover a known
 //! two-component structure and beat a single-component fit. If they don't, EM isn't earning its keep.
 
 #![cfg(not(feature = "python"))]

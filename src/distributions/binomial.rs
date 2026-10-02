@@ -63,7 +63,7 @@ impl Distribution for Binomial {
         params: &HashMap<&str, &Array1<f64>>,
     ) -> DerivativesResult {
         // Binomial log-likelihood: l = y·log(μ) + (n−y)·log(1−μ) + log C(n, y).
-        // Natural scale (Altitude #1):
+        // Natural scale:
         //   ∂l/∂μ = (y − n·μ) / (μ(1−μ)),   i_μ = n / (μ(1−μ)).
         // Under the default logit link `mu_eta = μ(1−μ)`, so `chain_to_eta` recovers
         // the classic `u_η = y − n·μ` and `w_η = n·μ(1−μ)`. Returned unfloored.
@@ -303,12 +303,9 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. μ folded the *logit* chain rule into `u = y − n·μ`,
-        // so under probit the score came out wrong by a factor of `φ(η)/(μ(1−μ))`.
+        // A score with the *logit* chain rule folded in (`u = y − n·μ`) is wrong
+        // under probit by a factor of `φ(η)/(μ(1−μ))`.
         // These are the links behind two of the four `link_mle_oracle` shortfalls.
-        //
-        // This replaces `binomial_score_is_wrong_under_a_probit_link_today`, the
-        // Phase 0 characterization test that asserted the opposite.
         let bin = Binomial::new(10);
         let y = array![0.0, 3.0, 5.0, 8.0, 10.0];
         let owned = [("mu", array![0.15, 0.35, 0.5, 0.8, 0.93])];

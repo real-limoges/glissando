@@ -17,11 +17,7 @@
 // magic numbers would be unverifiable and frozen to one fixture, and a live
 // optimizer is reproducible, extends to any family/link pair, and runs in CI.
 //
-// Current status (Altitude #1). Every case below passes, default link and
-// overridden alike. These four were the acceptance gate for the
-// generic-chain-rule refactor and ran `#[ignore]`d while it was outstanding.
-// That refactor has landed, so they are unignored and gate CI like anything
-// else. A family now returns its score on the natural parameter scale from
+// Every case below passes, default link and overridden alike. A family returns its score on the natural parameter scale from
 // `Distribution::theta_derivatives`, and `distributions::chain_to_eta` applies
 // whichever link `fitting::validate_link_overrides` resolved, so an override
 // hands IRLS the right `dμ/dη`.

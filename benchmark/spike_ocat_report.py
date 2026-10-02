@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Phase 0 ocat spike report, Guide 3 §2.
+Ocat spike report.
 
 Orchestrates the full spike and prints a comparison table:
   - Candidate A (3 independent Binomial/logit threshold models) vs mgcv ocat(R=4)
-  - Both vs the true DGP probabilities (to contextualise the approximation gap)
+  - Both vs the true DGP probabilities (to contextualize the approximation gap)
 
 Steps:
   1. Generate train/test parquets via gen_ocat_spike.py
@@ -89,7 +89,7 @@ def main() -> None:
 
     # ── 1. Generate data ──────────────────────────────────────────────────────
     print("╔══════════════════════════════════════════════════════════╗")
-    print("║       Guide 3: Phase 0 ocat spike                       ║")
+    print("║       Ocat spike                                         ║")
     print("╚══════════════════════════════════════════════════════════╝")
 
     run(
@@ -196,10 +196,10 @@ def main() -> None:
     print(f"  Argmax agreement vs true: {argmax_agreement(mgcv_probs, true_probs):.1%}")
 
     print(f"\n{'═'*60}")
-    print("  DECISION GATE (Guide 3 §2)")
+    print("  DECISION GATE")
     print("  Review the 'Candidate A vs mgcv' block above.")
-    print("  Pass → adopt Candidate A for B3; close guides 3 / 4 / 5.")
-    print("  Fail → proceed to Phase 1 (full ocat family; Guide 3 §3–§7).")
+    print("  Pass → independent binomial thresholds are an adequate approximation.")
+    print("  Fail → a dedicated ocat family is needed.")
     print(f"{'═'*60}\n")
 
 

@@ -42,7 +42,7 @@ impl Formula {
         self.0.insert(param.into(), terms);
     }
 
-    /// Build a single-parameter formula from an R/mgcv-style string (DATA-5).
+    /// Build a single-parameter formula from an R/mgcv-style string.
     ///
     /// The response on the left of `~` is parsed and then thrown away (glissando
     /// takes the response array separately at fit time), so `"y ~ s(x) + z"` and

@@ -97,7 +97,7 @@ where
 ///
 /// `p` is clamped to `[1e-12, 1−1e-12]` so the tails stay finite instead of
 /// blowing up to `±∞`. Both [`Gaussian::quantile`](crate::distributions::Gaussian)
-/// and the randomized quantile residuals (INFER-1) call this, so there is exactly
+/// and the randomized quantile residuals call this, so there is exactly
 /// one definition to keep honest.
 #[inline]
 pub(crate) fn std_normal_quantile(p: f64) -> f64 {

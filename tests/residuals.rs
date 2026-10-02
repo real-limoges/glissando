@@ -1,7 +1,7 @@
 // Integration tests can't run under the `python` feature; PyO3's extension-module linking gets in the way.
 #![cfg(not(feature = "python"))]
 
-//! INFER-1: randomized normalized quantile residuals.
+//! Randomized normalized quantile residuals.
 
 mod common;
 

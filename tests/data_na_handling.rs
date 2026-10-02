@@ -1,4 +1,4 @@
-//! DATA-4 missing-data handling, public-API integration tests.
+//! Missing-data handling, public-API integration tests.
 //!
 //! `NaAction::DropRows` (the default) drops any row with a non-finite value in
 //! the response or a referenced column, à la R's `na.omit`. The fit it produces

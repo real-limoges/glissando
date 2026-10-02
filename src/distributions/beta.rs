@@ -80,8 +80,8 @@ impl Distribution for Beta {
         let psi_prime_beta = trigamma_batch(&beta_param);
         let psi_prime_phi = trigamma_batch(&phi_floored);
 
-        // Natural scale (Altitude #1). This family was already separable, so the
-        // conversion is just deleting the two trailing chain-rule multiplies.
+        // Natural scale. This family is separable, so there are no chain-rule
+        // multiplies here.
         // `chain_to_eta` reapplies them from the resolved link (`mu_eta = μ(1−μ)`
         // for logit, `φ` for log) and reproduces the old η-scale values under the
         // defaults. Weights come back unfloored.
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. μ lives on (0,1), so probit and cloglog are the
+        // μ lives on (0,1), so probit and cloglog are the
         // meaningful overrides; φ is positive, so sqrt is.
         let y = array![0.2, 0.5, 0.85];
         let owned = [
@@ -269,8 +269,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Beta was already separable, so no new division appears here; the gate
-        // still runs so the family is covered uniformly with the rest of Phase 2b.
+        // Beta is separable, so no new division appears here; the test still runs
+        // so every family is covered uniformly.
         let y = array![0.01, 0.5, 0.99];
         let owned = [
             ("mu", array![0.0, 1.0, 1e-12]),

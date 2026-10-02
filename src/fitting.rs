@@ -37,7 +37,7 @@ use std::collections::HashMap;
 
 const DEFAULT_MAX_ITER: usize = 200;
 const DEFAULT_TOLERANCE: f64 = 1e-3;
-/// Default absolute tolerance on the global-deviance change (FIT-2).
+/// Default absolute tolerance on the global-deviance change.
 const DEFAULT_GD_TOLERANCE: f64 = 1e-3;
 
 /// How close a smooth term's EDF has to sit to its penalty null-space dimension
@@ -87,7 +87,7 @@ impl SmoothingCriterion {
 }
 
 /// What the fitter does with a row that carries a missing (non-finite) value in
-/// the response or any formula-referenced column (DATA-4).
+/// the response or any formula-referenced column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -118,12 +118,12 @@ pub struct FitConfig {
     #[cfg_attr(feature = "serde", serde(default))]
     pub criterion: SmoothingCriterion,
     /// Whether to step-halve (line-search on the global deviance) each accepted
-    /// Fisher-scoring update so every cycle is a monotone descent (FIT-1).
+    /// Fisher-scoring update so every cycle is a monotone descent.
     /// On by default, matching R `gamlss`'s RS loop. Turn it off and you get the
     /// raw, unguarded full step back, which is faster right up until it isn't.
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub step_halving: bool,
-    /// Absolute tolerance on the global-deviance change between cycles (FIT-2),
+    /// Absolute tolerance on the global-deviance change between cycles,
     /// in deviance units: the same convention as R gamlss's `c.crit`.
     /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
     /// Default: 1e-3.
@@ -236,12 +236,12 @@ pub struct FitDiagnostics {
     /// so JSON/FFI consumers can surface fit health.
     #[cfg_attr(feature = "serde", serde(default))]
     pub warnings: Vec<String>,
-    /// Global deviance `−2·ℓ̂` at the final cycle (FIT-2). `None` only if no
+    /// Global deviance `−2·ℓ̂` at the final cycle. `None` only if no
     /// cycle ran (e.g. `max_iterations == 0`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance: Option<f64>,
     /// Absolute global-deviance change at the final cycle,
-    /// `|GD_{c−1} − GD_c|` (FIT-2; same units as gamlss's `c.crit`). `None` on
+    /// `|GD_{c−1} − GD_c|` (same units as gamlss's `c.crit`). `None` on
     /// the first cycle (no previous deviance) or if no cycle ran.
     #[cfg_attr(feature = "serde", serde(default))]
     pub final_deviance_change: Option<f64>,
@@ -259,7 +259,7 @@ pub struct ParamDiagnostic {
     /// Non-zero means IRLS steps were damped; persistent at convergence indicates trouble.
     pub step_cap_hits: usize,
     /// Number of global-deviance step-halvings applied to this parameter on the
-    /// final cycle (FIT-1). Zero when the full Fisher step was accepted as-is or
+    /// final cycle. Zero when the full Fisher step was accepted as-is or
     /// when `step_halving` is disabled.
     #[cfg_attr(feature = "serde", serde(default))]
     pub step_halving_hits: usize,
@@ -310,8 +310,8 @@ pub(super) struct FittingParameter {
     /// Cached link⁻¹(η), kept in lockstep with `eta` to avoid K length-n
     /// `inv_link` passes per Fisher-scoring step.
     pub(super) mu: Array1<f64>,
-    /// Fixed per-row offset entering the linear predictor as `η = X·β + offset`
-    /// (DATA-3). All-zeros unless the parameter's formula carries a
+    /// Fixed per-row offset entering the linear predictor as `η = X·β + offset`.
+    /// All-zeros unless the parameter's formula carries a
     /// [`Term::Offset`](crate::Term::Offset). The PWLS solver stays offset-unaware:
     /// the working response it sees is `z − offset`, and `η` is reconstructed as
     /// `X·β + offset` afterwards.
@@ -326,8 +326,8 @@ pub(super) struct FittingParameter {
 /// `GD(θ) = −2·Σᵢ wᵢ·log f(yᵢ | θᵢ)`.
 ///
 /// This is the objective the Rigby–Stasinopoulos loop is quietly minimizing the
-/// whole time, and it does double duty: step-halving (FIT-1) and the
-/// global-deviance convergence test (FIT-2) both read it. Each
+/// whole time, and it does double duty: step-halving and the
+/// global-deviance convergence test both read it. Each
 /// `FittingParameter.mu` already carries the response-scale parameter, so there
 /// is nothing clever to do here; assemble the params view and hand it to the
 /// family's pointwise log-density.
@@ -472,7 +472,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // η = link(initial μ). `beta[0]` is the intercept only when the leading
         // term is `Term::Intercept`; for a smooth-only or leading-Linear formula
         // we just leave β = 0 and η = X·β and let IRLS walk it from there. The
-        // fixed `offset` is always added on top: η = X·β + offset (DATA-3).
+        // fixed `offset` is always added on top: η = X·β + offset.
         let mut beta = Coefficients(Array1::zeros(total_coeffs));
         let intercept_leads = matches!(terms.first(), Some(Term::Intercept));
         let eta = if intercept_leads && total_coeffs > 0 {
@@ -518,7 +518,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut final_change = f64::MAX;
     let mut param_diagnostics: IndexMap<String, ParamDiagnostic> = IndexMap::new();
 
-    // FIT-2: track the global deviance across cycles so I can judge convergence on
+    // Track the global deviance across cycles so I can judge convergence on
     // actual objective improvement, not just coefficients wiggling around.
     let mut gd_prev = f64::INFINITY;
     let mut final_deviance: Option<f64> = None;
@@ -542,7 +542,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 max_diff = update.max_diff;
             }
 
-            // FIT-1: backtrack the proposed block update on the global deviance so
+            // Backtrack the proposed block update on the global deviance so
             // the accepted step can never raise it (monotone descent). The full
             // step is just the α = 1 case, so a well-behaved fit pays no halvings
             // at all; you only pay when the step was going to overshoot.
@@ -660,7 +660,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
         }
 
-        // FIT-2: global-deviance change after the full sweep. I want *both* the Δβ
+        // Global-deviance change after the full sweep. I want *both* the Δβ
         // test and the GD test to agree before I call it converged.
         //
         // Measured in ABSOLUTE deviance units, matching R gamlss's `c.crit`
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(c.tolerance, 1e-3);
         assert_eq!(c.criterion, SmoothingCriterion::Reml);
         assert_eq!(SmoothingCriterion::default(), SmoothingCriterion::Reml);
-        // FIT-1/FIT-2 defaults: step-halving on, GD tolerance 1e-3.
+        // Defaults: step-halving on, GD tolerance 1e-3.
         assert!(c.step_halving);
         assert_eq!(c.gd_tolerance, 1e-3);
     }

@@ -77,7 +77,7 @@ impl PyOcat {
     }
 }
 
-/// Censored responses (STRUCT-1): wraps `base` with a per-row censoring `status`.
+/// Censored responses: wraps `base` with a per-row censoring `status`.
 ///
 /// `status` entries are `"event"`, `"left"`, `"right"`, or `"interval"`, and case
 /// doesn't matter. `upper` holds the interval upper bounds; it's only looked at on
@@ -121,7 +121,7 @@ impl PyCensored {
     }
 }
 
-/// Truncated responses (STRUCT-2): pins `base` inside the per-row open interval
+/// Truncated responses: pins `base` inside the per-row open interval
 /// `(lower, upper)`. Want one side unbounded? Pass `float("-inf")` or
 /// `float("inf")` for it.
 #[pyclass(name = "Truncated", frozen)]
@@ -149,7 +149,7 @@ impl PyTruncated {
     }
 }
 
-/// Hurdle / two-part models (STRUCT-3): bolts a logit-linked zero atom on top of
+/// Hurdle / two-part models: bolts a logit-linked zero atom on top of
 /// a zero-truncated `base`. One part decides zero-or-not, the other models the
 /// positive side.
 #[pyclass(name = "Hurdle", frozen)]
@@ -200,7 +200,7 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
     for (param, terms) in py_dict.iter() {
         let param_name: String = param.extract()?;
-        // DATA-5: a parameter's value can be an R/mgcv-style **formula string**
+        // A parameter's value can be an R/mgcv-style **formula string**
         // (`"y ~ s(x) + factor(g)"`), which is the nice ergonomic form, or the
         // structured list of term tuples. If it extracts as a `str` we take that
         // path; anything else, we treat as a term list.
@@ -446,6 +446,8 @@ impl PyGamlssModel {
     ///         `criterion` ("reml", "gcv", or "fellner_schall"; default "reml")
     ///         `step_halving` (bool; default True): monotone-descent line search
     ///         `gd_tolerance` (float; default 1e-3): global-deviance convergence tol
+    ///         `links` (dict): `{param: link_name}`, e.g. `{"mu": "probit"}`
+    ///         `na_action` ("drop_rows" or "fail"; default "drop_rows")
     #[staticmethod]
     #[pyo3(signature = (data, y, formula, family, config, weights=None))]
     fn fit_with_config(

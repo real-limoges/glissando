@@ -6,7 +6,7 @@
     not(target_arch = "wasm32")
 ))]
 
-//! Property-based coverage (TEST-1) of the `glissando::json` embedding facade.
+//! Property-based coverage of the `glissando::json` embedding facade.
 //!
 //! Two families of property. First, *totality*: every string-in parse entry point
 //! returns `Ok`/`Err` on arbitrary input, never panicking, so an embedder can throw

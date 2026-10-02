@@ -39,7 +39,7 @@ fn fit_with_config_json() {
 
 #[test]
 fn config_json_defaults_step_halving_and_gd_tolerance() {
-    // Leave the FIT-1/FIT-2 keys out and serde falls back to the documented defaults.
+    // Leave the step-halving and GD-tolerance keys out and serde falls back to the documented defaults.
     let parsed = json::parse_config("{}").expect("parse empty config");
     assert!(parsed.step_halving, "step_halving should default to true");
     assert_eq!(parsed.gd_tolerance, 1e-3);
@@ -61,7 +61,7 @@ fn diagnostics_json_exposes_final_deviance() {
     let (model, _family) = json::fit(Y, DATA, FORMULA, "Gaussian", None, None).expect("fit");
     let diag_json = json::diagnostics(&model).expect("diagnostics");
     let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap();
-    // FIT-2 surfaces the converged global deviance through the JSON facade. Check it's there.
+    // The converged global deviance surfaces through the JSON facade. Check it's there.
     assert!(diag["final_deviance"].is_number());
 }
 
@@ -108,7 +108,7 @@ fn errors_surface_as_gamlss_error() {
 }
 
 // ============================================================================
-// Guide 1: design_matrix / covariance_matrix / term_index_map / seed
+// design_matrix / covariance_matrix / term_index_map / seed
 // ============================================================================
 
 #[test]
@@ -185,7 +185,7 @@ fn predict_samples_seeded_json_is_reproducible() {
     assert_ne!(run1, run_unseeded, "unseeded run should differ from seeded");
 }
 
-// --- Model selection & comparison facade (INFER-3 / INFER-7 / INFER-4) ---
+// --- Model selection & comparison facade ---
 
 const INTERCEPT_ONLY: &str = r#"{
     "mu":    [{"Intercept": null}],
@@ -281,7 +281,7 @@ fn step_gaic_json_returns_trace_and_loadable_model() {
     assert_eq!(parsed["mu"].len(), 1);
 }
 
-// --- INFER-1 / INFER-2 facade (quantile residuals, centiles) ---
+// --- Quantile residuals and centiles facade ---
 
 #[test]
 fn quantile_residuals_json_round_trip() {

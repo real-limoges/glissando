@@ -1,6 +1,6 @@
 name: Fuzz
 
-# TEST-2: coverage-guided fuzzing of the two untrusted string seams, the formula
+# Coverage-guided fuzzing of the two untrusted string seams, the formula
 # parser and the JSON embedding facade. A crash (panic, OOM, timeout) fails the job.
 #
 # Per-PR runs are a short smoke test; the nightly cron runs each target much longer

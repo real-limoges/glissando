@@ -1,4 +1,4 @@
-//! Box-Cox–Cole-Green (BCCG) family: public-API integration tests (DIST-1).
+//! Box-Cox–Cole-Green (BCCG) family: public-API integration tests.
 //!
 //! Covers: coefficient recovery from simulated data; the chosen distribution
 //! reduces to the right textbook law at the ν special cases (an *independent*

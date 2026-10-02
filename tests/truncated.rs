@@ -1,4 +1,4 @@
-//! STRUCT-2 integration tests. I want a `Truncated` wrapper to fit end-to-end,
+//! Truncated integration tests. I want a `Truncated` wrapper to fit end-to-end,
 //! recover the parameters of a left-truncated Gaussian, and collapse back to the
 //! base family once the range is unbounded.
 

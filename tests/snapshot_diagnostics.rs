@@ -1,4 +1,4 @@
-// Characterization snapshots (TEST-4) for the diagnostics surface: `ModelDiagnostics`
+// Characterization snapshots for the diagnostics surface: `ModelDiagnostics`
 // (AIC/BIC/EDF/loglik) and the deterministic residual kinds, plus centiles. Like
 // `tests/regression.rs`, these are frozen behavior, not expectations: a diff means
 // the fit or a diagnostic moved, so investigate before re-accepting. Floats are

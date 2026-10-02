@@ -102,8 +102,7 @@ impl Distribution for StudentT {
     /// floor, so the generic rule would force the freeze branch unconditionally,
     /// which is wrong in exactly the lift-off case the projection exists to handle.
     ///
-    /// Consequently `allows_link_override("nu")` is false; see the
-    /// `[CHAIN-GENERIC]` section of `docs/math/mathematics.md`.
+    /// Consequently `allows_link_override("nu")` is false.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
@@ -197,7 +196,7 @@ impl Distribution for StudentT {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
     ) -> super::CdfThetaResult {
-        // Natural-scale (Altitude #1) location-scale derivatives of F = T_ν(z),
+        // Natural-scale location-scale derivatives of F = T_ν(z),
         // z = (y−μ)/σ, with standardized t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²).
         // ∂z/∂μ = −1/σ and ∂z/∂σ = −z/σ, so:
         //   μ:  ∂F/∂μ = −g/σ,    ∂²F/∂μ² = g'/σ².
@@ -311,9 +310,9 @@ impl Standardized {
 
         // Guard each reciprocal at the power it is used at, rather than clamping σ:
         // raising an already-guarded reciprocal to a power would overflow to infinity
-        // for a σ the log link can still underflow to, and `inf · 0` is NaN. μ's
-        // score and weight divided by a raw σ before Phase 2b; guarding them here
-        // costs nothing and keeps the whole family finite at a saturated σ.
+        // for a σ the log link can still underflow to, and `inf · 0` is NaN.
+        // Guarding μ's score and weight too keeps the whole family finite at a
+        // saturated σ.
         let inv_sigma = sigma.mapv(|s| 1.0 / s.max(DENOM_FLOOR));
         let inv_sigma_sq = sigma.mapv(|s| 1.0 / (s * s).max(DENOM_FLOOR));
 
@@ -334,8 +333,7 @@ impl Standardized {
 impl StudentT {
     /// Natural-scale score and expected information for μ and σ.
     ///
-    /// Student-t log-likelihood, location-scale parameterization. Full derivation
-    /// in docs/math/mathematics.md.
+    /// Student-t log-likelihood, location-scale parameterization.
     fn mu_sigma_derivatives(
         &self,
         s: &Standardized,
@@ -370,9 +368,8 @@ impl StudentT {
     /// The η-scale `(u_ν, w_ν)` pair, deliberately outside the generic chain rule.
     ///
     /// See [`Distribution::eta_derivatives`] on this type for why ν has no
-    /// separable natural scale. Nothing here changed in Phase 2b beyond being
-    /// lifted out of `theta_derivatives` and having its `MIN_WEIGHT` floor removed, so
-    /// that `scoring::step` stays the single place any weight is floored.
+    /// separable natural scale. It has no `MIN_WEIGHT` floor: `scoring::step` is the
+    /// single place any weight is floored.
     fn nu_eta_derivatives(
         &self,
         s: &Standardized,
@@ -573,8 +570,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate, for the two parameters that went through the generic
-        // chain rule. μ is identity-linked, so the default-link check above is
+        // Covers the two parameters that go through the generic chain rule. μ is identity-linked, so the default-link check above is
         // vacuous for it; a log link is what makes it bite (μ is positive here so
         // the link is well defined).
         //
@@ -648,8 +644,7 @@ mod tests {
             // Spans well past `exp(MIN_ETA) ≈ 9.4e-14`, the smallest σ a log link
             // reaches inside its own η clamp. σ = 0 exactly is excluded: there
             // `z = (y−μ)/σ` overflows and `z²` becomes infinite, so `w_robust · z²`
-            // is `0 · ∞ = NaN`. That predates Altitude #1 (the old `z` overflowed
-            // identically) and is a separate fix.
+            // is `0 · ∞ = NaN`, a separate fragility.
             ("sigma", array![1e-100, 1e-13, 1e-8]),
             ("nu", array![5.0, 8.0, 4.0]),
         ];
@@ -710,9 +705,8 @@ mod tests {
     fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
         // Same exposure as Gaussian's: un-folding σ introduced a `1/σ` and a `1/σ²`
         // the η-scale forms did not have. ν is swept alongside σ because `g` and
-        // `g'` both carry it. σ = 0 exactly is excluded here for the reason Phase 2b
-        // recorded: `z = (y−μ)/σ` overflows there and `w_robust · z²` is a `0 · ∞`
-        // NaN, a fragility that predates this work and is unchanged by it.
+        // `g'` both carry it. σ = 0 exactly is excluded:
+        // `z = (y−μ)/σ` overflows there and `w_robust · z²` is a `0 · ∞` NaN.
         let y = array![0.0, 1.0, 2.0, -1.0];
         let owned = [
             ("mu", array![0.0, 0.0, 0.0, 0.0]),

@@ -171,13 +171,10 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_a_sqrt_link() {
-        // The Altitude #1 gate. Under the default log link `∂l/∂η` and the folded
+        // Under the default log link `∂l/∂η` and the folded
         // `y − μ` agree by construction, so the default-link check above cannot
         // tell a natural-scale score from an η-scale one. `sqrt` can: it wants
         // `dμ/dη = 2√μ`, which this family no longer hardcodes.
-        //
-        // This replaces `poisson_score_is_wrong_under_a_sqrt_link_today`, the
-        // Phase 0 characterization test that asserted the opposite.
         let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
         let owned = [("mu", array![0.5, 1.5, 3.0, 8.0, 5.0])];
         check_eta_score_via_finite_diff(&Poisson, &y, &owned, "mu", &SqrtLink, 1e-5);

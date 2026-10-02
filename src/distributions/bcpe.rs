@@ -92,8 +92,7 @@ impl Distribution for BCPE {
     ) -> DerivativesResult {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The PE score swaps out the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
-        // (= z at τ=2), full derivation in docs/math/mathematics.md [BCCG]. Natural
-        // scale (Altitude #1); chain_to_eta reapplies the default links (log, log,
+        // (= z at τ=2). Natural scale; chain_to_eta reapplies the default links (log, log,
         // identity, log) and recovers the old η-scale values exactly:
         //   dl/dμ = [D·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [(τ/2)gₜ − 1] / σ   (numerator = z·D − 1)
@@ -355,7 +354,7 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_non_default_links() {
-        // The Altitude #1 gate. μ, σ (and τ) default to log, ν to identity, so
+        // μ, σ (and τ) default to log, ν to identity, so
         // only a non-default link can tell a natural-scale score from an η-scale
         // one. ν is held positive here so a log link is well defined on it; the
         // default-link test above covers the negative and near-zero branches.
@@ -382,8 +381,8 @@ mod tests {
             ("sigma", array![1e-8, 0.0, 1e-320]),
             ("nu", array![1.0, 0.5, -0.5]),
             // τ stays clear of 0.5, where the pre-existing `i_loc` normalizer hits
-            // `ln_gamma(2 − 1/τ) = ln_gamma(0) = ∞`. That singularity predates
-            // Altitude #1 and is not what this gate is testing.
+            // `ln_gamma(2 − 1/τ) = ln_gamma(0) = ∞`. That singularity is
+            // not what this test is checking.
             ("tau", array![1.5, 2.0, 3.0]),
         ];
         let p = params_view(&owned);

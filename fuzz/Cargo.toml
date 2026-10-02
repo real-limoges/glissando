@@ -1,4 +1,4 @@
-# cargo-fuzz crate (TEST-2). Its own workspace so the stable-toolchain build of the
+# cargo-fuzz crate. Its own workspace so the stable-toolchain build of the
 # root crate never pulls in libfuzzer (which needs nightly). Run with:
 #   cargo +nightly fuzz run formula_parse
 #   cargo +nightly fuzz run json_facade

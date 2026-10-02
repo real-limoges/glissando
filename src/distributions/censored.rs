@@ -1,4 +1,4 @@
-//! Censored responses (STRUCT-1): a wrapper distribution that rewrites a base
+//! Censored responses: a wrapper distribution that rewrites a base
 //! family's likelihood for observations known only to lie in an interval.
 //!
 //! Each row is observed exactly ([`CensorStatus::Event`]), or known only to be
@@ -17,7 +17,7 @@
 //! Like [`Binomial`](super::Binomial) and [`Ocat`](super::Ocat), a `Censored`
 //! carries per-observation state (`status`, interval upper bounds) that a name
 //! string cannot, so it is excluded from [`from_name`](super::from_name); build
-//! it through this typed API and serialize it via the family descriptor (SER-1).
+//! it through this typed API and serialize it via the family descriptor.
 
 use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
@@ -371,10 +371,9 @@ mod tests {
 
     #[test]
     fn score_matches_finite_diff_under_a_non_default_link() {
-        // Altitude #1 Phase 3 acceptance gate. Before the CDF derivatives moved to
-        // the natural scale, `cdf_eta_grads` chained through Gaussian's *default*
-        // links no matter what the fit resolved, so this score came out wrong by a
-        // factor of `mu_eta_default / mu_eta_actual` on every censored row.
+        // `cdf_eta_grads` has to chain through the link the fit resolved. Chaining
+        // through Gaussian's *default* link instead puts this score off by a factor
+        // of `mu_eta_default / mu_eta_actual` on every censored row.
         //
         // σ goes on `sqrt` rather than the usual suspects because η = √σ keeps the
         // fixture's positive σ in the link's domain. μ stays on identity on purpose:
@@ -395,10 +394,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_fixture() {
-        // Altitude #1 Phase 3, gate (d). Two things changed under this test. The
-        // base's CDF derivatives are now un-folded (new divisions by σ and σ²), and
-        // the family-level `.max(MIN_WEIGHT)` that used to launder every censored
-        // row's weight is gone. A saturating F drives `clamp_prob` to both of its
+        // The base's CDF derivatives divide by σ and σ², and no family-level
+        // `.max(MIN_WEIGHT)` launders the censored rows' weights. A saturating F drives `clamp_prob` to both of its
         // rails, so `d1/F` and `d2/F` land at `PROB_EPS`.
         //
         // I check the weights for finiteness only, not sign: these rows carry

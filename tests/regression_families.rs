@@ -6,9 +6,7 @@
 //
 // Think of it as the end-to-end counterpart to `tests/derivative_golden.rs`: that
 // file pins what each family *returns*, this one pins where the fitting loop
-// *lands*. The generic-link-chain-rule refactor (Altitude #1) has to leave every
-// snapshot here byte-identical, since it only changes how the default-link chain
-// rule is expressed, not what it evaluates to.
+// *lands*.
 //
 // Data is generated deterministically from closed-form patterns, no RNG, so the
 // fixtures don't lean on any random-number implementation.

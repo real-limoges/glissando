@@ -1,4 +1,4 @@
-//! DATA-5 string formula parser, tested through the public API.
+//! String formula parser, tested through the public API.
 //!
 //! The parser is a front-end over `Vec<Term>`: a formula built from a string has
 //! to fit *identically* to the same formula built with the constructor DSL. A

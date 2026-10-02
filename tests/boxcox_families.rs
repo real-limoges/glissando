@@ -1,4 +1,4 @@
-//! BCT and BCPE families, public-API integration tests (DIST-1 fast-follows).
+//! BCT and BCPE families, public-API integration tests.
 //!
 //! I cover coefficient recovery from simulated data and JSON round-trips here. The
 //! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) I check at
