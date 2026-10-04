@@ -24,6 +24,7 @@ use super::structural::{
 use super::{
     clamp_prob, CdfMap, DerivativeMap, Distribution, Eta, GamlssError, Link, LinkContext, PROB_EPS,
 };
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -71,7 +72,7 @@ impl Truncated {
     fn cdf_at(
         &self,
         bound: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         let sanitized = bound.mapv(|v| if v.is_finite() { v } else { 0.0 });
         let mut f = self.base.cdf(&sanitized, params)?;
@@ -91,7 +92,7 @@ impl Truncated {
     fn cdf_and_grads_at(
         &self,
         bound: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         ctx: &LinkContext,
     ) -> Result<(Array1<f64>, CdfMap<Eta>), GamlssError> {
         let f = self.cdf_at(bound, params)?;
@@ -127,7 +128,7 @@ impl Distribution for Truncated {
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         self.check_len(y.len())?;
         let base_ll = self.base.loglik_pointwise(y, params)?;
@@ -154,7 +155,7 @@ impl Distribution for Truncated {
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         ctx: &LinkContext,
     ) -> Result<DerivativeMap<Eta>, GamlssError> {
         self.check_len(y.len())?;
@@ -166,8 +167,8 @@ impl Distribution for Truncated {
         let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params, ctx)?;
 
         rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
-            let (d1_lo, d2_lo) = (&grad_lo[param].d1, &grad_lo[param].d2);
-            let (d1_hi, d2_hi) = (&grad_hi[param].d1, &grad_hi[param].d2);
+            let (d1_lo, d2_lo) = (&grad_lo[&param].d1, &grad_lo[&param].d2);
+            let (d1_hi, d2_hi) = (&grad_hi[&param].d1, &grad_hi[&param].d2);
             for i in 0..y.len() {
                 let dmass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
                 let d1 = d1_hi[i] - d1_lo[i];
@@ -181,7 +182,7 @@ impl Distribution for Truncated {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Renormalized onto the truncated support: F_T(y) = (F(y)−F(lo))/(F(hi)−F(lo)),
         // clamped to [0, 1] outside (lo, hi). On new data whose length does not match
@@ -203,7 +204,7 @@ impl Distribution for Truncated {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Invert the renormalized CDF: map p into the base scale via
         // p_base = F(lo) + p·(F(hi)−F(lo)), then call the base quantile. On new data
@@ -255,8 +256,8 @@ mod tests {
     fn full_range_reduces_to_base_loglik() {
         let y = array![0.3, 0.7, 1.1, -0.2];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0, -0.5]),
-            ("sigma", array![1.0, 1.2, 0.8, 1.5]),
+            (Param::Mu, array![0.0, 0.5, 1.0, -0.5]),
+            (Param::Sigma, array![1.0, 1.2, 0.8, 1.5]),
         ];
         let p = params_view(&owned);
         let (lo, hi) = full_range(4);
@@ -274,8 +275,8 @@ mod tests {
         // Left-truncated at 0: log f_T(y) = log f(y) − log(1 − F(0)).
         let y = array![1.0, 2.0, 0.5];
         let owned = [
-            ("mu", array![1.0, 1.0, 1.0]),
-            ("sigma", array![1.0, 1.0, 1.0]),
+            (Param::Mu, array![1.0, 1.0, 1.0]),
+            (Param::Sigma, array![1.0, 1.0, 1.0]),
         ];
         let p = params_view(&owned);
         let lo = Array1::from_elem(3, 0.0);
@@ -299,8 +300,8 @@ mod tests {
         // two CDF values rather than collapsing to `1 − F(lo)`.
         let y = array![1.0, 2.0, 1.5, 3.0];
         let owned = [
-            ("mu", array![1.0, 1.5, 1.0, 2.0]),
-            ("sigma", array![1.0, 1.2, 0.9, 1.1]),
+            (Param::Mu, array![1.0, 1.5, 1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.9, 1.1]),
         ];
         let lo = Array1::from_elem(4, 0.0);
         let hi = Array1::from_elem(4, 5.0);
@@ -312,14 +313,14 @@ mod tests {
     fn truncated_score_matches_finite_diff() {
         let y = array![1.0, 2.0, 1.5, 3.0];
         let owned = [
-            ("mu", array![1.0, 1.5, 1.0, 2.0]),
-            ("sigma", array![1.0, 1.2, 0.9, 1.1]),
+            (Param::Mu, array![1.0, 1.5, 1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.9, 1.1]),
         ];
         let lo = Array1::from_elem(4, 0.0);
         let hi = Array1::from_elem(4, f64::INFINITY);
         let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
-        check_score_via_finite_diff(&trunc, &y, &owned, "mu", 1e-4);
-        check_score_via_finite_diff(&trunc, &y, &owned, "sigma", 1e-4);
+        check_score_via_finite_diff(&trunc, &y, &owned, Param::Mu, 1e-4);
+        check_score_via_finite_diff(&trunc, &y, &owned, Param::Sigma, 1e-4);
     }
 
     #[test]
@@ -333,13 +334,13 @@ mod tests {
         // rather than short-circuiting on ±∞.
         let y = array![1.0, 2.0, 1.5, 3.0];
         let owned = [
-            ("mu", array![1.0, 1.5, 1.0, 2.0]),
-            ("sigma", array![1.0, 1.2, 0.9, 1.1]),
+            (Param::Mu, array![1.0, 1.5, 1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.9, 1.1]),
         ];
         let lo = Array1::from_elem(4, 0.0);
         let hi = Array1::from_elem(4, 5.0);
         let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
-        check_eta_score_via_finite_diff(&trunc, &y, &owned, "sigma", &InverseLink, 1e-4);
+        check_eta_score_via_finite_diff(&trunc, &y, &owned, Param::Sigma, &InverseLink, 1e-4);
     }
 
     #[test]
@@ -351,16 +352,16 @@ mod tests {
         // may be negative.
         let y = array![0.0, 1.0, 0.5, -1.0];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0, 0.0]),
-            ("sigma", array![1e-320, 1e13, 1e-8, 1.0]),
+            (Param::Mu, array![0.0, 0.0, 0.0, 0.0]),
+            (Param::Sigma, array![1e-320, 1e13, 1e-8, 1.0]),
         ];
         let lo = array![f64::NEG_INFINITY, -1e300, 1e-3, 1e-3];
         let hi = array![f64::INFINITY, 1e300, 2e-3, 1e300];
         let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
         let p = params_view(&owned);
         let d = default_link_derivatives(&trunc, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u, w) = (&d[name].score, &d[name].info);
+        for name in [Param::Mu, Param::Sigma] {
+            let (u, w) = (&d[&name].score, &d[&name].info);
             assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
         }
     }
@@ -368,7 +369,7 @@ mod tests {
     #[test]
     fn cdf_is_renormalized_and_quantile_inverts() {
         // Left-truncated Gaussian at 0; F_T(lo)=0, and Q(F_T(y))≈y inside support.
-        let owned = [("mu", array![1.0]), ("sigma", array![1.0])];
+        let owned = [(Param::Mu, array![1.0]), (Param::Sigma, array![1.0])];
         let p = params_view(&owned);
         let lo = array![0.0];
         let hi = array![f64::INFINITY];

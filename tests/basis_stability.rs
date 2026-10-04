@@ -10,6 +10,7 @@
 mod common;
 
 use common::Generator;
+use glissando::Param;
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use rand::RngExt;
@@ -45,8 +46,8 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     data.insert_column("x", Array1::from_vec(x.clone()));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::smooth(Smooth::ps("x").n_splines(12))])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::smooth(Smooth::ps("x").n_splines(12))])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
@@ -62,8 +63,8 @@ fn pspline_prediction_is_invariant_to_prediction_range() {
     let sub_pred = model.predict(&sub, &family).unwrap();
 
     for (j, &i) in idx.iter().enumerate() {
-        let a = full_pred["mu"][i];
-        let b = sub_pred["mu"][j];
+        let a = full_pred[&Param::Mu][i];
+        let b = sub_pred[&Param::Mu][j];
         assert!(
             (a - b).abs() < 1e-10,
             "subset prediction diverged at x={}: full={a}, subset={b}",
@@ -92,8 +93,11 @@ fn random_effect_levels_are_stable_under_reordering() {
     data.insert_column("g", Array1::from_vec(g.clone()));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::re("g"))])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::smooth(Smooth::re("g"))],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
@@ -110,7 +114,7 @@ fn random_effect_levels_are_stable_under_reordering() {
 
     for (j, &i) in rev_rows.iter().enumerate() {
         assert!(
-            (base["mu"][i] - rev_pred["mu"][j]).abs() < 1e-10,
+            (base[&Param::Mu][i] - rev_pred[&Param::Mu][j]).abs() < 1e-10,
             "group prediction changed under row reordering (row {i})"
         );
     }
@@ -128,8 +132,11 @@ fn random_effect_unseen_level_errors() {
     data.insert_column("g", Array1::from_vec(g));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::re("g"))])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::smooth(Smooth::re("g"))],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 
@@ -165,10 +172,10 @@ fn tensor_with_intercept_recovers_main_effects() {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, common::tensor("x1", "x2", 5, 5)],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
@@ -181,7 +188,7 @@ fn tensor_with_intercept_recovers_main_effects() {
     let ss_tot: f64 = truth.iter().map(|t| (t - mean_t) * (t - mean_t)).sum();
     let ss_res: f64 = truth
         .iter()
-        .zip(pred["mu"].iter())
+        .zip(pred[&Param::Mu].iter())
         .map(|(t, p)| (t - p) * (t - p))
         .sum();
     let r2 = 1.0 - ss_res / ss_tot;

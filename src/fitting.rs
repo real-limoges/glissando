@@ -21,6 +21,7 @@ pub mod selection;
 mod solver;
 
 use self::assembler::{assemble_model_matrices, resolve_terms, AssembledDesign};
+use crate::Param;
 
 use super::distributions::{link_from_name, Distribution, Link};
 use super::error::GamlssError;
@@ -128,14 +129,14 @@ pub struct FitConfig {
     /// Default: 1e-3.
     #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
     pub gd_tolerance: f64,
-    /// Per-parameter link overrides, keyed by distribution-parameter name
-    /// (e.g. `"mu" → "probit"`). Empty (the default) uses each family's
+    /// Per-parameter link overrides, keyed by distribution parameter
+    /// (e.g. `Param::Mu → "probit"`; serialized as `{"mu": "probit"}`). Empty (the default) uses each family's
     /// [`default_link`](crate::distributions::Distribution::default_link). Build
     /// with [`with_link`](FitConfig::with_link) /
     /// [`with_links`](FitConfig::with_links).
     ///
     /// Three things are checked at fit time, each yielding [`GamlssError::Input`]:
-    /// the key must name one of the family's
+    /// the key must be one of the family's
     /// [`parameters`](crate::distributions::Distribution::parameters), the family
     /// must accept an override there (see
     /// [`allows_link_override`](crate::distributions::Distribution::allows_link_override)),
@@ -148,7 +149,7 @@ pub struct FitConfig {
     /// `inverse_square` link on a Gaussian μ cannot represent a negative mean. The
     /// caller is responsible for choosing a link that suits the parameter.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub links: IndexMap<String, String>,
+    pub links: IndexMap<Param, String>,
     /// How to treat rows with a missing (non-finite) value in `y` or a referenced
     /// column. Default: [`NaAction::DropRows`] (R's `na.omit`). Set to
     /// [`NaAction::Fail`] to reject such inputs instead.
@@ -166,21 +167,21 @@ impl FitConfig {
     }
 
     /// Override the link for a single distribution parameter, returning `self` for
-    /// chaining: `FitConfig::default().with_link("mu", "probit")`.
+    /// chaining: `FitConfig::default().with_link(Param::Mu, "probit")`.
     #[must_use]
-    pub fn with_link(mut self, param: impl Into<String>, link: impl Into<String>) -> Self {
-        self.links.insert(param.into(), link.into());
+    pub fn with_link(mut self, param: Param, link: impl Into<String>) -> Self {
+        self.links.insert(param, link.into());
         self
     }
 
     /// Override the links for several parameters at once, returning `self` for chaining.
     #[must_use]
-    pub fn with_links<K: Into<String>, V: Into<String>>(
+    pub fn with_links<V: Into<String>>(
         mut self,
-        links: impl IntoIterator<Item = (K, V)>,
+        links: impl IntoIterator<Item = (Param, V)>,
     ) -> Self {
         self.links
-            .extend(links.into_iter().map(|(k, v)| (k.into(), v.into())));
+            .extend(links.into_iter().map(|(k, v)| (k, v.into())));
         self
     }
 }
@@ -229,7 +230,7 @@ pub struct FitDiagnostics {
     /// Maximum gradient at convergence (if computed).
     pub max_gradient: Option<f64>,
     /// Per-parameter diagnostic information, ordered by `family.parameters()`.
-    pub param_diagnostics: IndexMap<String, ParamDiagnostic>,
+    pub param_diagnostics: IndexMap<Param, ParamDiagnostic>,
     /// Non-fatal fit-quality warnings (e.g. a smooth term that collapsed onto
     /// its penalty null space). Empty on a clean fit. Serialized with the model
     /// so JSON/FFI consumers can surface fit health.
@@ -333,7 +334,7 @@ pub(super) fn global_deviance<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     prior_weights: Option<&Array1<f64>>,
-    models: &IndexMap<String, FittingParameter>,
+    models: &IndexMap<Param, FittingParameter>,
 ) -> Result<f64, GamlssError> {
     deviance(family, y, prior_weights, models, None)
 }
@@ -345,8 +346,8 @@ pub(super) fn global_deviance_with<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     prior_weights: Option<&Array1<f64>>,
-    models: &IndexMap<String, FittingParameter>,
-    param: &str,
+    models: &IndexMap<Param, FittingParameter>,
+    param: Param,
     mu_override: &Array1<f64>,
 ) -> Result<f64, GamlssError> {
     deviance(family, y, prior_weights, models, Some((param, mu_override)))
@@ -369,11 +370,11 @@ fn deviance<'a, D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     prior_weights: Option<&Array1<f64>>,
-    models: &'a IndexMap<String, FittingParameter>,
-    override_: Option<(&'a str, &'a Array1<f64>)>,
+    models: &'a IndexMap<Param, FittingParameter>,
+    override_: Option<(Param, &'a Array1<f64>)>,
 ) -> Result<f64, GamlssError> {
-    let mut params: HashMap<&str, &Array1<f64>> =
-        models.iter().map(|(k, m)| (k.as_str(), &m.mu)).collect();
+    let mut params: HashMap<Param, &Array1<f64>> =
+        models.iter().map(|(&k, m)| (k, &m.mu)).collect();
     if let Some((param, mu_override)) = override_ {
         params.insert(param, mu_override);
     }
@@ -389,7 +390,7 @@ fn deviance<'a, D: Distribution + ?Sized>(
 ///
 /// Both of these failures used to produce no error, which is why they get a guard.
 /// An unknown key never matched inside the per-parameter loop below, so
-/// `with_link("sigma", "log")` on `Beta` (whose second parameter is `phi`) did
+/// `with_link(Param::Sigma, "log")` on `Beta` (whose second parameter is `phi`) did
 /// nothing. And a parameter whose family hardcodes its own link in
 /// `eta_derivatives` would accept the override for `η → μ` while still computing
 /// the score and weight against the original link, the bug class the
@@ -403,14 +404,14 @@ fn validate_link_overrides<D: Distribution + ?Sized>(
     for key in config.links.keys() {
         // Membership first. On a family that refuses every parameter, a
         // misspelled key should complain about the misspelling, not the refusal.
-        if !family.parameters().contains(&key.as_str()) {
+        if !family.parameters().contains(key) {
             return Err(GamlssError::Input(format!(
                 "link override for unknown parameter '{key}': {} has parameters [{}]",
                 family.name(),
-                family.parameters().join(", "),
+                param_list(family),
             )));
         }
-        if !family.allows_link_override(key) {
+        if !family.allows_link_override(*key) {
             return Err(GamlssError::Input(format!(
                 "{} does not support a link override for '{key}': its score and \
                  weight are derived against that parameter's default link and \
@@ -423,6 +424,38 @@ fn validate_link_overrides<D: Distribution + ?Sized>(
     Ok(())
 }
 
+/// The family's parameters as `"mu, sigma"`, for error messages.
+fn param_list<D: Distribution + ?Sized>(family: &D) -> String {
+    family
+        .parameters()
+        .iter()
+        .map(|p| p.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Reject a formula that gives terms to a parameter the family does not have.
+///
+/// The fitting loop only ever looks up `family.parameters()`, so an extra key
+/// (`Param::Sigma` on a Poisson fit, `Param::Nu` on a Gaussian one) used to be
+/// dropped without a word. That is almost always a wrong family, not an intent.
+pub(crate) fn validate_formula_params<D: Distribution + ?Sized>(
+    family: &D,
+    formula: &Formula,
+) -> Result<(), GamlssError> {
+    // Report the first offender in a stable order rather than `HashMap` order.
+    let mut extra: Vec<Param> = formula
+        .keys()
+        .copied()
+        .filter(|p| !family.parameters().contains(p))
+        .collect();
+    extra.sort_by_key(|p| p.as_str());
+    match extra.first() {
+        Some(&param) => Err(family.unknown_param(param)),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
@@ -430,17 +463,17 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     formula: &Formula,
     family: &D,
     config: &FitConfig,
-) -> Result<(IndexMap<String, FittedParameter>, FitDiagnostics), GamlssError> {
+) -> Result<(IndexMap<Param, FittedParameter>, FitDiagnostics), GamlssError> {
+    validate_formula_params(family, formula)?;
     validate_link_overrides(family, config)?;
 
     let n_obs = y.len();
     // `IndexMap` keeps insertion order = `family.parameters()` order, so
     // `GamlssModel.models` iterates deterministically everywhere downstream.
-    let mut models: IndexMap<String, FittingParameter> = IndexMap::new();
+    let mut models: IndexMap<Param, FittingParameter> = IndexMap::new();
 
-    for param_name in family.parameters() {
-        let param_name_str = param_name.to_string();
-        let formula_terms = formula.get(&param_name_str).ok_or_else(|| {
+    for &param_name in family.parameters() {
+        let formula_terms = formula.get(&param_name).ok_or_else(|| {
             GamlssError::Input(format!("Formula missing for parameter {}", param_name))
         })?;
         // Resolve CrSpline1D knots once from the training data. They get stored in
@@ -450,7 +483,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         // Honor a per-parameter link override from the config, else fall back to
         // the family's canonical default. Whichever wins, its name is persisted
         // into the FittedParameter so predict rebuilds the *same* link.
-        let link = match config.links.get(&param_name_str) {
+        let link = match config.links.get(&param_name) {
             Some(name) => link_from_name(name)?,
             None => family.default_link(param_name)?,
         };
@@ -492,7 +525,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 
         let n_terms = term_layouts.len();
         models.insert(
-            param_name_str,
+            param_name,
             FittingParameter {
                 terms, // already owned (resolved from training data above)
                 term_layouts,
@@ -513,7 +546,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     let mut converged = false;
     let mut final_iteration = 0;
     let mut final_change = f64::MAX;
-    let mut param_diagnostics: IndexMap<String, ParamDiagnostic> = IndexMap::new();
+    let mut param_diagnostics: IndexMap<Param, ParamDiagnostic> = IndexMap::new();
 
     // Track the global deviance across cycles so convergence is judged on
     // improvement in the objective, not only on coefficient changes.
@@ -526,7 +559,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         let mut max_diff = 0.0_f64; // kept for FitDiagnostics.final_change
         let mut all_converged = true;
 
-        for param_name in family.parameters() {
+        for &param_name in family.parameters() {
             let update = scoring::step(
                 family,
                 y,
@@ -560,7 +593,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
                 // has its own internal MAX_STEP clamp, but it is now far too loose
                 // (1e6) to be the only guard. Scale β, not η directly, so that
                 // η = X·β + offset stays exact.
-                let pre_model = &models[*param_name];
+                let pre_model = &models[&param_name];
                 let raw_max_change = update.eta_max_change;
                 // scale == 1.0 reproduces the full-step proposal exactly, so one
                 // unconditional construction handles both the clamped and the
@@ -620,7 +653,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             }
 
             param_diagnostics.insert(
-                param_name.to_string(),
+                param_name,
                 ParamDiagnostic {
                     final_eta_change: update.eta_change,
                     final_lambda_change: update.lambda_change,
@@ -632,8 +665,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             );
 
             // Infallible: `models` was populated from this same `family.parameters()`
-            // list above and nothing ever removes entries (see `&models[*param_name]`).
-            let model = &mut models[*param_name];
+            // list above and nothing ever removes entries (see `&models[&param_name]`).
+            let model = &mut models[&param_name];
             // β/η/μ come from the accepted (possibly damped) step; covariance /
             // EDF / λ keep the values `scoring::step` computed at the full step.
             // Near convergence α → 1, so those are evaluated at the right point,
@@ -682,7 +715,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         }
     }
 
-    let mut final_results: IndexMap<String, FittedParameter> = IndexMap::new();
+    let mut final_results: IndexMap<Param, FittedParameter> = IndexMap::new();
     let mut warnings: Vec<String> = Vec::new();
 
     for (name, model) in models {

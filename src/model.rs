@@ -6,6 +6,7 @@ use crate::fitting::{self, assembler::assemble_model_matrices};
 use crate::preprocessing::validate_inputs;
 use crate::terms::Term;
 use crate::types::{self, Coefficients, DataSet, Formula};
+use crate::Param;
 use crate::{FitConfig, FitDiagnostics, GamlssError, ModelDiagnostics};
 use indexmap::IndexMap;
 use ndarray::{Array1, Array2};
@@ -19,7 +20,7 @@ pub struct GamlssModel {
     /// Fitted results keyed by parameter name, in `family.parameters()` order.
     /// It is an `IndexMap` so insertion order is preserved: iterating `models` (and
     /// `predict_samples`) gives the same order every run, unlike a `HashMap`.
-    pub models: IndexMap<String, fitting::FittedParameter>,
+    pub models: IndexMap<Param, fitting::FittedParameter>,
     /// Convergence diagnostics from the RS algorithm.
     pub diagnostics: FitDiagnostics,
     /// The family this model was fit (or deserialized) against, captured via
@@ -33,14 +34,14 @@ pub struct GamlssModel {
 }
 
 /// Borrow an owned parameter map (the kind [`GamlssModel::predict`] hands back)
-/// down into the `&str → &Array1` view the [`Distribution`] trait methods want.
+/// down into the `Param → &Array1` view the [`Distribution`] trait methods want.
 /// This is the post-prediction twin of
 /// [`diagnostics::fitted_params_view`](crate::diagnostics), for when the
 /// parameters are already owned arrays rather than borrowed from the fit.
-fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Array1<f64>> {
+fn borrow_param_view(params: &HashMap<Param, Array1<f64>>) -> HashMap<Param, &Array1<f64>> {
     params
         .iter()
-        .map(|(name, values)| (name.as_str(), values))
+        .map(|(&name, values)| (name, values))
         .collect()
 }
 
@@ -51,7 +52,7 @@ fn borrow_param_view(params: &HashMap<String, Array1<f64>>) -> HashMap<&str, &Ar
 /// model) falls back to the family default.
 fn resolve_link<D: Distribution + ?Sized>(
     family: &D,
-    param_name: &str,
+    param_name: Param,
     fitted_param: &fitting::FittedParameter,
 ) -> Result<Box<dyn distributions::Link>, GamlssError> {
     match &fitted_param.link {
@@ -65,7 +66,7 @@ fn resolve_link<D: Distribution + ?Sized>(
 /// pre-fix tensor-product or point-constrained CR smooth whose column count has
 /// since changed). A typed error here is clearer than the shape panic `dot` would
 /// raise a line later.
-fn check_design_width(param: &str, n_cols: usize, n_coefs: usize) -> Result<(), GamlssError> {
+fn check_design_width(param: Param, n_cols: usize, n_coefs: usize) -> Result<(), GamlssError> {
     if n_cols != n_coefs {
         return Err(GamlssError::Shape(format!(
             "parameter '{param}': rebuilt design matrix has {n_cols} columns but the stored \
@@ -111,7 +112,7 @@ fn check_student_t_nu_formula<D: Distribution + ?Sized>(
     if family.name() != "StudentT" {
         return Ok(());
     }
-    let nu_is_intercept_only = match formula.get("nu") {
+    let nu_is_intercept_only = match formula.get(&Param::Nu) {
         None => true,
         Some(terms) => matches!(terms.as_slice(), [] | [Term::Intercept]),
     };
@@ -238,11 +239,11 @@ impl GamlssModel {
     pub fn design_matrix(
         &self,
         new_data: &DataSet,
-        param: &str,
+        param: Param,
     ) -> Result<Array2<f64>, GamlssError> {
         let fitted = self
             .models
-            .get(param)
+            .get(&param)
             .ok_or_else(|| GamlssError::UnknownParameter {
                 distribution: "<fitted model>".to_string(),
                 param: param.to_string(),
@@ -260,9 +261,9 @@ impl GamlssModel {
     /// # Errors
     ///
     /// Returns [`GamlssError::UnknownParameter`] if `param` is not in the fitted model.
-    pub fn covariance_matrix(&self, param: &str) -> Result<&types::CovarianceMatrix, GamlssError> {
+    pub fn covariance_matrix(&self, param: Param) -> Result<&types::CovarianceMatrix, GamlssError> {
         self.models
-            .get(param)
+            .get(&param)
             .map(|f| &f.covariance)
             .ok_or_else(|| GamlssError::UnknownParameter {
                 distribution: "<fitted model>".to_string(),
@@ -278,9 +279,9 @@ impl GamlssModel {
     /// # Errors
     ///
     /// Returns [`GamlssError::UnknownParameter`] if `param` is not in the fitted model.
-    pub fn term_index_map(&self, param: &str) -> Result<&[(String, usize, usize)], GamlssError> {
+    pub fn term_index_map(&self, param: Param) -> Result<&[(String, usize, usize)], GamlssError> {
         self.models
-            .get(param)
+            .get(&param)
             .map(|f| f.term_blocks.as_slice())
             .ok_or_else(|| GamlssError::UnknownParameter {
                 distribution: "<fitted model>".to_string(),
@@ -332,7 +333,7 @@ impl GamlssModel {
     /// # Examples
     ///
     /// ```
-    /// use glissando::{GamlssModel, DataSet, Formula, Term};
+    /// use glissando::{GamlssModel, DataSet, Formula, Param, Term};
     /// use glissando::distributions::Gaussian;
     /// use ndarray::Array1;
     ///
@@ -340,14 +341,14 @@ impl GamlssModel {
     /// let mut data = DataSet::new();
     /// data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
     /// let formula = Formula::new()
-    ///     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".into() }])
-    ///     .with_terms("sigma", vec![Term::Intercept]);
+    ///     .with_terms(Param::Mu, vec![Term::Intercept, Term::Linear { col_name: "x".into() }])
+    ///     .with_terms(Param::Sigma, vec![Term::Intercept]);
     /// let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     ///
     /// let mut new_data = DataSet::new();
     /// new_data.insert_column("x", Array1::from_vec(vec![6.0, 7.0]));
     /// let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
-    /// assert_eq!(preds["mu"].len(), 2);
+    /// assert_eq!(preds[&Param::Mu].len(), 2);
     /// ```
     ///
     /// # Errors
@@ -364,14 +365,14 @@ impl GamlssModel {
         &self,
         new_data: &DataSet,
         family: &D,
-    ) -> Result<HashMap<String, Array1<f64>>, GamlssError> {
+    ) -> Result<HashMap<Param, Array1<f64>>, GamlssError> {
         check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut predictions = HashMap::new();
 
-        for (param_name, fitted_param) in &self.models {
+        for (&param_name, fitted_param) in &self.models {
             let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             check_design_width(
                 param_name,
@@ -384,7 +385,7 @@ impl GamlssModel {
             let link = resolve_link(family, param_name, fitted_param)?;
             let fitted = eta.mapv(|e| link.inv_link(e));
 
-            predictions.insert(param_name.clone(), fitted);
+            predictions.insert(param_name, fitted);
         }
 
         Ok(predictions)
@@ -402,14 +403,14 @@ impl GamlssModel {
         &self,
         new_data: &DataSet,
         family: &D,
-    ) -> Result<HashMap<String, PredictionResult>, GamlssError> {
+    ) -> Result<HashMap<Param, PredictionResult>, GamlssError> {
         check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut results = HashMap::new();
 
-        for (param_name, fitted_param) in &self.models {
+        for (&param_name, fitted_param) in &self.models {
             let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let x_matrix = &design.x;
             check_design_width(
@@ -436,7 +437,7 @@ impl GamlssModel {
             let fitted = eta.view().mapv(|e| link.inv_link(e));
 
             results.insert(
-                param_name.clone(),
+                param_name,
                 PredictionResult {
                     fitted,
                     eta,
@@ -465,7 +466,7 @@ impl GamlssModel {
         family: &distributions::Ocat,
     ) -> Result<Array2<f64>, GamlssError> {
         let params_map = self.predict(new_data, family)?;
-        let n_obs = params_map["mu"].len();
+        let n_obs = params_map[&Param::Mu].len();
         let r = family.n_categories();
 
         // Put the params HashMap back into the shape Ocat's own threshold
@@ -473,7 +474,7 @@ impl GamlssModel {
         // cumulative-increment formula a second time here.
         let n_thresh = r - 1;
         let params_view = borrow_param_view(&params_map);
-        let eta_mu = &params_map["mu"];
+        let eta_mu = &params_map[&Param::Mu];
 
         let mut out = Array2::zeros((n_obs, r));
         for i in 0..n_obs {
@@ -619,13 +620,13 @@ impl GamlssModel {
     /// not positive definite (degenerate fit).
     pub fn posterior_samples(
         &self,
-        param_name: &str,
+        param_name: Param,
         n_samples: usize,
         seed: Option<u64>,
     ) -> Result<Vec<Coefficients>, GamlssError> {
         let fitted_param =
             self.models
-                .get(param_name)
+                .get(&param_name)
                 .ok_or_else(|| GamlssError::UnknownParameter {
                     distribution: "<fitted model>".to_string(),
                     param: param_name.to_string(),
@@ -660,14 +661,14 @@ impl GamlssModel {
         family: &D,
         n_samples: usize,
         seed: Option<u64>,
-    ) -> Result<HashMap<String, Vec<Array1<f64>>>, GamlssError> {
+    ) -> Result<HashMap<Param, Vec<Array1<f64>>>, GamlssError> {
         check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
             .ok_or_else(|| GamlssError::Input("new_data has no columns".into()))?;
         let mut results = HashMap::new();
 
-        for (param_name, fitted_param) in &self.models {
+        for (&param_name, fitted_param) in &self.models {
             let design = assemble_model_matrices(new_data, n_obs, &fitted_param.terms)?;
             let x_matrix = &design.x;
             check_design_width(
@@ -693,7 +694,7 @@ impl GamlssModel {
                 })
                 .collect();
 
-            results.insert(param_name.clone(), prediction_samples);
+            results.insert(param_name, prediction_samples);
         }
 
         Ok(results)

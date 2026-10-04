@@ -1,18 +1,19 @@
 use glissando::distributions::Ocat;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::{Array1, Array2};
 
 fn make_formula_intercept_only(n_params: usize) -> Formula {
     let mut f = Formula::new();
-    f.add_terms("mu".to_string(), vec![Term::Intercept]);
+    f.add_terms(Param::Mu, vec![Term::Intercept]);
     for k in 1..n_params {
         let param = match k {
-            1 => "delta_1",
-            2 => "delta_2",
-            3 => "delta_3",
+            1 => Param::Delta1,
+            2 => Param::Delta2,
+            3 => Param::Delta3,
             _ => panic!("too many threshold params"),
         };
-        f.add_terms(param.to_string(), vec![Term::Intercept]);
+        f.add_terms(param, vec![Term::Intercept]);
     }
     f
 }
@@ -26,15 +27,15 @@ fn make_formula_with_smooth(n_params: usize) -> Formula {
         penalty_order: 2,
         range: None,
     });
-    f.add_terms("mu".to_string(), vec![Term::Intercept, smooth]);
+    f.add_terms(Param::Mu, vec![Term::Intercept, smooth]);
     for k in 1..n_params {
         let param = match k {
-            1 => "delta_1",
-            2 => "delta_2",
-            3 => "delta_3",
+            1 => Param::Delta1,
+            2 => Param::Delta2,
+            3 => Param::Delta3,
             _ => panic!("too many threshold params"),
         };
-        f.add_terms(param.to_string(), vec![Term::Intercept]);
+        f.add_terms(param, vec![Term::Intercept]);
     }
     f
 }
@@ -214,11 +215,11 @@ fn predict_class_probabilities_is_consistent_with_predict() {
         .predict_class_probabilities(&new_data, &family)
         .expect("predict_class_probabilities failed");
 
-    let eta_mu = &param_preds["mu"];
+    let eta_mu = &param_preds[&Param::Mu];
     // Rebuild the thresholds by hand for obs 0 and check them against probs.
-    let d1 = param_preds["delta_1"][0];
-    let d2 = param_preds["delta_2"][0]; // response-scale increment
-    let d3 = param_preds["delta_3"][0]; // response-scale increment
+    let d1 = param_preds[&Param::Delta1][0];
+    let d2 = param_preds[&Param::Delta2][0]; // response-scale increment
+    let d3 = param_preds[&Param::Delta3][0]; // response-scale increment
     let t = [d1, d1 + d2, d1 + d2 + d3];
     let manual = Ocat::category_probs(eta_mu[0], &t);
     for j in 0..4 {

@@ -76,7 +76,7 @@ For pure Rust or WASM builds, no system dependencies are needed.
 ## Quick Start
 
 ```rust
-use glissando::{GamlssModel, DataSet, Formula, Term};
+use glissando::{GamlssModel, DataSet, Formula, Param, Term};
 use glissando::distributions::Gaussian;
 use glissando::ndarray::Array1;
 
@@ -86,16 +86,16 @@ let mut data = DataSet::new();
 data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ])
-    .with_terms("sigma", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
 println!("Converged: {}", model.converged());
-let mu_coeffs = &model.models["mu"].coefficients;
+let mu_coeffs = &model.models[&Param::Mu].coefficients;
 println!("Intercept: {}, Slope: {}", mu_coeffs[0], mu_coeffs[1]);
 ```
 
@@ -210,12 +210,13 @@ A point mass at zero, plus a zero-truncated base family for the positive part.
 It adds a logit-linked parameter `xi = P(Y = 0)`, so the formula needs an `"xi"` block:
 
 ```rust
+use glissando::Param;
 use glissando::distributions::{Gamma, Hurdle};
 
 let formula = Formula::new()
-    .with_terms("mu", vec![Term::Intercept])
-    .with_terms("sigma", vec![Term::Intercept])
-    .with_terms("xi", vec![Term::Intercept]);     // the zero-atom probability
+    .with_terms(Param::Mu, vec![Term::Intercept])
+    .with_terms(Param::Sigma, vec![Term::Intercept])
+    .with_terms(Param::Xi, vec![Term::Intercept]);     // the zero-atom probability
 let family = Hurdle::new(Box::new(Gamma::new()));
 let model = GamlssModel::fit(&data, &y, &formula, &family)?;
 ```
@@ -231,7 +232,7 @@ In Python, the wrappers take a base family instance: `Censored(Gaussian(), ["eve
 Fit a `K`-component mixture `f(y) = Σ_k w_k g_k(y)` by EM: an outer loop wrapped around the existing prior-weighted RS fit.
 
 ```rust
-use glissando::{fit_mixture, FitConfig};
+use glissando::{fit_mixture, FitConfig, Param};
 use glissando::distributions::Gaussian;
 
 // `seed` makes the randomized EM initialization reproducible.
@@ -242,7 +243,7 @@ println!("mixture log-likelihood: {}, AIC: {}", mix.log_likelihood, mix.aic());
 
 // Each component is a full GamlssModel.
 for comp in &mix.components {
-    println!("component mu intercept: {}", comp.models["mu"].coefficients[0]);
+    println!("component mu intercept: {}", comp.models[&Param::Mu].coefficients[0]);
 }
 
 // Mixture mean on new data: Σ_k w_k · E_k[Y].
@@ -355,7 +356,7 @@ The response name left of `~` is ignored (glissando takes `y` separately), so `"
 ## Configuration
 
 ```rust
-use glissando::{FitConfig, GamlssModel, NaAction, SmoothingCriterion};
+use glissando::{FitConfig, GamlssModel, NaAction, Param, SmoothingCriterion};
 
 let config = FitConfig {
     max_iterations: 200,
@@ -371,7 +372,7 @@ let model = GamlssModel::fit_with_config(
 
 // Builders cover the less common knobs.
 let config = FitConfig::default()
-    .with_link("mu", "probit")            // override a parameter's link
+    .with_link(Param::Mu, "probit")            // override a parameter's link
     .with_na_action(NaAction::Fail);      // reject missing values instead of dropping rows
 ```
 
@@ -412,7 +413,7 @@ println!("Iterations: {}", model.diagnostics.iterations);
 println!("Warnings: {:?}", model.diagnostics.warnings);
 
 // Per-parameter results
-let fitted_mu = &model.models["mu"];
+let fitted_mu = &model.models[&Param::Mu];
 fitted_mu.coefficients     // Coefficients newtype (Deref to Array1<f64>)
 fitted_mu.covariance       // CovarianceMatrix newtype (Deref to Array2<f64>)
 fitted_mu.fitted_values    // Fitted values on response scale
@@ -423,9 +424,9 @@ fitted_mu.lambdas          // Smoothing parameters
 fitted_mu.terms            // Formula terms
 
 // mgcv-style accessors
-let x = model.design_matrix(&new_data, "mu")?;      // predict(type = "lpmatrix")
-let vcov = model.covariance_matrix("mu")?;
-let index = model.term_index_map("mu")?;            // (term name, first col, end col exclusive)
+let x = model.design_matrix(&new_data, Param::Mu)?;      // predict(type = "lpmatrix")
+let vcov = model.covariance_matrix(Param::Mu)?;
+let index = model.term_index_map(Param::Mu)?;            // (term name, first col, end col exclusive)
 ```
 
 ## Prediction
@@ -438,21 +439,21 @@ let family = Gaussian::new();
 
 // Point predictions (fitted values on response scale)
 let predictions = model.predict(&new_data, &family)?;
-let mu_pred = &predictions["mu"];
+let mu_pred = &predictions[&Param::Mu];
 
 // Predictions with standard errors
 let results = model.predict_with_se(&new_data, &family)?;
-let mu_result = &results["mu"];
+let mu_result = &results[&Param::Mu];
 println!("Fitted values (response scale): {:?}", mu_result.fitted);
 println!("Linear predictor (eta): {:?}", mu_result.eta);
 println!("Standard errors on eta scale: {:?}", mu_result.se_eta);
 
 // Posterior samples for uncertainty quantification; Some(seed) makes them reproducible
 let samples = model.predict_samples(&new_data, &family, 1000, Some(42))?;
-let mu_samples = &samples["mu"];  // Vec<Array1<f64>> with 1000 samples
+let mu_samples = &samples[&Param::Mu];  // Vec<Array1<f64>> with 1000 samples
 
 // Raw coefficient draws from the posterior
-let beta_draws = model.posterior_samples("mu", 1000, Some(42))?;
+let beta_draws = model.posterior_samples(Param::Mu, 1000, Some(42))?;
 
 // Centile curves (response scale); percentiles in percent
 let centiles = model.centiles(&new_data, &family, &[2.0, 10.0, 50.0, 90.0, 98.0])?;
@@ -495,6 +496,7 @@ let resid = model.quantile_residuals(&family, &y, Some(42))?;
 Compare and select models by an information criterion or a deviance test:
 
 ```rust
+use glissando::Param;
 use glissando::selection::{ic_table, lr_test, step_gaic, Direction, StepScope};
 
 let family = Gaussian::new();
@@ -509,7 +511,7 @@ let rows = ic_table(&[("null", &m0), ("with_x", &m1)], &family, &y, 2.0)?;
 let lrt = lr_test(&m0, &m1, &family, &y)?;       // { lr_stat, df, p_value }
 
 // Greedy stepwise term selection by GAIC(k)
-let scope = vec![StepScope { param: "mu".into(), candidates: vec![/* Linear / Smooth terms */] }];
+let scope = vec![StepScope { param: Param::Mu, candidates: vec![/* Linear / Smooth terms */] }];
 let result = step_gaic(&data, &y, &family, start_formula, &scope,
                        (y.len() as f64).ln(), Direction::Both, FitConfig::default())?;
 let selected = result.model;   // result.trace records the accepted moves
@@ -525,11 +527,11 @@ Model where both mean and variance depend on x:
 
 ```rust
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ])
-    .with_terms("sigma", vec![
+    .with_terms(Param::Sigma, vec![
         Term::Intercept,
         Term::linear("x"),
     ]);
@@ -541,10 +543,10 @@ let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 
 ```rust
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::smooth(Smooth::ps("x").n_splines(15)),
     ])
-    .with_terms("sigma", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```
@@ -552,10 +554,11 @@ let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ### Count Data with Poisson
 
 ```rust
+use glissando::Param;
 use glissando::distributions::Poisson;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("predictor"),
     ]);
@@ -566,10 +569,11 @@ let model = GamlssModel::fit(&data, &counts, &formula, &Poisson::new())?;
 ### Binary/Binomial Data
 
 ```rust
+use glissando::Param;
 use glissando::distributions::Binomial;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ]);
@@ -585,15 +589,16 @@ let model = GamlssModel::fit(&data, &successes, &formula, &Binomial::with_trials
 ### Heavy-Tailed Data with Student-t
 
 ```rust
+use glissando::Param;
 use glissando::distributions::StudentT;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ])
-    .with_terms("sigma", vec![Term::Intercept])
-    .with_terms("nu", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept])
+    .with_terms(Param::Nu, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new())?;
 ```
@@ -602,12 +607,12 @@ let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new())?;
 
 ```rust
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
         Term::smooth(Smooth::re("subject_id")),
     ])
-    .with_terms("sigma", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ```
@@ -615,14 +620,15 @@ let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new())?;
 ### Overdispersed Count Data
 
 ```rust
+use glissando::Param;
 use glissando::distributions::NegativeBinomial;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ])
-    .with_terms("sigma", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &counts, &formula, &NegativeBinomial::new())?;
 ```
@@ -630,14 +636,15 @@ let model = GamlssModel::fit(&data, &counts, &formula, &NegativeBinomial::new())
 ### Proportion/Rate Data
 
 ```rust
+use glissando::Param;
 use glissando::distributions::Beta;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("x"),
     ])
-    .with_terms("phi", vec![Term::Intercept]);
+    .with_terms(Param::Phi, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &proportions, &formula, &Beta::new())?;
 ```
@@ -645,14 +652,15 @@ let model = GamlssModel::fit(&data, &proportions, &formula, &Beta::new())?;
 ### Duration/Positive Continuous Data
 
 ```rust
+use glissando::Param;
 use glissando::distributions::Gamma;
 
 let formula = Formula::new()
-    .with_terms("mu", vec![
+    .with_terms(Param::Mu, vec![
         Term::Intercept,
         Term::linear("age"),
     ])
-    .with_terms("sigma", vec![Term::Intercept]);
+    .with_terms(Param::Sigma, vec![Term::Intercept]);
 
 let model = GamlssModel::fit(&data, &durations, &formula, &Gamma::new())?;
 ```

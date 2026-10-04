@@ -6,13 +6,14 @@
 //! the historical hard-error behavior.
 
 use glissando::distributions::Gaussian;
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssError, GamlssModel, NaAction, Term};
 use ndarray::Array1;
 
 fn formula() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::linear("x")])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 /// Dropping incomplete rows gives exactly the fit obtained by removing those
@@ -49,8 +50,8 @@ fn drop_rows_equals_manual_prefilter() {
     )
     .unwrap();
 
-    let beta_auto = &model_auto.models["mu"].coefficients.0;
-    let beta_manual = &model_manual.models["mu"].coefficients.0;
+    let beta_auto = &model_auto.models[&Param::Mu].coefficients.0;
+    let beta_manual = &model_manual.models[&Param::Mu].coefficients.0;
     for (a, b) in beta_auto.iter().zip(beta_manual.iter()) {
         assert!(
             (a - b).abs() < 1e-10,
@@ -75,7 +76,7 @@ fn unreferenced_column_missing_does_not_drop_rows() {
 
     let model = GamlssModel::fit(&data, &Array1::from_vec(y), &formula(), &Gaussian).unwrap();
     // All rows survived, so a clean linear fit gets the slope right back.
-    let slope = model.models["mu"].coefficients.0[1];
+    let slope = model.models[&Param::Mu].coefficients.0[1];
     assert!((slope - 3.0).abs() < 1e-6, "slope {slope}");
 }
 

@@ -22,6 +22,7 @@ use super::{
     chain_to_eta, clamp_prob, DerivativeMap, Distribution, Eta, GamlssError, Link, LinkContext,
     LogitLink, ScoreInfo, DENOM_FLOOR, MIN_WEIGHT, PROB_EPS,
 };
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -30,15 +31,15 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct Hurdle {
     base: Box<dyn Distribution>,
-    /// `base.parameters()` followed by `"xi"`; backs [`Distribution::parameters`].
-    params: Vec<&'static str>,
+    /// `base.parameters()` followed by `Param::Xi`; backs [`Distribution::parameters`].
+    params: Vec<Param>,
 }
 
 impl Hurdle {
     /// Wrap `base` with a logit-linked zero atom `xi = P(Y = 0)`.
     pub fn new(base: Box<dyn Distribution>) -> Self {
         let mut params = base.parameters().to_vec();
-        params.push("xi");
+        params.push(Param::Xi);
         Self { base, params }
     }
 
@@ -54,12 +55,12 @@ impl Hurdle {
 }
 
 impl Distribution for Hurdle {
-    fn parameters(&self) -> &[&'static str] {
+    fn parameters(&self) -> &[Param] {
         &self.params
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
-        if param == "xi" {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
+        if param == Param::Xi {
             Ok(Box::new(LogitLink))
         } else {
             self.base.default_link(param)
@@ -71,12 +72,12 @@ impl Distribution for Hurdle {
     /// that refuses every name (Ocat) veto a parameter it has never heard of. The
     /// `xi` atom goes through `chain_to_eta` like any plain family, so it accepts
     /// any link.
-    fn allows_link_override(&self, param: &str) -> bool {
-        param == "xi" || self.base.allows_link_override(param)
+    fn allows_link_override(&self, param: Param) -> bool {
+        param == Param::Xi || self.base.allows_link_override(param)
     }
 
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
-        if param == "xi" {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
+        if param == Param::Xi {
             // Empirical zero fraction, clamped away from {0, 1}.
             let zeros = y.iter().filter(|&&v| Self::is_zero(v)).count() as f64;
             (zeros / y.len().max(1) as f64).clamp(0.05, 0.95)
@@ -90,12 +91,12 @@ impl Distribution for Hurdle {
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         let xi = params
-            .get("xi")
+            .get(&Param::Xi)
             .copied()
-            .ok_or_else(|| self.unknown_param("xi"))?;
+            .ok_or_else(|| self.unknown_param(Param::Xi))?;
         // Positive-part density is the base left-truncated at zero:
         // log g_T(y) = base.loglik(y) − log(1 − F(0)).
         let base_ll = self.base.loglik_pointwise(y, params)?;
@@ -128,13 +129,13 @@ impl Distribution for Hurdle {
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         ctx: &LinkContext,
     ) -> Result<DerivativeMap<Eta>, GamlssError> {
         let xi = params
-            .get("xi")
+            .get(&Param::Xi)
             .copied()
-            .ok_or_else(|| self.unknown_param("xi"))?;
+            .ok_or_else(|| self.unknown_param(Param::Xi))?;
         // Base parameters: zero-truncated score on positive rows, nothing on zeros.
         let base_derivs = self.base.eta_derivatives(y, params, ctx)?;
         let zeros = Array1::<f64>::zeros(y.len());
@@ -142,7 +143,7 @@ impl Distribution for Hurdle {
         let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params, ctx)?;
 
         let mut out = rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
-            let (d1_0, d2_0) = (&grad0[param].d1, &grad0[param].d2);
+            let (d1_0, d2_0) = (&grad0[&param].d1, &grad0[&param].d2);
             for i in 0..y.len() {
                 if Self::is_zero(y[i]) {
                     // Zero rows carry no information about the positive-part params.
@@ -188,14 +189,14 @@ impl Distribution for Hurdle {
             i_xi[i] = 1.0 / denom;
         }
         let xi_eta = chain_to_eta(
-            HashMap::from([("xi".to_string(), ScoreInfo::new(u_xi, i_xi))]),
+            HashMap::from([(Param::Xi, ScoreInfo::new(u_xi, i_xi))]),
             ctx,
         )?;
         out.extend(xi_eta);
         Ok(out)
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         // Reports the untruncated base variance. The zero atom and the truncation
         // are not folded in. This is a known diagnostic approximation, as in Truncated.
         self.base.variance(params)
@@ -222,11 +223,11 @@ mod tests {
     use crate::distributions::{Gamma, ProbitLink, SqrtLink};
     use ndarray::array;
 
-    fn gamma_hurdle_owned() -> Vec<(&'static str, Array1<f64>)> {
+    fn gamma_hurdle_owned() -> Vec<(Param, Array1<f64>)> {
         vec![
-            ("mu", array![2.0, 3.0, 1.5, 4.0]),
-            ("sigma", array![0.5, 0.4, 0.6, 0.3]),
-            ("xi", array![0.3, 0.3, 0.3, 0.3]),
+            (Param::Mu, array![2.0, 3.0, 1.5, 4.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.6, 0.3]),
+            (Param::Xi, array![0.3, 0.3, 0.3, 0.3]),
         ]
     }
 
@@ -244,8 +245,8 @@ mod tests {
     #[test]
     fn parameters_append_xi() {
         let h = Hurdle::new(Box::new(Gamma::new()));
-        assert_eq!(h.parameters(), &["mu", "sigma", "xi"]);
-        assert_eq!(h.default_link("xi").unwrap().link(0.5), 0.0); // logit(0.5)=0
+        assert_eq!(h.parameters(), &[Param::Mu, Param::Sigma, Param::Xi]);
+        assert_eq!(h.default_link(Param::Xi).unwrap().link(0.5), 0.0); // logit(0.5)=0
     }
 
     #[test]
@@ -253,9 +254,9 @@ mod tests {
         // Gamma base: F(0)=0 so the positive normalizer is 1; the zero atom is log ξ.
         let y = array![0.0, 2.0];
         let owned = [
-            ("mu", array![2.0, 2.0]),
-            ("sigma", array![0.5, 0.5]),
-            ("xi", array![0.25, 0.25]),
+            (Param::Mu, array![2.0, 2.0]),
+            (Param::Sigma, array![0.5, 0.5]),
+            (Param::Xi, array![0.25, 0.25]),
         ];
         let p = params_view(&owned);
         let h = Hurdle::new(Box::new(Gamma::new()));
@@ -271,9 +272,9 @@ mod tests {
         // ξ → 0 (no zeros) ⇒ positive rows reduce to the zero-truncated base.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![2.0, 2.0, 2.0]),
-            ("sigma", array![0.5, 0.5, 0.5]),
-            ("xi", array![1e-12, 1e-12, 1e-12]),
+            (Param::Mu, array![2.0, 2.0, 2.0]),
+            (Param::Sigma, array![0.5, 0.5, 0.5]),
+            (Param::Xi, array![1e-12, 1e-12, 1e-12]),
         ];
         let p = params_view(&owned);
         let h = Hurdle::new(Box::new(Gamma::new()));
@@ -291,9 +292,9 @@ mod tests {
         let y = array![0.0, 2.0, 3.0, 0.0];
         let owned = gamma_hurdle_owned();
         let h = Hurdle::new(Box::new(Gamma::new()));
-        check_score_via_finite_diff(&h, &y, &owned, "mu", 1e-4);
-        check_score_via_finite_diff(&h, &y, &owned, "sigma", 1e-4);
-        check_score_via_finite_diff(&h, &y, &owned, "xi", 1e-4);
+        check_score_via_finite_diff(&h, &y, &owned, Param::Mu, 1e-4);
+        check_score_via_finite_diff(&h, &y, &owned, Param::Sigma, 1e-4);
+        check_score_via_finite_diff(&h, &y, &owned, Param::Xi, 1e-4);
     }
 
     #[test]
@@ -307,8 +308,8 @@ mod tests {
         let y = array![0.0, 2.0, 3.0, 0.0];
         let owned = gamma_hurdle_owned();
         let h = Hurdle::new(Box::new(Gamma::new()));
-        check_eta_score_via_finite_diff(&h, &y, &owned, "mu", &SqrtLink, 1e-4);
-        check_eta_score_via_finite_diff(&h, &y, &owned, "xi", &ProbitLink, 1e-4);
+        check_eta_score_via_finite_diff(&h, &y, &owned, Param::Mu, &SqrtLink, 1e-4);
+        check_eta_score_via_finite_diff(&h, &y, &owned, Param::Xi, &ProbitLink, 1e-4);
     }
 
     #[test]
@@ -319,15 +320,15 @@ mod tests {
         // normalizer's `F'(0)/D` is evaluated in the saturated tail too.
         let y = array![0.0, 2.0, 0.0, 3.0];
         let owned = [
-            ("mu", array![1e-320, 1e13, 2.0, 1e-8]),
-            ("sigma", array![1e-8, 1e13, 0.5, 1e-320]),
-            ("xi", array![0.0, 1.0, 1e-320, 0.5]),
+            (Param::Mu, array![1e-320, 1e13, 2.0, 1e-8]),
+            (Param::Sigma, array![1e-8, 1e13, 0.5, 1e-320]),
+            (Param::Xi, array![0.0, 1.0, 1e-320, 0.5]),
         ];
         let h = Hurdle::new(Box::new(Gamma::new()));
         let p = params_view(&owned);
         let d = default_link_derivatives(&h, &y, &p).unwrap();
-        for name in ["mu", "sigma", "xi"] {
-            let (u, w) = (&d[name].score, &d[name].info);
+        for name in [Param::Mu, Param::Sigma, Param::Xi] {
+            let (u, w) = (&d[&name].score, &d[&name].info);
             assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
         }
     }

@@ -12,6 +12,7 @@
 use glissando::distributions::{
     link_from_name, Beta, Binomial, Distribution, Hurdle, Ocat, StudentT,
 };
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -106,7 +107,7 @@ fn binary_data() -> (DataSet, Array1<f64>) {
 
 fn formula() -> Formula {
     Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -128,7 +129,7 @@ fn overriding_the_link_changes_the_fit() {
         None,
         &f,
         &Binomial::new(1),
-        FitConfig::default().with_link("mu", "probit"),
+        FitConfig::default().with_link(Param::Mu, "probit"),
     )
     .unwrap();
     let cloglog = GamlssModel::fit_with_config(
@@ -137,11 +138,11 @@ fn overriding_the_link_changes_the_fit() {
         None,
         &f,
         &Binomial::new(1),
-        FitConfig::default().with_link("mu", "cloglog"),
+        FitConfig::default().with_link(Param::Mu, "cloglog"),
     )
     .unwrap();
 
-    let slope = |m: &GamlssModel| m.models["mu"].coefficients.0[1];
+    let slope = |m: &GamlssModel| m.models[&Param::Mu].coefficients.0[1];
     // All three should catch the positive trend...
     assert!(slope(&logit) > 0.0, "logit slope should be positive");
     assert!(slope(&probit) > 0.0, "probit slope should be positive");
@@ -159,9 +160,9 @@ fn overriding_the_link_changes_the_fit() {
     );
 
     // The override is recorded on the fitted parameter; the default is not.
-    assert_eq!(probit.models["mu"].link.as_deref(), Some("probit"));
-    assert_eq!(cloglog.models["mu"].link.as_deref(), Some("cloglog"));
-    assert_eq!(logit.models["mu"].link, None);
+    assert_eq!(probit.models[&Param::Mu].link.as_deref(), Some("probit"));
+    assert_eq!(cloglog.models[&Param::Mu].link.as_deref(), Some("cloglog"));
+    assert_eq!(logit.models[&Param::Mu].link, None);
 }
 
 #[test]
@@ -173,14 +174,14 @@ fn unknown_link_name_is_a_typed_error() {
         None,
         &formula(),
         &Binomial::new(1),
-        FitConfig::default().with_link("mu", "not_a_link"),
+        FitConfig::default().with_link(Param::Mu, "not_a_link"),
     );
     assert!(err.is_err(), "an unknown link name must fail the fit");
 }
 
 /// Intercept-only formula over the named parameters, enough to reach the link
 /// validation that runs first inside `fit_gamlss`.
-fn intercepts(params: &[&str]) -> Formula {
+fn intercepts(params: &[Param]) -> Formula {
     params.iter().fold(Formula::new(), |f, p| {
         f.with_terms(*p, vec![Term::Intercept])
     })
@@ -208,9 +209,9 @@ fn a_link_override_for_an_unknown_parameter_is_rejected() {
         &data,
         &y,
         None,
-        &intercepts(&["mu", "phi"]),
+        &intercepts(&[Param::Mu, Param::Phi]),
         &Beta,
-        FitConfig::default().with_link("sigma", "log"),
+        FitConfig::default().with_link(Param::Sigma, "log"),
     )
     .expect_err("an override keyed on a parameter Beta does not have must fail the fit");
     let msg = err.to_string();
@@ -222,19 +223,19 @@ fn a_link_override_for_an_unknown_parameter_is_rejected() {
 
 #[test]
 fn ocat_rejects_every_link_override() {
-    // Ocat's `params["mu"]` holds η, and its threshold Jacobian is `exp(η_k)`
+    // Ocat's `params[&Param::Mu]` holds η, and its threshold Jacobian is `exp(η_k)`
     // only under the log link, so no override can be honored.
     let n = 40;
     let y: Array1<f64> = (0..n).map(|i| (i % 3 + 1) as f64).collect();
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec((0..n).map(|i| i as f64).collect()));
 
-    for param in ["mu", "delta_1", "delta_2"] {
+    for param in [Param::Mu, Param::Delta1, Param::Delta2] {
         let err = GamlssModel::fit_with_config(
             &data,
             &y,
             None,
-            &intercepts(&["mu", "delta_1", "delta_2"]),
+            &intercepts(&[Param::Mu, Param::Delta1, Param::Delta2]),
             &Ocat::new(3),
             FitConfig::default().with_link(param, "probit"),
         )
@@ -243,7 +244,7 @@ fn ocat_rejects_every_link_override() {
         // literally, hiding which of the three parameters regressed.
         .unwrap_or_else(|| panic!("Ocat must reject a link override on {param}"));
         assert!(
-            err.to_string().contains("Ocat") && err.to_string().contains(param),
+            err.to_string().contains("Ocat") && err.to_string().contains(param.as_str()),
             "the error should name the family and the parameter, got: {err}"
         );
     }
@@ -257,7 +258,7 @@ fn student_t_rejects_an_override_on_nu_only() {
         .collect();
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec((0..n).map(|i| i as f64).collect()));
-    let f = intercepts(&["mu", "sigma", "nu"]);
+    let f = intercepts(&[Param::Mu, Param::Sigma, Param::Nu]);
 
     let err = GamlssModel::fit_with_config(
         &data,
@@ -265,7 +266,7 @@ fn student_t_rejects_an_override_on_nu_only() {
         None,
         &f,
         &StudentT,
-        FitConfig::default().with_link("nu", "log"),
+        FitConfig::default().with_link(Param::Nu, "log"),
     )
     .expect_err(
         "StudentT must reject an override on nu: its KKT floor projection assumes FlooredLog",
@@ -283,7 +284,7 @@ fn student_t_rejects_an_override_on_nu_only() {
         None,
         &f,
         &StudentT,
-        FitConfig::default().with_link("sigma", "sqrt"),
+        FitConfig::default().with_link(Param::Sigma, "sqrt"),
     )
     .expect("StudentT sigma should still accept an override");
 }
@@ -295,18 +296,18 @@ fn hurdle_answers_for_xi_itself_rather_than_asking_its_base() {
     // heard of. Hurdle's ξ atom goes through `chain_to_eta`, so it accepts links.
     let hurdle_over_ocat = Hurdle::new(Box::new(Ocat::new(3)));
     assert!(
-        hurdle_over_ocat.allows_link_override("xi"),
+        hurdle_over_ocat.allows_link_override(Param::Xi),
         "xi is the wrapper's own parameter and is link-generic"
     );
     assert!(
-        !hurdle_over_ocat.allows_link_override("mu"),
+        !hurdle_over_ocat.allows_link_override(Param::Mu),
         "a base parameter still answers for itself"
     );
 
     // And the ordinary case still delegates through to an accepting base.
     let hurdle_over_gamma = Hurdle::new(Box::new(glissando::distributions::Gamma));
-    assert!(hurdle_over_gamma.allows_link_override("xi"));
-    assert!(hurdle_over_gamma.allows_link_override("mu"));
+    assert!(hurdle_over_gamma.allows_link_override(Param::Xi));
+    assert!(hurdle_over_gamma.allows_link_override(Param::Mu));
 }
 
 /// A family may only refuse a name it has. Without this, a family added
@@ -322,25 +323,24 @@ fn refusals_only_ever_name_real_parameters() {
         Box::new(Binomial::new(1)),
         Box::new(Hurdle::new(Box::new(glissando::distributions::Gamma))),
     ];
+    for junk in ["not_a_parameter", "", "MU"] {
+        assert!(
+            junk.parse::<Param>().is_err(),
+            "{junk:?} unexpectedly parses as a parameter"
+        );
+    }
     for family in &families {
-        for junk in ["not_a_parameter", "", "MU"] {
-            assert!(
-                !family.parameters().contains(&junk),
-                "{} unexpectedly has a parameter named {junk:?}",
-                family.name()
-            );
-        }
         // Every refused name must be one the family exposes; the fit
         // rejects unknown keys before ever consulting `allows_link_override`.
-        let refused: Vec<&str> = family
+        let refused: Vec<Param> = family
             .parameters()
             .iter()
             .copied()
-            .filter(|p| !family.allows_link_override(p))
+            .filter(|&p| !family.allows_link_override(p))
             .collect();
         for p in &refused {
             assert!(
-                family.default_link(p).is_ok(),
+                family.default_link(*p).is_ok(),
                 "{} refuses an override for {p}, which is not one of its parameters",
                 family.name()
             );
@@ -360,7 +360,7 @@ fn json_roundtrip_preserves_overridden_link() {
         None,
         &formula(),
         &family,
-        FitConfig::default().with_link("mu", "probit"),
+        FitConfig::default().with_link(Param::Mu, "probit"),
     )
     .unwrap();
     let preds = model.predict(&data, &family).unwrap();
@@ -371,13 +371,13 @@ fn json_roundtrip_preserves_overridden_link() {
     // name string could not rebuild it.
     assert_eq!(desc.build().unwrap().name(), "Binomial");
     // The persisted link survives the round-trip...
-    assert_eq!(reloaded.models["mu"].link.as_deref(), Some("probit"));
+    assert_eq!(reloaded.models[&Param::Mu].link.as_deref(), Some("probit"));
 
     // ...and predict reconstructs the probit link, not the logit default, so
     // predictions match bit-for-bit. (A regression that dropped the persisted
     // link would predict through logit and diverge here.)
     let preds2 = reloaded.predict(&data, &family).unwrap();
-    for (a, b) in preds["mu"].iter().zip(preds2["mu"].iter()) {
+    for (a, b) in preds[&Param::Mu].iter().zip(preds2[&Param::Mu].iter()) {
         assert!(
             (a - b).abs() < 1e-12,
             "probit predictions must survive JSON round-trip ({a} vs {b})"

@@ -4,6 +4,7 @@ use common::{
     intercept_only, linear, linear_intercepts, pspline_with, random, sample_negative_binomial,
     smooth_intercepts, Generator,
 };
+use glissando::Param;
 use glissando::{
     distributions::{Beta, Binomial, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT},
     DataSet, Formula, GamlssModel, Term,
@@ -30,11 +31,11 @@ fn test_poisson_with_smooth() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 10, &["mu"]);
+    let formula = smooth_intercepts("x", 10, &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(edf > 2.0, "EDF too low for nonlinear Poisson: {}", edf);
     assert!(edf < 10.0, "EDF too high: {}", edf);
 }
@@ -58,11 +59,11 @@ fn test_student_t_linear() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - 5.0).abs() < 0.5,
         "Intercept should be ~5, got {}",
@@ -81,7 +82,7 @@ fn test_different_spline_configs() {
     let (y, data) = rng.linear_gaussian(200, 1.0, 5.0, 1.0);
 
     for n_splines in [5, 10, 20] {
-        let formula = smooth_intercepts("x", n_splines, &["mu", "sigma"]);
+        let formula = smooth_intercepts("x", n_splines, &[Param::Mu, Param::Sigma]);
         let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new());
         assert!(model.is_ok(), "Failed with n_splines={}", n_splines);
     }
@@ -106,18 +107,18 @@ fn test_penalty_order_1_vs_2() {
 
     // First-difference penalty: penalizes non-flat trends.
     let formula1 = Formula::new()
-        .with_terms("mu", vec![pspline_with("x", 15, 3, 1)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![pspline_with("x", 15, 3, 1)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     // Second-difference penalty: penalizes curvature.
     let formula2 = Formula::new()
-        .with_terms("mu", vec![pspline_with("x", 15, 3, 2)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![pspline_with("x", 15, 3, 2)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model1 = GamlssModel::fit(&data, &y, &formula1, &Gaussian::new()).unwrap();
     let model2 = GamlssModel::fit(&data, &y, &formula2, &Gaussian::new()).unwrap();
 
-    assert!(model1.models["mu"].edf > 2.0);
-    assert!(model2.models["mu"].edf > 2.0);
+    assert!(model1.models[&Param::Mu].edf > 2.0);
+    assert!(model2.models[&Param::Mu].edf > 2.0);
 }
 
 #[test]
@@ -138,12 +139,12 @@ fn test_very_noisy_data() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Even under heavy noise, the slope estimate should stay close
-    let slope = model.models["mu"].coefficients[1];
+    let slope = model.models[&Param::Mu].coefficients[1];
     assert!(
         (slope - 2.0).abs() < 1.0,
         "Slope should be roughly ~2 even with noise, got {}",
@@ -161,11 +162,11 @@ fn test_perfect_linear_fit() {
         Array1::from_vec(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]),
     );
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         coeffs[0].abs() < 1e-6,
         "Intercept should be ~0, got {}",
@@ -183,12 +184,12 @@ fn test_lambdas_positive() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(200, 1.0, 5.0, 1.0);
 
-    let formula = smooth_intercepts("x", 10, &["mu", "sigma"]);
+    let formula = smooth_intercepts("x", 10, &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // every smoothing parameter must be positive
-    for &lambda in model.models["mu"].lambdas.iter() {
+    for &lambda in model.models[&Param::Mu].lambdas.iter() {
         assert!(lambda > 0.0, "Lambda should be positive, got {}", lambda);
     }
 }
@@ -198,11 +199,11 @@ fn test_covariance_symmetric() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let cov = &model.models["mu"].covariance.0;
+    let cov = &model.models[&Param::Mu].covariance.0;
     let (n, m) = cov.dim();
 
     assert_eq!(n, m, "Covariance should be square");
@@ -220,19 +221,19 @@ fn test_fitted_values_match_eta_transform() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Gaussian mu uses an identity link, so fitted_values equals eta
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     for i in 0..mu.eta.len() {
         let diff = (mu.fitted_values[i] - mu.eta[i]).abs();
         assert!(diff < 1e-10, "For identity link, fitted should equal eta");
     }
 
     // sigma uses a log link, so fitted_values equals exp(eta)
-    let sigma = &model.models["sigma"];
+    let sigma = &model.models[&Param::Sigma];
     for i in 0..sigma.eta.len() {
         let expected = sigma.eta[i].exp();
         let diff = (sigma.fitted_values[i] - expected).abs();
@@ -250,13 +251,13 @@ fn test_random_effect_basic() {
     data.insert_column("group".to_string(), group);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![random("group")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![random("group")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     assert_eq!(
-        model.models["mu"].coefficients.len(),
+        model.models[&Param::Mu].coefficients.len(),
         3,
         "Should have one coefficient per group"
     );
@@ -285,7 +286,7 @@ fn test_wide_data_more_predictors() {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 linear("x1"),
@@ -294,11 +295,11 @@ fn test_wide_data_more_predictors() {
                 linear("x4"),
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     assert_eq!(coeffs.len(), 5, "Should have 5 coefficients");
 
     // confirm every coefficient is present
@@ -336,11 +337,11 @@ fn test_poisson_multiple_predictors() {
     data.insert_column("x2".to_string(), Array1::from_vec(x2));
 
     let formula =
-        Formula::new().with_terms("mu", vec![Term::Intercept, linear("x1"), linear("x2")]);
+        Formula::new().with_terms(Param::Mu, vec![Term::Intercept, linear("x1"), linear("x2")]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (coeffs[0] - 1.0).abs() < 0.15,
         "Poisson intercept should be ~1.0, got {}",
@@ -380,11 +381,11 @@ fn test_poisson_high_rate() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (coeffs[0] - 3.0).abs() < 0.15,
         "High-rate Poisson intercept should be ~3.0, got {}",
@@ -421,11 +422,11 @@ fn test_poisson_smooth_nonlinear() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 12, &["mu"]);
+    let formula = smooth_intercepts("x", 12, &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     // With n=400 >> 12 basis functions, REML selects little or no
     // penalization: the marginal likelihood peaks near lambda≈0 because model
     // complexity (12 params) is far below sample size (400 obs). The lower
@@ -465,11 +466,11 @@ fn test_poisson_low_counts() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     // low counts carry less signal, so loosen the tolerance
     assert!(
         (coeffs[0] - (-0.5)).abs() < 0.3,
@@ -513,11 +514,11 @@ fn test_student_t_smooth_mu() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 15, &["mu", "sigma", "nu"]);
+    let formula = smooth_intercepts("x", 15, &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(
         edf > 3.0,
         "StudentT smooth mu EDF too low for sinusoidal: {}",
@@ -554,14 +555,14 @@ fn test_student_t_heteroskedastic() {
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, linear("x")])
-        .with_terms("sigma", vec![Term::Intercept, linear("x")])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept, linear("x")])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
-    let sigma_coeffs = &model.models["sigma"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
+    let sigma_coeffs = &model.models[&Param::Sigma].coefficients;
 
     // mu first
     assert!(
@@ -613,11 +614,11 @@ fn test_student_t_heavy_tails() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let nu_coeff = model.models["nu"].coefficients[0];
+    let nu_coeff = model.models[&Param::Nu].coefficients[0];
     let fitted_nu = nu_coeff.exp();
 
     // nu is a noisy estimate, but for heavy tails it should still land in range
@@ -663,15 +664,15 @@ fn test_student_t_multiple_predictors() {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, linear("x1"), linear("x2"), linear("x3")],
         )
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (coeffs[0] - 2.0).abs() < 0.4,
         "StudentT intercept should be ~2.0, got {}",
@@ -720,11 +721,11 @@ fn test_student_t_near_gaussian() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
 
     // with high nu the estimates should match what a Gaussian fit would give
     assert!(
@@ -742,7 +743,7 @@ fn test_student_t_near_gaussian() {
 
     // fitted nu should be reasonably high. It is noisy for near-Gaussian data
     // because there is little tail information to separate moderate nu from high nu.
-    let fitted_nu = model.models["nu"].coefficients[0].exp();
+    let fitted_nu = model.models[&Param::Nu].coefficients[0].exp();
     assert!(
         fitted_nu > 5.0,
         "Near-Gaussian StudentT should have moderate-to-high nu, got {}",
@@ -780,11 +781,11 @@ fn test_gamma_linear_mu() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gamma::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     // log link, so these coefficients are on the log scale
     assert!(
         (mu_coeffs[0] - 1.0).abs() < 0.2,
@@ -827,13 +828,13 @@ fn test_gamma_heteroscedastic() {
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, linear("x")])
-        .with_terms("sigma", vec![Term::Intercept, linear("x")]);
+        .with_terms(Param::Mu, vec![Term::Intercept, linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept, linear("x")]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gamma::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
-    let sigma_coeffs = &model.models["sigma"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
+    let sigma_coeffs = &model.models[&Param::Sigma].coefficients;
 
     assert!(
         (mu_coeffs[0] - 2.0).abs() < 0.3,
@@ -885,11 +886,11 @@ fn test_gamma_smooth_mu() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 12, &["mu", "sigma"]);
+    let formula = smooth_intercepts("x", 12, &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gamma::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(
         edf > 2.0,
         "Gamma smooth mu EDF too low for sinusoidal: {}",
@@ -925,11 +926,11 @@ fn test_negative_binomial_linear() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - 1.5).abs() < 0.3,
         "NB mu intercept should be ~1.5, got {}",
@@ -965,11 +966,11 @@ fn test_negative_binomial_overdispersed() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - 2.0).abs() < 0.3,
         "NB overdispersed mu intercept should be ~2.0, got {}",
@@ -982,7 +983,7 @@ fn test_negative_binomial_overdispersed() {
     );
 
     // sigma should be finite and clearly overdispersed
-    let sigma_coeff = model.models["sigma"].coefficients[0];
+    let sigma_coeff = model.models[&Param::Sigma].coefficients[0];
     let fitted_sigma = sigma_coeff.exp();
     assert!(
         fitted_sigma > 0.3,
@@ -1016,11 +1017,11 @@ fn test_negative_binomial_smooth() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 12, &["mu", "sigma"]);
+    let formula = smooth_intercepts("x", 12, &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(
         edf > 2.0,
         "NB smooth mu EDF too low for sinusoidal: {}",
@@ -1054,12 +1055,12 @@ fn test_negative_binomial_multiple_predictors() {
     data.insert_column("x2".to_string(), Array1::from_vec(x2));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, linear("x1"), linear("x2")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, linear("x1"), linear("x2")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &NegativeBinomial::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - 1.0).abs() < 0.3,
         "NB intercept should be ~1.0, got {}",
@@ -1113,11 +1114,11 @@ fn test_beta_linear_mu() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "phi"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Phi]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Beta::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     // these coefficients are on the logit scale
     assert!(
         mu_coeffs[0].abs() < 0.3,
@@ -1159,12 +1160,12 @@ fn test_beta_varying_precision() {
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("phi", vec![Term::Intercept, linear("x")]);
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Phi, vec![Term::Intercept, linear("x")]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Beta::new()).unwrap();
 
-    let phi_coeffs = &model.models["phi"].coefficients;
+    let phi_coeffs = &model.models[&Param::Phi].coefficients;
     assert!(
         (phi_coeffs[0] - 1.0).abs() < 0.4,
         "Beta phi intercept should be ~1.0, got {}",
@@ -1205,11 +1206,11 @@ fn test_beta_smooth_mu() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 12, &["mu", "phi"]);
+    let formula = smooth_intercepts("x", 12, &[Param::Mu, Param::Phi]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Beta::new()).unwrap();
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(edf > 2.0, "Beta smooth mu EDF too low: {}", edf);
     assert!(edf < 12.0, "Beta smooth mu EDF too high: {}", edf);
 }
@@ -1240,11 +1241,11 @@ fn test_beta_high_precision() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "phi"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Phi]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Beta::new()).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - (-0.5)).abs() < 0.3,
         "Beta high-precision mu intercept should be ~-0.5, got {}",
@@ -1257,7 +1258,7 @@ fn test_beta_high_precision() {
     );
 
     // phi should be estimated high, matching the truth
-    let phi_coeff = model.models["phi"].coefficients[0];
+    let phi_coeff = model.models[&Param::Phi].coefficients[0];
     let fitted_phi = phi_coeff.exp();
     assert!(
         fitted_phi > 20.0,
@@ -1294,11 +1295,11 @@ fn test_binomial_linear() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Binomial::new(n_trials)).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coeffs[0] - true_intercept).abs() < 0.5,
         "Binomial intercept should be ~{}, got {}",
@@ -1332,12 +1333,12 @@ fn test_binomial_high_probability() {
     let y = Array1::from_vec(y_vec);
     let data = DataSet::new();
 
-    let formula = intercept_only(&["mu"]);
+    let formula = intercept_only(&[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Binomial::new(n_trials)).unwrap();
 
     // fitted probability should sit close to the truth
-    let mu_coeff = model.models["mu"].coefficients[0];
+    let mu_coeff = model.models[&Param::Mu].coefficients[0];
     let fitted_mu = 1.0 / (1.0 + (-mu_coeff).exp()); // back through the inverse logit
     assert!(
         (fitted_mu - true_mu).abs() < 0.1,
@@ -1375,15 +1376,15 @@ fn test_binomial_multiple_predictors() {
     data.insert_column("x2".to_string(), Array1::from_vec(x2));
 
     let formula =
-        Formula::new().with_terms("mu", vec![Term::Intercept, linear("x1"), linear("x2")]);
+        Formula::new().with_terms(Param::Mu, vec![Term::Intercept, linear("x1"), linear("x2")]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Binomial::new(n_trials)).unwrap();
 
-    let mu_coeffs = &model.models["mu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
     assert_eq!(mu_coeffs.0.len(), 3, "Should have 3 coefficients");
 
     // every fitted value must be a valid probability, strictly inside (0, 1)
-    let mu_fitted = &model.models["mu"].fitted_values;
+    let mu_fitted = &model.models[&Param::Mu].fitted_values;
     assert!(
         mu_fitted.iter().all(|&v| v > 0.0 && v < 1.0),
         "All fitted probabilities should be in (0, 1)"

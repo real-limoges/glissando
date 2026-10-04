@@ -8,6 +8,7 @@
 
 use super::MIN_POSITIVE;
 use crate::math::{median, median_abs_deviation};
+use crate::Param;
 use ndarray::Array1;
 
 /// Threshold below which `ν` is treated as 0 for the *inverse* transform, where
@@ -61,15 +62,15 @@ pub(super) fn boxcox_inv(mu: f64, sigma: f64, nu: f64, z: f64) -> f64 {
 /// by skew/outliers), and `nu` starts symmetric (the identity of the Box-Cox
 /// power). Returns `None` for any other parameter name so each family can layer
 /// its own extra parameter (`tau`) seed on top.
-pub(super) fn boxcox_seed(param: &str, y: &Array1<f64>) -> Option<f64> {
+pub(super) fn boxcox_seed(param: Param, y: &Array1<f64>) -> Option<f64> {
     match param {
-        "mu" => Some(median(y)),
-        "sigma" => {
+        Param::Mu => Some(median(y)),
+        Param::Sigma => {
             let med = median(y);
             let cv = 1.4826 * median_abs_deviation(y) / med.abs().max(MIN_POSITIVE);
             Some(cv.clamp(0.01, 10.0))
         }
-        "nu" => Some(1.0),
+        Param::Nu => Some(1.0),
         _ => None,
     }
 }

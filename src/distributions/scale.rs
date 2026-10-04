@@ -26,12 +26,13 @@
 //!
 //! ```compile_fail
 //! use glissando::distributions::{DerivativeMap, Eta, Natural, ScoreInfo};
+//! use glissando::Param;
 //! use glissando::ndarray::array;
 //!
 //! fn wants_eta(_: &DerivativeMap<Eta>) {}
 //!
 //! let mut natural: DerivativeMap<Natural> = DerivativeMap::new();
-//! natural.insert("mu".to_string(), ScoreInfo::new(array![1.0], array![1.0]));
+//! natural.insert(Param::Mu, ScoreInfo::new(array![1.0], array![1.0]));
 //! wants_eta(&natural); // mismatched types: Natural is not Eta
 //! ```
 //!
@@ -39,6 +40,7 @@
 //! [`Distribution::cdf_theta_derivatives`]: super::Distribution::cdf_theta_derivatives
 //! [`chain_to_eta`]: super::chain_to_eta
 
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -122,8 +124,8 @@ impl CdfGrad<Eta> {
     }
 }
 
-/// Score / information pairs keyed by distribution-parameter name, on scale `S`.
-pub type DerivativeMap<S> = HashMap<String, ScoreInfo<S>>;
+/// Score / information pairs keyed by distribution parameter, on scale `S`.
+pub type DerivativeMap<S> = HashMap<Param, ScoreInfo<S>>;
 
-/// CDF derivative pairs keyed by distribution-parameter name, on scale `S`.
-pub type CdfMap<S> = HashMap<String, CdfGrad<S>>;
+/// CDF derivative pairs keyed by distribution parameter, on scale `S`.
+pub type CdfMap<S> = HashMap<Param, CdfGrad<S>>;

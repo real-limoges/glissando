@@ -116,8 +116,9 @@ let test = glissando::selection::lr_test(&small, &big, &family, &y).unwrap();  /
 R's `stepGAIC`:
 
 ```rust
+use glissando::Param;
 use glissando::selection::{step_gaic, Direction, StepScope};
-let scope = vec![StepScope { param: "mu".into(), candidates: vec![Term::linear("x"), Term::linear("z")] }];
+let scope = vec![StepScope { param: Param::Mu, candidates: vec![Term::linear("x"), Term::linear("z")] }];
 let result = step_gaic(&data, &y, &family, start_formula, &scope, 2.0, Direction::Both, FitConfig::default()).unwrap();
 // result.model, result.formula, result.trace
 ```

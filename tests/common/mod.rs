@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use glissando::{DataSet, Formula, Smooth, Term};
+use glissando::{DataSet, Formula, Param, Smooth, Term};
 use ndarray::Array1;
 use rand::prelude::*;
 use rand_distr::{Distribution, Gamma as RGamma, Normal, Poisson, StudentT as RStudentT};
@@ -67,32 +67,32 @@ pub fn cr_spline(col: &str, k: usize) -> Term {
 }
 
 /// Formula with `Intercept` for every named parameter.
-pub fn intercept_only(params: &[&str]) -> Formula {
+pub fn intercept_only(params: &[Param]) -> Formula {
     let mut f = Formula::new();
     for p in params {
-        f.add_terms((*p).to_string(), vec![Term::Intercept]);
+        f.add_terms(*p, vec![Term::Intercept]);
     }
     f
 }
 
 /// Formula with `Intercept + Linear(col)` for the first parameter and `Intercept` for the rest.
-pub fn linear_intercepts(col: &str, params: &[&str]) -> Formula {
+pub fn linear_intercepts(col: &str, params: &[Param]) -> Formula {
     let mut f = Formula::new();
     let (head, rest) = params.split_first().expect("params must be non-empty");
-    f.add_terms((*head).to_string(), vec![Term::Intercept, linear(col)]);
+    f.add_terms(*head, vec![Term::Intercept, linear(col)]);
     for p in rest {
-        f.add_terms((*p).to_string(), vec![Term::Intercept]);
+        f.add_terms(*p, vec![Term::Intercept]);
     }
     f
 }
 
 /// Formula with a P-spline on `col` for the first parameter and `Intercept` for the rest.
-pub fn smooth_intercepts(col: &str, n_splines: usize, params: &[&str]) -> Formula {
+pub fn smooth_intercepts(col: &str, n_splines: usize, params: &[Param]) -> Formula {
     let mut f = Formula::new();
     let (head, rest) = params.split_first().expect("params must be non-empty");
-    f.add_terms((*head).to_string(), vec![pspline(col, n_splines)]);
+    f.add_terms(*head, vec![pspline(col, n_splines)]);
     for p in rest {
-        f.add_terms((*p).to_string(), vec![Term::Intercept]);
+        f.add_terms(*p, vec![Term::Intercept]);
     }
     f
 }

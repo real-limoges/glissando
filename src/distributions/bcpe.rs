@@ -20,6 +20,7 @@ use super::{
     Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma, trigamma};
+use crate::Param;
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, Gamma as SGamma};
 use statrs::function::gamma::{gamma_lr, ln_gamma};
@@ -58,25 +59,25 @@ fn pe_log_norm(tau: f64) -> f64 {
 }
 
 impl Distribution for BCPE {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma", "nu", "tau"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma, Param::Nu, Param::Tau]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(LogLink)),
-            "sigma" => Ok(Box::new(LogLink)),
-            "nu" => Ok(Box::new(IdentityLink)),
-            "tau" => Ok(Box::new(LogLink)),
+            Param::Mu => Ok(Box::new(LogLink)),
+            Param::Sigma => Ok(Box::new(LogLink)),
+            Param::Nu => Ok(Box::new(IdentityLink)),
+            Param::Tau => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
 
     /// Robust seeds: `μ₀ = median(y)`, `σ₀` = robust CV, `ν₀ = 1` (symmetric),
     /// `τ₀ = 2` (start at the normal / BCCG).
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         boxcox_seed(param, y).unwrap_or_else(|| {
-            if param != "tau" {
+            if param != Param::Tau {
                 debug_assert!(false, "BCPE has no parameter '{param}'");
             }
             TAU_INIT
@@ -88,7 +89,7 @@ impl Distribution for BCPE {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The PE score swaps out the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
@@ -98,10 +99,10 @@ impl Distribution for BCPE {
         //   dl/dσ = [(τ/2)gₜ − 1] / σ   (numerator = z·D − 1)
         //   dl/dν = −D·∂z/∂ν + log(y/μ)
         //   dl/dτ = N'(τ) − gₜ·log gₜ /(2τ) + ½gₜ·B(τ)
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
-        let tau = require(self, params, "tau")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
+        let tau = require(self, params, Param::Tau)?;
         let n = y.len();
 
         let mut u_mu = Array1::<f64>::zeros(n);
@@ -185,22 +186,22 @@ impl Distribution for BCPE {
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
-            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
-            ("nu".to_string(), ScoreInfo::new(u_nu, i_nu)),
-            ("tau".to_string(), ScoreInfo::new(u_tau, i_tau)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
+            (Param::Nu, ScoreInfo::new(u_nu, i_nu)),
+            (Param::Tau, ScoreInfo::new(u_tau, i_tau)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
-        let tau = require(self, params, "tau")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
+        let tau = require(self, params, Param::Tau)?;
         let n = y.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -219,9 +220,9 @@ impl Distribution for BCPE {
 
     /// `Var(Y) ≈ (σμ)²`; `σ` is (approximately) the CV, thanks to the variance-1
     /// standardization of the PE. Used only for Pearson residuals.
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(boxcox_cv_variance(mu, sigma))
     }
 
@@ -229,25 +230,25 @@ impl Distribution for BCPE {
     /// is symmetric, so the leading skew correction is unchanged).
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         Ok(boxcox_expected_value(mu, sigma, nu))
     }
 
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // F(y) = ½ + ½·sign(z)·P(1/τ, ½|z/c|^τ), the power-exponential CDF of z,
         // where P is the regularized lower incomplete gamma.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
-        let tau = require(self, params, "tau")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
+        let tau = require(self, params, Param::Tau)?;
         let n = y.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -269,14 +270,14 @@ impl Distribution for BCPE {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Invert the PE CDF for z, then invert the Box-Cox transform. For p ≥ ½:
         // s = P⁻¹(1/τ, 2p−1) (a Gamma(1/τ, 1) quantile), z = c·(2s)^{1/τ}.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
-        let tau = require(self, params, "tau")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
+        let tau = require(self, params, Param::Tau)?;
         let n = p.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -327,10 +328,10 @@ mod tests {
         let nu = array![1.0, 0.5, -0.5, 1.5];
         let tau = array![2.0, 1.5, 3.0, 2.5];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
-        p.insert("nu", &nu);
-        p.insert("tau", &tau);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
+        p.insert(Param::Nu, &nu);
+        p.insert(Param::Tau, &tau);
         derivative_keys_match_parameters(&BCPE, p, &y);
     }
 
@@ -340,15 +341,15 @@ mod tests {
         // and the ν≈0 limit, so every score branch is exercised.
         let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
-            ("nu", array![1.0, 0.5, 1.5, -0.5, 1e-8]),
-            ("tau", array![2.0, 1.5, 3.0, 2.5, 1.8]),
+            (Param::Mu, array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            (Param::Nu, array![1.0, 0.5, 1.5, -0.5, 1e-8]),
+            (Param::Tau, array![2.0, 1.5, 3.0, 2.5, 1.8]),
         ];
-        check_score_via_finite_diff(&BCPE, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&BCPE, &y, &owned, "sigma", 1e-5);
-        check_score_via_finite_diff(&BCPE, &y, &owned, "nu", 1e-5);
-        check_score_via_finite_diff(&BCPE, &y, &owned, "tau", 1e-4);
+        check_score_via_finite_diff(&BCPE, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&BCPE, &y, &owned, Param::Sigma, 1e-5);
+        check_score_via_finite_diff(&BCPE, &y, &owned, Param::Nu, 1e-5);
+        check_score_via_finite_diff(&BCPE, &y, &owned, Param::Tau, 1e-4);
     }
 
     #[test]
@@ -359,15 +360,15 @@ mod tests {
         // default-link test above covers the negative and near-zero branches.
         let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
-            ("nu", array![1.0, 0.5, 1.5, 0.75, 2.0]),
-            ("tau", array![2.0, 1.5, 3.0, 2.5, 1.8]),
+            (Param::Mu, array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            (Param::Nu, array![1.0, 0.5, 1.5, 0.75, 2.0]),
+            (Param::Tau, array![2.0, 1.5, 3.0, 2.5, 1.8]),
         ];
-        check_eta_score_via_finite_diff(&BCPE, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&BCPE, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&BCPE, &y, &owned, "nu", &LogLink, 1e-5);
-        check_eta_score_via_finite_diff(&BCPE, &y, &owned, "tau", &SqrtLink, 1e-4);
+        check_eta_score_via_finite_diff(&BCPE, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCPE, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCPE, &y, &owned, Param::Nu, &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCPE, &y, &owned, Param::Tau, &SqrtLink, 1e-4);
     }
 
     #[test]
@@ -376,21 +377,21 @@ mod tests {
         // η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8]),
-            ("sigma", array![1e-8, 0.0, 1e-320]),
-            ("nu", array![1.0, 0.5, -0.5]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8]),
+            (Param::Sigma, array![1e-8, 0.0, 1e-320]),
+            (Param::Nu, array![1.0, 0.5, -0.5]),
             // τ stays clear of 0.5, where the pre-existing `i_loc` normalizer hits
             // `ln_gamma(2 − 1/τ) = ln_gamma(0) = ∞`. That singularity is
             // not what this test is checking.
-            ("tau", array![1.5, 2.0, 3.0]),
+            (Param::Tau, array![1.5, 2.0, 3.0]),
         ];
         let p = params_view(&owned);
         let natural = BCPE.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&BCPE, &y, &p).unwrap();
-        for name in ["mu", "sigma", "nu", "tau"] {
-            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
+        for name in [Param::Mu, Param::Sigma, Param::Nu, Param::Tau] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = (&chained[name].score, &chained[name].info);
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -399,10 +400,10 @@ mod tests {
     fn cdf_quantile_roundtrip_bcpe() {
         let y = array![0.6, 1.5, 3.0, 7.0, 2.0];
         let owned = [
-            ("mu", array![1.0, 2.0, 4.0, 6.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.35, 0.3]),
-            ("nu", array![1.0, 0.5, -0.5, 1.5, 0.0]),
-            ("tau", array![2.0, 1.5, 3.0, 2.5, 1.8]),
+            (Param::Mu, array![1.0, 2.0, 4.0, 6.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.35, 0.3]),
+            (Param::Nu, array![1.0, 0.5, -0.5, 1.5, 0.0]),
+            (Param::Tau, array![2.0, 1.5, 3.0, 2.5, 1.8]),
         ];
         check_cdf_quantile_roundtrip(&BCPE, &y, &owned, 1e-5);
         check_cdf_pdf_consistency(&BCPE, &y, &owned, 1e-5, 1e-3);
@@ -412,10 +413,10 @@ mod tests {
     fn cdf_monotone_bcpe() {
         let grid = Array1::from_iter((0..80).map(|i| 0.05 + i as f64 * 0.1));
         let owned = [
-            ("mu", array![3.0]),
-            ("sigma", array![0.3]),
-            ("nu", array![0.8]),
-            ("tau", array![1.6]),
+            (Param::Mu, array![3.0]),
+            (Param::Sigma, array![0.3]),
+            (Param::Nu, array![0.8]),
+            (Param::Tau, array![1.6]),
         ];
         check_cdf_monotone_in_unit(&BCPE, &grid, &owned);
     }
@@ -425,15 +426,15 @@ mod tests {
         // τ = 2 ⇒ power-exponential is the standard normal ⇒ BCPE = BCCG.
         use crate::distributions::BCCG;
         let owned_bcpe = [
-            ("mu", array![2.0, 3.0]),
-            ("sigma", array![0.3, 0.25]),
-            ("nu", array![0.5, -0.5]),
-            ("tau", array![2.0, 2.0]),
+            (Param::Mu, array![2.0, 3.0]),
+            (Param::Sigma, array![0.3, 0.25]),
+            (Param::Nu, array![0.5, -0.5]),
+            (Param::Tau, array![2.0, 2.0]),
         ];
         let owned_bccg = [
-            ("mu", array![2.0, 3.0]),
-            ("sigma", array![0.3, 0.25]),
-            ("nu", array![0.5, -0.5]),
+            (Param::Mu, array![2.0, 3.0]),
+            (Param::Sigma, array![0.3, 0.25]),
+            (Param::Nu, array![0.5, -0.5]),
         ];
         let y = array![2.7, 2.4];
         let ll_bcpe = BCPE.loglik(&y, &params_view(&owned_bcpe)).unwrap();
@@ -459,10 +460,10 @@ mod tests {
     #[test]
     fn median_quantile_is_mu() {
         let owned = [
-            ("mu", array![2.0, 5.0]),
-            ("sigma", array![0.3, 0.2]),
-            ("nu", array![0.5, -1.0]),
-            ("tau", array![1.5, 3.0]),
+            (Param::Mu, array![2.0, 5.0]),
+            (Param::Sigma, array![0.3, 0.2]),
+            (Param::Nu, array![0.5, -1.0]),
+            (Param::Tau, array![1.5, 3.0]),
         ];
         let p = params_view(&owned);
         let med = BCPE.quantile(&array![0.5, 0.5], &p).unwrap();

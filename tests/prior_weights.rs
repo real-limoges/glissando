@@ -14,6 +14,7 @@
 mod common;
 
 use common::Generator;
+use glissando::Param;
 use glissando::{
     distributions::{Gaussian, StudentT},
     DataSet, Formula, GamlssModel, Term,
@@ -26,14 +27,14 @@ use ndarray::Array1;
 
 fn gaussian_intercept_formula() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 fn gaussian_linear_formula() -> Formula {
     Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -41,14 +42,14 @@ fn gaussian_linear_formula() -> Formula {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 fn studentt_intercept_formula() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept])
 }
 
 // ---------------------------------------------------------------------------
@@ -69,8 +70,8 @@ fn prior_weight_ones_identity_gaussian_intercept() {
     let ones = Array1::ones(n);
     let weighted = GamlssModel::fit_weighted(&data, &y, &ones, &formula, &Gaussian::new()).unwrap();
 
-    let uw_mu = &unweighted.models["mu"].coefficients.0;
-    let wt_mu = &weighted.models["mu"].coefficients.0;
+    let uw_mu = &unweighted.models[&Param::Mu].coefficients.0;
+    let wt_mu = &weighted.models[&Param::Mu].coefficients.0;
     for (u, w) in uw_mu.iter().zip(wt_mu.iter()) {
         assert!(
             (u - w).abs() < 1e-8,
@@ -78,8 +79,8 @@ fn prior_weight_ones_identity_gaussian_intercept() {
         );
     }
 
-    let uw_sigma = &unweighted.models["sigma"].coefficients.0;
-    let wt_sigma = &weighted.models["sigma"].coefficients.0;
+    let uw_sigma = &unweighted.models[&Param::Sigma].coefficients.0;
+    let wt_sigma = &weighted.models[&Param::Sigma].coefficients.0;
     for (u, w) in uw_sigma.iter().zip(wt_sigma.iter()) {
         assert!(
             (u - w).abs() < 1e-8,
@@ -99,8 +100,8 @@ fn prior_weight_ones_identity_gaussian_linear() {
     let ones = Array1::ones(n);
     let weighted = GamlssModel::fit_weighted(&data, &y, &ones, &formula, &Gaussian::new()).unwrap();
 
-    let uw_mu = &unweighted.models["mu"].coefficients.0;
-    let wt_mu = &weighted.models["mu"].coefficients.0;
+    let uw_mu = &unweighted.models[&Param::Mu].coefficients.0;
+    let wt_mu = &weighted.models[&Param::Mu].coefficients.0;
     assert_eq!(uw_mu.len(), wt_mu.len());
     for (u, w) in uw_mu.iter().zip(wt_mu.iter()) {
         assert!(
@@ -109,8 +110,8 @@ fn prior_weight_ones_identity_gaussian_linear() {
         );
     }
     // EDF must be identical too, since the weight fold is a no-op here.
-    let uw_edf = unweighted.models["mu"].edf;
-    let wt_edf = weighted.models["mu"].edf;
+    let uw_edf = unweighted.models[&Param::Mu].edf;
+    let wt_edf = weighted.models[&Param::Mu].edf;
     assert!(
         (uw_edf - wt_edf).abs() < 1e-6,
         "EDF mismatch: unweighted={uw_edf} weighted={wt_edf}"
@@ -128,9 +129,9 @@ fn prior_weight_ones_identity_student_t() {
     let ones = Array1::ones(n);
     let weighted = GamlssModel::fit_weighted(&data, &y, &ones, &formula, &StudentT::new()).unwrap();
 
-    for param in ["mu", "sigma", "nu"] {
-        let uw_coef = &unweighted.models[param].coefficients.0;
-        let wt_coef = &weighted.models[param].coefficients.0;
+    for param in [Param::Mu, Param::Sigma, Param::Nu] {
+        let uw_coef = &unweighted.models[&param].coefficients.0;
+        let wt_coef = &weighted.models[&param].coefficients.0;
         for (u, w) in uw_coef.iter().zip(wt_coef.iter()) {
             assert!(
                 (u - w).abs() < 1e-7,
@@ -168,8 +169,8 @@ fn prior_weight_zero_excludes_rows() {
         GamlssModel::fit_weighted(&data, &y_full, &weights, &formula, &Gaussian::new()).unwrap();
     let short = GamlssModel::fit(&data, &y_short, &formula, &Gaussian::new()).unwrap();
 
-    let wt_mu = weighted.models["mu"].coefficients.0[0];
-    let sh_mu = short.models["mu"].coefficients.0[0];
+    let wt_mu = weighted.models[&Param::Mu].coefficients.0[0];
+    let sh_mu = short.models[&Param::Mu].coefficients.0[0];
     assert!(
         (wt_mu - sh_mu).abs() < 0.1,
         "weighted(zero-rows) mu={wt_mu} should match short mu={sh_mu}"

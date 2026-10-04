@@ -10,6 +10,7 @@
 use glissando::distributions::{
     Beta, Binomial, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
@@ -87,15 +88,15 @@ fn build_result<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     data: &DataSet,
-    coef_names: &[(&str, &str)],
-    sigma_param: Option<&str>,
+    coef_names: &[(Param, &str)],
+    sigma_param: Option<Param>,
 ) -> FitResult {
     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
     // Coefficients, under the output labels the caller asked for.
     let mut coefficients = HashMap::new();
     for (param_key, output_label) in coef_names {
-        if let Some(fp) = model.models.get(*param_key) {
+        if let Some(fp) = model.models.get(param_key) {
             coefficients.insert((*output_label).to_string(), fp.coefficients.0.to_vec());
         }
     }
@@ -103,11 +104,11 @@ fn build_result<D: Distribution + ?Sized>(
     // Fitted values, back on the response scale.
     let fitted_mu = model
         .models
-        .get("mu")
+        .get(&Param::Mu)
         .map(|fp| fp.fitted_values.to_vec())
         .unwrap_or_default();
     let fitted_sigma = sigma_param
-        .and_then(|p| model.models.get(p))
+        .and_then(|p| model.models.get(&p))
         .map(|fp| fp.fitted_values.to_vec())
         .unwrap_or_default();
 
@@ -115,8 +116,8 @@ fn build_result<D: Distribution + ?Sized>(
     let mut edf = HashMap::new();
     let mut lambdas = HashMap::new();
     for (param_name, fp) in &model.models {
-        edf.insert(param_name.clone(), fp.edf);
-        lambdas.insert(param_name.clone(), fp.lambdas.to_vec());
+        edf.insert(param_name.to_string(), fp.edf);
+        lambdas.insert(param_name.to_string(), fp.lambdas.to_vec());
     }
 
     // Log-likelihood and AIC. Both need `family` and `y`.
@@ -129,7 +130,7 @@ fn build_result<D: Distribution + ?Sized>(
     let se_eta = match model.predict_with_se(data, family) {
         Ok(results) => results
             .into_iter()
-            .map(|(k, v)| (k, v.se_eta.to_vec()))
+            .map(|(k, v)| (k.to_string(), v.se_eta.to_vec()))
             .collect(),
         Err(_) => HashMap::new(),
     };
@@ -160,7 +161,7 @@ fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -168,7 +169,7 @@ fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -178,8 +179,8 @@ fn fit_gaussian_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -193,7 +194,7 @@ fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -202,7 +203,7 @@ fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
             ],
         )
         .with_terms(
-            "sigma",
+            Param::Sigma,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -219,8 +220,8 @@ fn fit_gaussian_heteroskedastic(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -234,7 +235,7 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::PSpline1D {
                 col_name: "x".to_string(),
                 n_splines: 20,
@@ -243,7 +244,7 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
                 range: None,
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -253,8 +254,8 @@ fn fit_gaussian_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu_smooth"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu_smooth"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -270,7 +271,7 @@ fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -284,7 +285,7 @@ fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -294,8 +295,8 @@ fn fit_gaussian_multiple(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -318,9 +319,9 @@ fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
         .with_terms(
-            "sigma",
+            Param::Sigma,
             vec![
                 Term::Intercept,
                 Term::Smooth(Smooth::PSpline1D {
@@ -341,8 +342,8 @@ fn fit_gaussian_sigma_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma_smooth")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma_smooth")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -357,7 +358,7 @@ fn fit_gaussian_cr_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::CrSpline1D {
                 col_name: "x".to_string(),
                 k: 10,
@@ -365,7 +366,7 @@ fn fit_gaussian_cr_smooth(df: &DataFrame) -> FitResult {
                 knots: vec![], // filled in at fit time
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -375,8 +376,8 @@ fn fit_gaussian_cr_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu_cr_smooth"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu_cr_smooth"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -392,7 +393,7 @@ fn fit_tensor_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::TensorProduct {
                 col_name_1: "x1".to_string(),
                 n_splines_1: 8,
@@ -405,7 +406,7 @@ fn fit_tensor_smooth(df: &DataFrame) -> FitResult {
                 range_2: None,
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -415,8 +416,8 @@ fn fit_tensor_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu_tensor"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu_tensor"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -432,7 +433,7 @@ fn fit_random_effect(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -444,7 +445,7 @@ fn fit_random_effect(df: &DataFrame) -> FitResult {
                 }),
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -454,8 +455,8 @@ fn fit_random_effect(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -470,7 +471,7 @@ fn fit_poisson_linear(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -481,7 +482,15 @@ fn fit_poisson_linear(df: &DataFrame) -> FitResult {
 
     let family = Poisson::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
-        Ok(model) => build_result(start, &model, &family, &y, &data, &[("mu", "log_mu")], None),
+        Ok(model) => build_result(
+            start,
+            &model,
+            &family,
+            &y,
+            &data,
+            &[(Param::Mu, "log_mu")],
+            None,
+        ),
         Err(e) => error_result(start, e),
     }
 }
@@ -493,7 +502,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![Term::Smooth(Smooth::PSpline1D {
             col_name: "x".to_string(),
             n_splines: 20,
@@ -511,7 +520,7 @@ fn fit_poisson_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu_smooth")],
+            &[(Param::Mu, "log_mu_smooth")],
             None,
         ),
         Err(e) => error_result(start, e),
@@ -529,7 +538,7 @@ fn fit_binomial_linear(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -546,7 +555,7 @@ fn fit_binomial_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "logit_mu")],
+            &[(Param::Mu, "logit_mu")],
             None,
         ),
         Err(e) => error_result(start, e),
@@ -561,7 +570,7 @@ fn fit_binomial_smooth(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![Term::Smooth(Smooth::PSpline1D {
             col_name: "x".to_string(),
             n_splines: 20,
@@ -579,7 +588,7 @@ fn fit_binomial_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "logit_mu_smooth")],
+            &[(Param::Mu, "logit_mu_smooth")],
             None,
         ),
         Err(e) => error_result(start, e),
@@ -596,7 +605,7 @@ fn fit_gamma_linear(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -604,7 +613,7 @@ fn fit_gamma_linear(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gamma::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -614,8 +623,8 @@ fn fit_gamma_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "log_mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -629,7 +638,7 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::PSpline1D {
                 col_name: "x".to_string(),
                 n_splines: 20,
@@ -638,7 +647,7 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
                 range: None,
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gamma::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -648,8 +657,8 @@ fn fit_gamma_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu_smooth"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "log_mu_smooth"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -664,9 +673,9 @@ fn fit_gamma_sigma_smooth(df: &DataFrame) -> FitResult {
     data.insert_column("x", extract_column(df, "x"));
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
         .with_terms(
-            "sigma",
+            Param::Sigma,
             vec![
                 Term::Intercept,
                 Term::Smooth(Smooth::PSpline1D {
@@ -687,8 +696,8 @@ fn fit_gamma_sigma_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu"), ("sigma", "log_sigma_smooth")],
-            Some("sigma"),
+            &[(Param::Mu, "log_mu"), (Param::Sigma, "log_sigma_smooth")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -704,7 +713,7 @@ fn fit_studentt_linear(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -712,8 +721,8 @@ fn fit_studentt_linear(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     let family = StudentT::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -723,8 +732,12 @@ fn fit_studentt_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma"), ("nu", "log_nu")],
-            Some("sigma"),
+            &[
+                (Param::Mu, "mu"),
+                (Param::Sigma, "log_sigma"),
+                (Param::Nu, "log_nu"),
+            ],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -738,7 +751,7 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::PSpline1D {
                 col_name: "x".to_string(),
                 n_splines: 20,
@@ -747,8 +760,8 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
                 range: None,
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     let family = StudentT::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -759,11 +772,11 @@ fn fit_studentt_smooth(df: &DataFrame) -> FitResult {
             &y,
             &data,
             &[
-                ("mu", "mu_smooth"),
-                ("sigma", "log_sigma"),
-                ("nu", "log_nu"),
+                (Param::Mu, "mu_smooth"),
+                (Param::Sigma, "log_sigma"),
+                (Param::Nu, "log_nu"),
             ],
-            Some("sigma"),
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -779,7 +792,7 @@ fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -787,7 +800,7 @@ fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = NegativeBinomial::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -797,8 +810,8 @@ fn fit_negative_binomial_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "log_mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -812,7 +825,7 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::PSpline1D {
                 col_name: "x".to_string(),
                 n_splines: 20,
@@ -821,7 +834,7 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
                 range: None,
             })],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = NegativeBinomial::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -831,8 +844,8 @@ fn fit_negative_binomial_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "log_mu_smooth"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "log_mu_smooth"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -848,7 +861,7 @@ fn fit_beta_linear(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -856,7 +869,7 @@ fn fit_beta_linear(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("phi", vec![Term::Intercept]);
+        .with_terms(Param::Phi, vec![Term::Intercept]);
 
     let family = Beta::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -866,8 +879,8 @@ fn fit_beta_linear(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "logit_mu"), ("phi", "log_phi")],
-            Some("phi"),
+            &[(Param::Mu, "logit_mu"), (Param::Phi, "log_phi")],
+            Some(Param::Phi),
         ),
         Err(e) => error_result(start, e),
     }
@@ -882,7 +895,7 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Smooth(Smooth::PSpline1D {
                 col_name: "x".to_string(),
                 n_splines: 20,
@@ -891,7 +904,7 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
                 range: None,
             })],
         )
-        .with_terms("phi", vec![Term::Intercept]);
+        .with_terms(Param::Phi, vec![Term::Intercept]);
 
     let family = Beta::new();
     match GamlssModel::fit(&data, &y, &formula, &family) {
@@ -901,8 +914,8 @@ fn fit_beta_smooth(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "logit_mu_smooth"), ("phi", "log_phi")],
-            Some("phi"),
+            &[(Param::Mu, "logit_mu_smooth"), (Param::Phi, "log_phi")],
+            Some(Param::Phi),
         ),
         Err(e) => error_result(start, e),
     }
@@ -932,7 +945,7 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 mk_smooth("x1"),
@@ -945,7 +958,7 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     // REML, to match mgcv's method="REML" on the same model. This scenario used
@@ -960,8 +973,8 @@ fn fit_b1_weighted_gaussian(df: &DataFrame) -> FitResult {
             &family,
             &y,
             &data,
-            &[("mu", "mu"), ("sigma", "log_sigma")],
-            Some("sigma"),
+            &[(Param::Mu, "mu"), (Param::Sigma, "log_sigma")],
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }
@@ -990,7 +1003,7 @@ fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 mk_smooth("x1"),
@@ -999,8 +1012,8 @@ fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
                 mk_smooth("x4"),
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     let family = StudentT::new();
     match GamlssModel::fit_weighted(&data, &y, &weights, &formula, &family) {
@@ -1011,11 +1024,11 @@ fn fit_b2_weighted_studentt(df: &DataFrame) -> FitResult {
             &y,
             &data,
             &[
-                ("mu", "mu_smooth"),
-                ("sigma", "log_sigma"),
-                ("nu", "log_nu"),
+                (Param::Mu, "mu_smooth"),
+                (Param::Sigma, "log_sigma"),
+                (Param::Nu, "log_nu"),
             ],
-            Some("sigma"),
+            Some(Param::Sigma),
         ),
         Err(e) => error_result(start, e),
     }

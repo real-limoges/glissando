@@ -122,7 +122,7 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
 
     // Check all parameters have formulas
     for param in family.parameters() {
-        if !formula.contains_key(*param) {
+        if !formula.contains_key(param) {
             return Err(GamlssError::MissingFormula {
                 param: param.to_string(),
             });
@@ -196,11 +196,12 @@ mod tests {
     use super::*;
     use crate::distributions::Gaussian;
     use crate::terms::Term;
+    use crate::Param;
 
     fn gaussian_formula() -> Formula {
         Formula::new()
-            .with_terms("mu", vec![Term::Intercept])
-            .with_terms("sigma", vec![Term::Intercept])
+            .with_terms(Param::Mu, vec![Term::Intercept])
+            .with_terms(Param::Sigma, vec![Term::Intercept])
     }
 
     fn data_with(name: &str, values: Vec<f64>) -> DataSet {
@@ -234,7 +235,7 @@ mod tests {
     fn rejects_missing_formula_for_parameter() {
         let y = Array1::from_vec(vec![1.0, 2.0]);
         let data = DataSet::new();
-        let f = Formula::new().with_terms("mu", vec![Term::Intercept]);
+        let f = Formula::new().with_terms(Param::Mu, vec![Term::Intercept]);
         let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::MissingFormula { param } => assert_eq!(param, "sigma"),
@@ -248,12 +249,12 @@ mod tests {
         let data = DataSet::new();
         let f = Formula::new()
             .with_terms(
-                "mu",
+                Param::Mu,
                 vec![Term::Linear {
                     col_name: "x".to_string(),
                 }],
             )
-            .with_terms("sigma", vec![Term::Intercept]);
+            .with_terms(Param::Sigma, vec![Term::Intercept]);
         let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::MissingVariable { name } => assert_eq!(name, "x"),
@@ -267,12 +268,12 @@ mod tests {
         let data = data_with("x", vec![1.0, 2.0]); // length 2, y is length 3
         let f = Formula::new()
             .with_terms(
-                "mu",
+                Param::Mu,
                 vec![Term::Linear {
                     col_name: "x".to_string(),
                 }],
             )
-            .with_terms("sigma", vec![Term::Intercept]);
+            .with_terms(Param::Sigma, vec![Term::Intercept]);
         let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::Input(s) => {
@@ -288,12 +289,12 @@ mod tests {
         let data = data_with("x", vec![1.0, f64::INFINITY]);
         let f = Formula::new()
             .with_terms(
-                "mu",
+                Param::Mu,
                 vec![Term::Linear {
                     col_name: "x".to_string(),
                 }],
             )
-            .with_terms("sigma", vec![Term::Intercept]);
+            .with_terms(Param::Sigma, vec![Term::Intercept]);
         let err = validate_inputs(&y, &data, &f, &Gaussian, None).unwrap_err();
         match err {
             GamlssError::NonFiniteValues { name, count } => {
@@ -310,7 +311,7 @@ mod tests {
         let data = data_with("x", vec![0.5, 1.0, 1.5]);
         let f = Formula::new()
             .with_terms(
-                "mu",
+                Param::Mu,
                 vec![
                     Term::Intercept,
                     Term::Linear {
@@ -318,7 +319,7 @@ mod tests {
                     },
                 ],
             )
-            .with_terms("sigma", vec![Term::Intercept]);
+            .with_terms(Param::Sigma, vec![Term::Intercept]);
         validate_inputs(&y, &data, &f, &Gaussian, None).unwrap();
     }
 

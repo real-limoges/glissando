@@ -6,6 +6,7 @@
 //! no wasm build in the loop. This mirrors the coverage in `tests/wasm.rs`.
 
 use glissando::json;
+use glissando::Param;
 use std::collections::HashMap;
 
 const Y: &str = "[1.2, 2.1, 2.9, 4.2, 4.8, 5.9, 7.1, 7.9, 9.2, 9.8]";
@@ -120,7 +121,7 @@ fn design_matrix_json_shape_matches_data_and_coefficients() {
     // n_rows = number of observations in DATA (10)
     assert_eq!(dm.len(), 10, "one row per observation");
     // n_cols = number of mu coefficients: intercept + linear = 2
-    let n_coeffs = model.models["mu"].coefficients.0.len();
+    let n_coeffs = model.models[&Param::Mu].coefficients.0.len();
     for (i, row) in dm.iter().enumerate() {
         assert_eq!(
             row.len(),
@@ -160,7 +161,7 @@ fn term_index_map_json_is_contiguous_and_sums_to_n_coeffs() {
     let map: std::collections::BTreeMap<String, [usize; 2]> =
         serde_json::from_str(&map_json).unwrap();
 
-    let n_coeffs = model.models["mu"].coefficients.0.len();
+    let n_coeffs = model.models[&Param::Mu].coefficients.0.len();
     let total: usize = map.values().map(|[f, l]| l - f).sum();
     assert_eq!(total, n_coeffs, "total block width must equal n_coeffs");
 

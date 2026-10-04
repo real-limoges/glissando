@@ -15,6 +15,7 @@
 use super::{
     chain_cdf_to_eta, CdfGrad, CdfMap, DerivativeMap, Distribution, Eta, GamlssError, LinkContext,
 };
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -45,22 +46,22 @@ pub(crate) fn check_state_len(name: &str, stored: usize, n: usize) -> Result<(),
 /// at the call site.
 macro_rules! delegate_to_base {
     (@method parameters) => {
-        fn parameters(&self) -> &[&'static str] {
+        fn parameters(&self) -> &[Param] {
             self.base.parameters()
         }
     };
     (@method default_link) => {
-        fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+        fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
             self.base.default_link(param)
         }
     };
     (@method allows_link_override) => {
-        fn allows_link_override(&self, param: &str) -> bool {
+        fn allows_link_override(&self, param: Param) -> bool {
             self.base.allows_link_override(param)
         }
     };
     (@method initial_value) => {
-        fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+        fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
             self.base.initial_value(param, y)
         }
     };
@@ -72,7 +73,7 @@ macro_rules! delegate_to_base {
     (@method variance) => {
         fn variance(
             &self,
-            params: &HashMap<&str, &Array1<f64>>,
+            params: &HashMap<Param, &Array1<f64>>,
         ) -> Result<Array1<f64>, GamlssError> {
             self.base.variance(params)
         }
@@ -80,7 +81,7 @@ macro_rules! delegate_to_base {
     (@method expected_value) => {
         fn expected_value(
             &self,
-            params: &HashMap<&str, &Array1<f64>>,
+            params: &HashMap<Param, &Array1<f64>>,
         ) -> Result<Array1<f64>, GamlssError> {
             self.base.expected_value(params)
         }
@@ -89,7 +90,7 @@ macro_rules! delegate_to_base {
         fn cdf(
             &self,
             y: &Array1<f64>,
-            params: &HashMap<&str, &Array1<f64>>,
+            params: &HashMap<Param, &Array1<f64>>,
         ) -> Result<Array1<f64>, GamlssError> {
             self.base.cdf(y, params)
         }
@@ -98,7 +99,7 @@ macro_rules! delegate_to_base {
         fn quantile(
             &self,
             p: &Array1<f64>,
-            params: &HashMap<&str, &Array1<f64>>,
+            params: &HashMap<Param, &Array1<f64>>,
         ) -> Result<Array1<f64>, GamlssError> {
             self.base.quantile(p, params)
         }
@@ -126,7 +127,7 @@ pub(crate) fn cdf_eta_grads(
     base: &dyn Distribution,
     at: &Array1<f64>,
     f0: &Array1<f64>,
-    params: &HashMap<&str, &Array1<f64>>,
+    params: &HashMap<Param, &Array1<f64>>,
     ctx: &LinkContext,
 ) -> Result<CdfMap<Eta>, GamlssError> {
     // `remove`, not `get`: the map is freshly built here and dropped on return, so
@@ -136,12 +137,12 @@ pub(crate) fn cdf_eta_grads(
     let mut analytic = base.cdf_theta_derivatives(at, params)?;
     let mut out = HashMap::new();
     for &p in base.parameters() {
-        if let Some(natural) = analytic.remove(p) {
+        if let Some(natural) = analytic.remove(&p) {
             let chained = chain_cdf_to_eta(natural, ctx.mu_eta(p)?, ctx.mu_eta2(p)?, p)?;
-            out.insert(p.to_string(), chained);
+            out.insert(p, chained);
         } else {
             let grads = numeric_cdf_grad(base, at, f0, params, p, ctx)?;
-            out.insert(p.to_string(), grads);
+            out.insert(p, grads);
         }
     }
     Ok(out)
@@ -171,12 +172,12 @@ fn numeric_cdf_grad(
     base: &dyn Distribution,
     at: &Array1<f64>,
     f0: &Array1<f64>,
-    params: &HashMap<&str, &Array1<f64>>,
-    param: &str,
+    params: &HashMap<Param, &Array1<f64>>,
+    param: Param,
     ctx: &LinkContext,
 ) -> Result<CdfGrad<Eta>, GamlssError> {
     let orig = params
-        .get(param)
+        .get(&param)
         .copied()
         .ok_or_else(|| base.unknown_param(param))?;
     let (link, eta) = ctx.link_and_eta(param).ok_or_else(|| {
@@ -234,15 +235,15 @@ fn numeric_cdf_grad(
 pub(crate) fn rewrite_base_derivatives(
     base: &dyn Distribution,
     mut base_derivs: DerivativeMap<Eta>,
-    mut rewrite: impl FnMut(&str, &mut Array1<f64>, &mut Array1<f64>),
+    mut rewrite: impl FnMut(Param, &mut Array1<f64>, &mut Array1<f64>),
 ) -> Result<DerivativeMap<Eta>, GamlssError> {
     let mut out: DerivativeMap<Eta> = HashMap::new();
     for &param in base.parameters() {
         let mut derivs = base_derivs
-            .remove(param)
+            .remove(&param)
             .ok_or_else(|| base.unknown_param(param))?;
         rewrite(param, &mut derivs.score, &mut derivs.info);
-        out.insert(param.to_string(), derivs);
+        out.insert(param, derivs);
     }
     Ok(out)
 }

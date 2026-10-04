@@ -1,6 +1,7 @@
 mod common;
 
 use common::{intercept_only, linear_intercepts, Generator};
+use glissando::Param;
 use glissando::{
     diagnostics::{compute_aic, compute_bic, pearson_residuals, response_residuals, total_edf},
     distributions::{Distribution, Gaussian, Poisson},
@@ -14,7 +15,8 @@ fn test_pearson_residuals_gaussian() {
     let y = Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     let mu = Array1::from_vec(vec![1.5, 2.0, 2.5, 4.5, 5.0]);
     let sigma = Array1::from_vec(vec![0.5, 0.5, 0.5, 0.5, 0.5]);
-    let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+    let params: HashMap<Param, &Array1<f64>> =
+        HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
 
     let residuals = pearson_residuals(&Gaussian, &y, &params).unwrap();
 
@@ -30,7 +32,7 @@ fn test_pearson_residuals_gaussian() {
 fn test_pearson_residuals_poisson() {
     let y = Array1::from_vec(vec![0.0, 1.0, 4.0, 9.0, 16.0]);
     let mu = Array1::from_vec(vec![1.0, 1.0, 4.0, 9.0, 16.0]);
-    let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu)]);
+    let params: HashMap<Param, &Array1<f64>> = HashMap::from([(Param::Mu, &mu)]);
 
     let residuals = pearson_residuals(&Poisson, &y, &params).unwrap();
 
@@ -60,7 +62,8 @@ fn test_loglik_gaussian() {
     let y = Array1::from_vec(vec![0.0, 0.0, 0.0]);
     let mu = Array1::from_vec(vec![0.0, 0.0, 0.0]);
     let sigma = Array1::from_vec(vec![1.0, 1.0, 1.0]);
-    let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+    let params: HashMap<Param, &Array1<f64>> =
+        HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
 
     let ll = Gaussian.loglik(&y, &params).unwrap();
     let expected = 3.0 * (-0.5 * (2.0 * std::f64::consts::PI).ln());
@@ -71,7 +74,7 @@ fn test_loglik_gaussian() {
 fn test_loglik_poisson() {
     let y = Array1::from_vec(vec![1.0, 2.0, 3.0]);
     let mu = Array1::from_vec(vec![1.0, 2.0, 3.0]);
-    let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu)]);
+    let params: HashMap<Param, &Array1<f64>> = HashMap::from([(Param::Mu, &mu)]);
 
     let ll = Poisson.loglik(&y, &params).unwrap();
     assert!(ll.is_finite());
@@ -97,7 +100,7 @@ fn test_total_edf() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -115,7 +118,7 @@ fn test_total_edf() {
 fn gaic_matches_aic_and_bic_at_canonical_k() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(150, 1.5, 4.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let diag = model.diagnostics(&Gaussian::new(), &y).unwrap();
@@ -145,7 +148,7 @@ fn gaic_works_for_a_discrete_family() {
     // and stay consistent with AIC/BIC at the canonical penalties.
     let mut rng = Generator::new(17);
     let (y, data) = rng.poisson_data(200, 0.5, 0.3);
-    let formula = intercept_only(&["mu"]);
+    let formula = intercept_only(&[Param::Mu]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     let diag = model.diagnostics(&Poisson::new(), &y).unwrap();
@@ -162,7 +165,7 @@ fn gaic_works_for_a_discrete_family() {
 fn gaic_is_monotone_in_k() {
     let mut rng = Generator::new(11);
     let (y, data) = rng.linear_gaussian(120, 1.0, 3.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // edf > 0, so a bigger penalty strictly raises GAIC.
@@ -176,7 +179,7 @@ fn test_diagnostics_with_fitted_model() {
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(200, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     let diag = model.diagnostics(&Gaussian::new(), &y).unwrap();

@@ -16,7 +16,7 @@ See `cookbook-families.md` to swap the family, and `cookbook-mgcv-migration.md` 
 
 ```rust
 use glissando::distributions::Gaussian;
-use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
+use glissando::{DataSet, Formula, GamlssModel, Param, Smooth, Term};
 use glissando::ndarray::Array1;
 
 // 1. response and predictors (length n, all f64)
@@ -27,8 +27,8 @@ data.insert_column("x", Array1::from_vec(x));
 
 // 2. one additive predictor per parameter
 let formula = Formula::new()
-    .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))])
-    .with_terms("sigma", vec![Term::Intercept, Term::linear("x")]);
+    .with_terms(Param::Mu, vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))])
+    .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
 
 // 3. fit
 let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
@@ -36,7 +36,7 @@ assert!(model.converged());
 
 // 4. predict on the response scale (keyed by parameter name)
 let preds = model.predict(&data, &Gaussian::new()).unwrap();
-let mu_hat = &preds["mu"];
+let mu_hat = &preds[&Param::Mu];
 
 // 5. diagnose: randomized quantile residuals are the GAMLSS default
 let resid = model.quantile_residuals(&Gaussian::new(), &y, Some(42)).unwrap();

@@ -3,6 +3,7 @@
 //! perfect separation), and one end-to-end smoke test that drives the whole public
 //! pipeline (`fit → predict → predict_with_se → JSON round-trip`).
 
+use glissando::Param;
 use glissando::{
     distributions::{Binomial, Gaussian},
     DataSet, FitConfig, Formula, GamlssError, GamlssModel, NaAction, Term,
@@ -18,7 +19,7 @@ fn fail_on_na() -> FitConfig {
 fn linear_formula() -> Formula {
     let mut f = Formula::new();
     f.add_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -26,7 +27,7 @@ fn linear_formula() -> Formula {
             },
         ],
     );
-    f.add_terms("sigma", vec![Term::Intercept]);
+    f.add_terms(Param::Sigma, vec![Term::Intercept]);
     f
 }
 
@@ -98,14 +99,14 @@ fn single_observation_intercept_only_does_not_panic() {
     data.insert_column("x", Array1::from_vec(vec![1.0]));
 
     let mut f = Formula::new();
-    f.add_terms("mu", vec![Term::Intercept]);
-    f.add_terms("sigma", vec![Term::Intercept]);
+    f.add_terms(Param::Mu, vec![Term::Intercept]);
+    f.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     // One observation is degenerate for σ, but the call must return a Result and
     // not panic. If it does converge, the mean intercept should land on y[0].
     match GamlssModel::fit(&data, &y, &f, &Gaussian::new()) {
         Ok(model) => {
-            let mu0 = model.models["mu"].coefficients[0];
+            let mu0 = model.models[&Param::Mu].coefficients[0];
             assert!(
                 mu0.is_finite(),
                 "fitted mu intercept must be finite, got {mu0}"
@@ -131,7 +132,7 @@ fn binomial_perfect_separation_does_not_panic() {
 
     let mut f = Formula::new();
     f.add_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -141,7 +142,7 @@ fn binomial_perfect_separation_does_not_panic() {
     );
 
     if let Ok(model) = GamlssModel::fit(&data, &y, &f, &Binomial::new(1)) {
-        for c in model.models["mu"].coefficients.iter() {
+        for c in model.models[&Param::Mu].coefficients.iter() {
             assert!(
                 c.is_finite(),
                 "separation must not produce non-finite coefficients, got {c}"
@@ -166,7 +167,7 @@ fn fit_predict_se_and_json_roundtrip() {
 
     // predict
     let preds = model.predict(&data, &family).unwrap();
-    let mu = &preds["mu"];
+    let mu = &preds[&Param::Mu];
     assert_eq!(mu.len(), 50);
     assert!(
         (mu[0] - 2.0).abs() < 0.1,
@@ -176,7 +177,7 @@ fn fit_predict_se_and_json_roundtrip() {
 
     // predict_with_se: SEs finite and non-negative; fitted matches bare predict
     let se_preds = model.predict_with_se(&data, &family).unwrap();
-    let mu_se = &se_preds["mu"];
+    let mu_se = &se_preds[&Param::Mu];
     for (f, s) in mu_se.fitted.iter().zip(mu_se.se_eta.iter()) {
         assert!(f.is_finite(), "fitted must be finite");
         assert!(
@@ -211,7 +212,7 @@ fn json_roundtrip_preserves_predictions() {
     let (reloaded, desc) = GamlssModel::from_json(&json).unwrap();
     assert_eq!(desc.build().unwrap().name(), "Gaussian");
     let preds2 = reloaded.predict(&data, &family).unwrap();
-    for (a, b) in preds["mu"].iter().zip(preds2["mu"].iter()) {
+    for (a, b) in preds[&Param::Mu].iter().zip(preds2[&Param::Mu].iter()) {
         assert!(
             (a - b).abs() < 1e-12,
             "predictions must survive JSON round-trip"

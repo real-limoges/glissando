@@ -13,6 +13,7 @@ mod common;
 use common::{pspline, Generator};
 use glissando::distributions::Gaussian;
 use glissando::selection::{ic_table, lr_test};
+use glissando::Param;
 use glissando::{Formula, GamlssModel, Term};
 use serde::Serialize;
 
@@ -57,14 +58,14 @@ fn ic_table_and_lr_test_nested_gaussian() {
     let (y, data) = rng.linear_gaussian(150, 1.0, 5.0, 1.0);
 
     let f_null = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let f_linear = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::linear("x")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let f_smooth = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 8)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let m_null = GamlssModel::fit(&data, &y, &f_null, &Gaussian::new()).unwrap();
     let m_linear = GamlssModel::fit(&data, &y, &f_linear, &Gaussian::new()).unwrap();

@@ -10,6 +10,7 @@
 mod common;
 
 use common::{linear_intercepts, Generator};
+use glissando::Param;
 use glissando::{distributions::StudentT, DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use rand::RngExt;
@@ -54,7 +55,7 @@ fn step_halving_keeps_global_deviance_monotone() {
     // trajectory. Sweeping k therefore reconstructs the per-cycle GD path; with
     // step-halving on it must be non-increasing (small slack for round-off).
     let (y, data) = heavy_tailed_stress();
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let mut prev = f64::INFINITY;
     for k in 1..=15 {
@@ -81,7 +82,7 @@ fn step_halving_reaches_no_worse_deviance_than_raw_loop() {
     // oscillates to a higher deviance (or fails to settle); damping reaches an
     // at-least-as-good objective.
     let (y, data) = heavy_tailed_stress();
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
 
     let on = GamlssModel::fit_with_config(
         &data,
@@ -130,7 +131,7 @@ fn step_halving_default_converges_on_heavy_tailed_data() {
     let mut data = DataSet::new();
     data.insert_column("x".to_string(), Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
     assert!(
         model.converged(),
@@ -143,7 +144,7 @@ fn final_deviance_matches_minus_two_loglik() {
     // The reported final deviance is exactly −2·loglik of the converged fit, tying
     // the in-loop helper to the public diagnostics path.
     let (y, data) = heavy_tailed_stress();
-    let formula = linear_intercepts("x", &["mu", "sigma", "nu"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma, Param::Nu]);
     let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 
     let gd = model.diagnostics.final_deviance.unwrap();
@@ -164,7 +165,7 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
     // flag must not move the converged solution (parity guard for step-halving).
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(200, 1.0, 2.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let on = GamlssModel::fit_with_config(
         &data,
@@ -185,9 +186,9 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
     )
     .unwrap();
 
-    for param in ["mu", "sigma"] {
-        let a = &on.models[param].coefficients.0;
-        let b = &off.models[param].coefficients.0;
+    for param in [Param::Mu, Param::Sigma] {
+        let a = &on.models[&param].coefficients.0;
+        let b = &off.models[&param].coefficients.0;
         for (ca, cb) in a.iter().zip(b.iter()) {
             assert!(
                 (ca - cb).abs() < 1e-6,
@@ -227,7 +228,7 @@ fn step_halving_disabled_clamps_eta_step_on_poisson_outlier() {
 
     let mut formula = Formula::new();
     formula.add_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -247,7 +248,7 @@ fn step_halving_disabled_clamps_eta_step_on_poisson_outlier() {
             cfg_with(false, k),
         )
         .unwrap();
-        let eta = &model.models["mu"].eta;
+        let eta = &model.models[&Param::Mu].eta;
         assert!(
             eta.iter().all(|e| e.is_finite()),
             "eta must stay finite at cycle {k}"

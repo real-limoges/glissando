@@ -13,6 +13,7 @@ mod common;
 
 use common::Generator;
 use glissando::distributions::Gaussian;
+use glissando::Param;
 use glissando::{json, Formula, GamlssModel, Smooth, Term};
 use proptest::prelude::*;
 
@@ -96,8 +97,8 @@ fn to_json_load_round_trip_preserves_predictions() {
     let (y, data) = rng.heteroskedastic_gaussian(200);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::linear("x")])
-        .with_terms("sigma", vec![Term::Intercept, Term::linear("x")]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
     let saved = model.to_json(&Gaussian).unwrap();
@@ -106,8 +107,8 @@ fn to_json_load_round_trip_preserves_predictions() {
     let before = model.predict(&data, &Gaussian).unwrap();
     let after = reloaded.predict(&data, family.as_ref()).unwrap();
 
-    for param in ["mu", "sigma"] {
-        for (a, b) in before[param].iter().zip(after[param].iter()) {
+    for param in [Param::Mu, Param::Sigma] {
+        for (a, b) in before[&param].iter().zip(after[&param].iter()) {
             assert!(
                 (a - b).abs() < 1e-9,
                 "{param} prediction drifted: {a} vs {b}"
@@ -124,8 +125,11 @@ fn to_json_load_round_trip_with_smooth() {
     let (y, data) = rng.sinusoidal_gaussian(250, 0.3);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::smooth(Smooth::ps("x"))],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
     let saved = model.to_json(&Gaussian).unwrap();
@@ -134,7 +138,7 @@ fn to_json_load_round_trip_with_smooth() {
     let before = model.predict(&data, &Gaussian).unwrap();
     let after = reloaded.predict(&data, family.as_ref()).unwrap();
 
-    for (a, b) in before["mu"].iter().zip(after["mu"].iter()) {
+    for (a, b) in before[&Param::Mu].iter().zip(after[&Param::Mu].iter()) {
         assert!(
             (a - b).abs() < 1e-9,
             "smooth prediction drifted: {a} vs {b}"
