@@ -1,8 +1,8 @@
 //! Binomial distribution: counts of successes out of `n` trials.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogitLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogitLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -61,7 +61,7 @@ impl Distribution for Binomial {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Binomial log-likelihood: l = y·log(μ) + (n−y)·log(1−μ) + log C(n, y).
         // Natural scale:
         //   ∂l/∂μ = (y − n·μ) / (μ(1−μ)),   i_μ = n / (μ(1−μ)).
@@ -88,7 +88,10 @@ impl Distribution for Binomial {
         let u_mu = par_zip3_map(y, n.as_ref(), mu, |yi, ni, mi| yi - ni * mi) / &var_unit;
         let i_mu = n.as_ref() / &var_unit;
 
-        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
+        Ok(HashMap::from([(
+            "mu".to_string(),
+            ScoreInfo::new(u_mu, i_mu),
+        )]))
     }
 
     fn loglik_pointwise(
@@ -232,7 +235,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u_mu, _) = &derivs["mu"];
+        let (u_mu, _) = (&derivs["mu"].score, &derivs["mu"].info);
         assert_relative_eq!(u_mu[0], 3.0 - 10.0 * 0.3, epsilon = 1e-12);
         assert_relative_eq!(u_mu[1], 10.0 - 20.0 * 0.5, epsilon = 1e-12);
     }
@@ -245,7 +248,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u, _) = &derivs["mu"];
+        let (u, _) = (&derivs["mu"].score, &derivs["mu"].info);
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }
 
@@ -324,11 +327,11 @@ mod tests {
         let owned = [("mu", array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
         let p = params_view(&owned);
         let natural = bin.theta_derivatives(&y, &p).unwrap();
-        let (u_n, i_n) = &natural["mu"];
+        let (u_n, i_n) = (&natural["mu"].score, &natural["mu"].info);
         assert!(finite_array(u_n) && finite_array(i_n), "natural: {u_n:?}");
 
         let chained = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u, w) = &chained["mu"];
+        let (u, w) = (&chained["mu"].score, &chained["mu"].info);
         assert!(finite_array(u) && finite_array(w), "chained: {u:?}");
         assert!(w.iter().all(|&v| v >= 0.0));
     }
@@ -357,7 +360,7 @@ mod tests {
             let p = params_view(&owned);
             let links = ParamLinks::overriding(&bin, &p, "mu", &ProbitLink);
             let u = bin.eta_derivatives(&y, &p, &links.context()).unwrap()["mu"]
-                .0
+                .score
                 .clone();
 
             let n_mu = 10.0 * mu;

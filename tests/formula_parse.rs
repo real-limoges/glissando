@@ -5,9 +5,6 @@
 //! proptest checks that rendering a parsed formula and reparsing it is a fixed
 //! point, so nothing drifts across the parse ⇄ Display boundary.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::Generator;

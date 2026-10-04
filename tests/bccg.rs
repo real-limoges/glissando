@@ -6,9 +6,6 @@
 //! the same family; and LMS centile curves are monotone with C50 = the fitted
 //! median μ.
 
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{linear, Generator};

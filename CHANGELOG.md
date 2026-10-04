@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed (breaking): derivative maps carry their scale in the type
+
+`Distribution::theta_derivatives`, `eta_derivatives` and `cdf_theta_derivatives` used to return the same untyped `HashMap<String, (Array1<f64>, Array1<f64>)>` whether the numbers were on the natural scale θ or the linear-predictor scale η.
+Reading one as the other, or chaining twice, compiled and ran and only moved the estimates.
+They now return scale-tagged types, so that mix-up is a compile error.
+
+- New in `glissando::distributions`: the markers `Natural` and `Eta`, `ScoreInfo<S>` (fields `score`, `info`), `CdfGrad<S>` (fields `d1`, `d2`), and the maps `DerivativeMap<S>` and `CdfMap<S>`.
+- `theta_derivatives` returns `DerivativeMap<Natural>`, `eta_derivatives` returns `DerivativeMap<Eta>`, and `cdf_theta_derivatives` returns `CdfMap<Natural>`.
+- `chain_to_eta` takes a `DerivativeMap<Natural>` and returns a `DerivativeMap<Eta>`; it is the generic way from one scale to the other.
+- Natural-scale values are built with `ScoreInfo::new` / `CdfGrad::new`.
+  A hand-written `eta_derivatives` builds η-scale values with `ScoreInfo::computed_on_eta`, a deliberately explicit name.
+- Removed the aliases `DerivativesResult`, `CdfEtaMap`, `CdfEtaResult`, `CdfThetaMap` and `CdfThetaResult`.
+- **No numerical change**: every derivative and regression snapshot is byte-identical.
+
+
 ### Changed: replaced the `argmin` L-BFGS with an in-house optimizer
 
 **No public API change, and single-smooth fits are unchanged.**

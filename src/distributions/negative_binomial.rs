@@ -1,8 +1,8 @@
 //! Negative Binomial (NB2) distribution for overdispersed count data.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -65,7 +65,7 @@ impl Distribution for NegativeBinomial {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // NB2 log-likelihood:
         //   l = log Γ(y + 1/σ) − log Γ(1/σ) − log y!
         //       + (1/σ)·log(1/(1+σμ)) + y·log(σμ/(1+σμ)).
@@ -117,8 +117,8 @@ impl Distribution for NegativeBinomial {
         let i_sigma = u_sigma.mapv(|u| u * u);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -269,9 +269,9 @@ mod tests {
         let natural = NegativeBinomial.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&NegativeBinomial, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }

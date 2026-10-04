@@ -1,8 +1,6 @@
 //! Hurdle integration tests: a `Hurdle` wrapper fits end-to-end and recovers
 //! both the zero-atom probability and the positive-part parameters.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Distribution, Gamma, Hurdle};
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;

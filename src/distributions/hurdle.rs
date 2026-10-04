@@ -19,8 +19,8 @@
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
-    chain_to_eta, clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext,
-    LogitLink, DENOM_FLOOR, MIN_WEIGHT, PROB_EPS,
+    chain_to_eta, clamp_prob, DerivativeMap, Distribution, Eta, GamlssError, Link, LinkContext,
+    LogitLink, ScoreInfo, DENOM_FLOOR, MIN_WEIGHT, PROB_EPS,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -130,7 +130,7 @@ impl Distribution for Hurdle {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         let xi = params
             .get("xi")
             .copied()
@@ -142,7 +142,7 @@ impl Distribution for Hurdle {
         let grad0 = cdf_eta_grads(self.base.as_ref(), &zeros, &f0, params, ctx)?;
 
         let mut out = rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
-            let (d1_0, d2_0) = &grad0[param];
+            let (d1_0, d2_0) = (&grad0[param].d1, &grad0[param].d2);
             for i in 0..y.len() {
                 if Self::is_zero(y[i]) {
                     // Zero rows carry no information about the positive-part params.
@@ -187,7 +187,10 @@ impl Distribution for Hurdle {
             u_xi[i] = (z - xi_i) / denom;
             i_xi[i] = 1.0 / denom;
         }
-        let xi_eta = chain_to_eta(HashMap::from([("xi".to_string(), (u_xi, i_xi))]), ctx)?;
+        let xi_eta = chain_to_eta(
+            HashMap::from([("xi".to_string(), ScoreInfo::new(u_xi, i_xi))]),
+            ctx,
+        )?;
         out.extend(xi_eta);
         Ok(out)
     }
@@ -324,7 +327,7 @@ mod tests {
         let p = params_view(&owned);
         let d = default_link_derivatives(&h, &y, &p).unwrap();
         for name in ["mu", "sigma", "xi"] {
-            let (u, w) = &d[name];
+            let (u, w) = (&d[name].score, &d[name].info);
             assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
         }
     }

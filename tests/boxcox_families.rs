@@ -4,9 +4,6 @@
 //! distributional reductions (BCT → BCCG as τ → ∞; BCPE → BCCG at τ = 2) are checked
 //! at the unit level, alongside the family impls.
 
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{linear, Generator};

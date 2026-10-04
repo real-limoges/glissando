@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Randomized normalized quantile residuals.
 
 mod common;

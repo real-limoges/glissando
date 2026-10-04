@@ -26,7 +26,6 @@
 // A failure here is a regression in the IRLS machinery, not an expected one.
 // `default_link_fits_reach_the_mle` is the control: if it fails, suspect the
 // oracle before the fitter. Do not repair a failure by loosening a tolerance.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{link_from_name, Distribution, Gamma, Link, Poisson};

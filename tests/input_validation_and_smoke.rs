@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Covers gaps the rest of the suite leaves open: the input-validation
 //! error paths (`preprocessing::validate_inputs`), degenerate-size robustness (n = 1,
 //! perfect separation), and one end-to-end smoke test that drives the whole public

@@ -1,7 +1,7 @@
 //! Serialization integration tests: structural wrappers (and a finite mixture) come
 //! through a `to_json → from_json → build()` round-trip and predict identically.
 
-#![cfg(all(feature = "serialization", not(feature = "python")))]
+#![cfg(feature = "serialization")]
 
 use glissando::distributions::{
     CensorStatus, Censored, Distribution, FamilyDescriptor, Gaussian, Hurdle, Ocat, Truncated,

@@ -24,10 +24,12 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 mod links;
+mod scale;
 pub use links::{
     link_from_name, CauchitLink, CloglogLink, FlooredLogLink, IdentityLink, InverseLink,
     InverseSquareLink, Link, LinkContext, LogLink, LogitLink, ProbitLink, SqrtLink,
 };
+pub use scale::{CdfGrad, CdfMap, DerivativeMap, Eta, Natural, ScoreInfo};
 // Re-exported at crate-internal scope so submodules can `use super::MIN_POSITIVE`
 // after the move without breaking. MAX_ETA/MIN_ETA are link-internal today; they
 // are re-exported here anyway so a future submodule can opt in without a separate edit.
@@ -100,31 +102,11 @@ fn saturate(v: f64) -> f64 {
 // Distribution trait
 // ============================================================================
 
-/// Score / Fisher-information pairs keyed by distribution-parameter name.
-pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
-
-/// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name: the same
-/// shape as a derivatives map, used by the structural wrappers.
-///
-/// This is the *chained* map, produced by `structural::cdf_eta_grads`. A family's
-/// own [`Distribution::cdf_theta_derivatives`] returns the natural-scale
-/// [`CdfThetaMap`] instead.
-pub type CdfEtaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
-/// Result wrapper around [`CdfEtaMap`].
-pub type CdfEtaResult = Result<CdfEtaMap, GamlssError>;
-
-/// Per-parameter `(∂F/∂θ, ∂²F/∂θ²)` pairs: the *natural-scale* counterpart of
-/// [`CdfEtaMap`], returned by [`Distribution::cdf_theta_derivatives`].
-///
-/// Structurally identical to [`CdfEtaMap`]; the two are distinct names so a
-/// reader can tell at a glance which side of the chain rule a value sits on.
-pub type CdfThetaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
-/// Result wrapper around [`CdfThetaMap`], returned by
-/// [`Distribution::cdf_theta_derivatives`].
-pub type CdfThetaResult = Result<CdfThetaMap, GamlssError>;
-
 /// Map a natural-scale derivatives map onto the linear-predictor scale:
 /// `u_η = mu_eta · ∂l/∂θ` and `w_η = mu_eta² · i_θ`, per parameter.
+///
+/// This is the only generic way from [`Natural`] to [`Eta`], so a natural-scale map
+/// cannot reach the scoring loop without passing through it exactly once.
 ///
 /// This is the generic chain rule every family with a separable natural scale
 /// delegates to from [`Distribution::eta_derivatives`], so that a link override
@@ -144,46 +126,55 @@ pub type CdfThetaResult = Result<CdfThetaMap, GamlssError>;
 /// parameters, or if the link derivatives and the derivative arrays disagree on
 /// length.
 pub fn chain_to_eta(
-    natural: HashMap<String, (Array1<f64>, Array1<f64>)>,
+    natural: DerivativeMap<Natural>,
     ctx: &LinkContext,
-) -> DerivativesResult {
+) -> Result<DerivativeMap<Eta>, GamlssError> {
     natural
         .into_iter()
-        .map(|(name, (mut u, mut i))| {
-            let mu_eta = ctx.mu_eta(&name)?;
-            if mu_eta.len() != u.len() || mu_eta.len() != i.len() {
-                return Err(GamlssError::Internal(format!(
-                    "chain_to_eta length mismatch for '{}': mu_eta {}, u {}, i {}",
-                    name,
-                    mu_eta.len(),
-                    u.len(),
-                    i.len()
-                )));
-            }
-            Zip::from(&mut u)
-                .and(&mut i)
-                .and(mu_eta)
-                .for_each(|u_out, i_out, &me| {
-                    if me == 0.0 {
-                        // `dμ/dη = 0` freezes the observation. No move in η changes
-                        // its μ, so its score and information are exactly zero
-                        // however large the natural-scale pair is. Taking the product
-                        // literally gives `inf · 0` = NaN for a family whose
-                        // natural-scale derivative diverges at a saturated θ, and one
-                        // NaN row poisons the entire PWLS solve: `scoring::step`'s
-                        // `w < MIN_WEIGHT` and `step > MAX_STEP` tests are both false
-                        // for NaN, so nothing downstream catches it. A hard zero is
-                        // reachable: `SqrtLink::mu_eta(0.0)` and
-                        // `LogLink::mu_eta(η ≤ −745)` are both exactly 0.
-                        *u_out = 0.0;
-                        *i_out = 0.0;
-                    } else {
-                        *u_out = saturate(*u_out * me);
-                        *i_out = saturate(*i_out * me * me);
-                    }
-                });
-            Ok((name, (u, i)))
-        })
+        .map(
+            |(
+                name,
+                ScoreInfo {
+                    score: mut u,
+                    info: mut i,
+                    ..
+                },
+            )| {
+                let mu_eta = ctx.mu_eta(&name)?;
+                if mu_eta.len() != u.len() || mu_eta.len() != i.len() {
+                    return Err(GamlssError::Internal(format!(
+                        "chain_to_eta length mismatch for '{}': mu_eta {}, u {}, i {}",
+                        name,
+                        mu_eta.len(),
+                        u.len(),
+                        i.len()
+                    )));
+                }
+                Zip::from(&mut u)
+                    .and(&mut i)
+                    .and(mu_eta)
+                    .for_each(|u_out, i_out, &me| {
+                        if me == 0.0 {
+                            // `dμ/dη = 0` freezes the observation. No move in η changes
+                            // its μ, so its score and information are exactly zero
+                            // however large the natural-scale pair is. Taking the product
+                            // literally gives `inf · 0` = NaN for a family whose
+                            // natural-scale derivative diverges at a saturated θ, and one
+                            // NaN row poisons the entire PWLS solve: `scoring::step`'s
+                            // `w < MIN_WEIGHT` and `step > MAX_STEP` tests are both false
+                            // for NaN, so nothing downstream catches it. A hard zero is
+                            // reachable: `SqrtLink::mu_eta(0.0)` and
+                            // `LogLink::mu_eta(η ≤ −745)` are both exactly 0.
+                            *u_out = 0.0;
+                            *i_out = 0.0;
+                        } else {
+                            *u_out = saturate(*u_out * me);
+                            *i_out = saturate(*i_out * me * me);
+                        }
+                    });
+                Ok((name, ScoreInfo::computed_on_eta(u, i)))
+            },
+        )
         .collect()
 }
 
@@ -206,12 +197,12 @@ pub fn chain_to_eta(
 ///
 /// Applied per parameter by `structural::cdf_eta_grads`, which is the sole caller.
 fn chain_cdf_to_eta(
-    d1: &mut Array1<f64>,
-    d2: &mut Array1<f64>,
+    natural: CdfGrad<Natural>,
     mu_eta: &Array1<f64>,
     mu_eta2: &Array1<f64>,
     param: &str,
-) -> Result<(), GamlssError> {
+) -> Result<CdfGrad<Eta>, GamlssError> {
+    let CdfGrad { mut d1, mut d2, .. } = natural;
     if mu_eta.len() != d1.len() || mu_eta.len() != d2.len() {
         return Err(GamlssError::Internal(format!(
             "chain_cdf_to_eta length mismatch for '{}': mu_eta {}, d1 {}, d2 {}",
@@ -221,8 +212,8 @@ fn chain_cdf_to_eta(
             d2.len()
         )));
     }
-    Zip::from(d1)
-        .and(d2)
+    Zip::from(&mut d1)
+        .and(&mut d2)
         .and(mu_eta)
         .and(mu_eta2)
         .for_each(|d1_out, d2_out, &me, &me2| {
@@ -233,7 +224,7 @@ fn chain_cdf_to_eta(
             *d2_out = saturate(me * me * *d2_out + me2 * *d1_out);
             *d1_out = saturate(*d1_out * me);
         });
-    Ok(())
+    Ok(CdfGrad::computed_on_eta(d1, d2))
 }
 
 /// Implement [`Distribution::eta_derivatives`] by chaining the family's
@@ -249,7 +240,10 @@ macro_rules! eta_derivatives_via_chain {
             y: &::ndarray::Array1<f64>,
             params: &::std::collections::HashMap<&str, &::ndarray::Array1<f64>>,
             ctx: &$crate::distributions::LinkContext,
-        ) -> $crate::distributions::DerivativesResult {
+        ) -> ::std::result::Result<
+            $crate::distributions::DerivativeMap<$crate::distributions::Eta>,
+            $crate::error::GamlssError,
+        > {
             $crate::distributions::chain_to_eta(self.theta_derivatives(y, params)?, ctx)
         }
     };
@@ -302,12 +296,9 @@ pub trait Distribution: Debug + Send + Sync {
     /// have. [`Self::eta_derivatives`] is the complete one, and is what the scoring
     /// loop calls.
     ///
-    /// It carried the plain name `derivatives` and returned *η-scale* pairs until the
-    /// generic-chain-rule refactor. The rename is intentional: an
-    /// embedder calling the old name against the new contract would otherwise have
-    /// read natural-scale numbers as η-scale ones, or hit the error default at
-    /// runtime, with nothing failing at compile time. Same reasoning as the
-    /// deliberately-absent default body on [`Self::eta_derivatives`].
+    /// The return type carries the scale: a [`DerivativeMap<Natural>`] cannot be
+    /// handed to anything expecting η-scale values, so the only way to the scoring
+    /// loop is through [`chain_to_eta`].
     ///
     /// **The returned `i_θ` must be unfloored.** `MIN_WEIGHT` is applied exactly
     /// once, downstream in `scoring::step`, after the chain rule; see
@@ -316,7 +307,7 @@ pub trait Distribution: Debug + Send + Sync {
         &self,
         _y: &Array1<f64>,
         _params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         Err(GamlssError::Internal(format!(
             "{} has no separable natural-scale derivative; it implements \
              eta_derivatives directly",
@@ -332,11 +323,13 @@ pub trait Distribution: Debug + Send + Sync {
     /// `chain_to_eta(self.theta_derivatives(y, params)?, ctx)`; the rest build the η-scale
     /// quantities directly.
     ///
-    /// **There is deliberately no default body.** [`Distribution`] is public, so an
-    /// external implementor written against the old η-scale `theta_derivatives` contract
-    /// would keep compiling against a defaulted adapter and double-chain
-    /// to `mu_eta⁴ · i_θ`, with no error at compile time or run time. Requiring the
-    /// method turns that into a compile error.
+    /// A hand-written body builds its η-scale values with
+    /// [`ScoreInfo::computed_on_eta`], whose name marks the site as computing on η
+    /// directly rather than chaining.
+    ///
+    /// **There is deliberately no default body.** A family that writes only
+    /// `theta_derivatives` must still say how it reaches η (almost always via
+    /// [`eta_derivatives_via_chain!`]), rather than inheriting an adapter.
     ///
     /// The returned `w` must be **unfloored**: `MIN_WEIGHT` is applied once,
     /// downstream, in the scoring loop. See [`chain_to_eta`] for why the order
@@ -346,7 +339,7 @@ pub trait Distribution: Debug + Send + Sync {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult;
+    ) -> Result<DerivativeMap<Eta>, GamlssError>;
 
     /// Whether [`Self::eta_derivatives`] reads [`LinkContext::mu_eta2`]. Default: `false`.
     ///
@@ -431,7 +424,8 @@ pub trait Distribution: Debug + Send + Sync {
     /// `structural::cdf_eta_grads` chains to η generically via
     /// [`Link::mu_eta`] and [`Link::mu_eta2`], so an overridden link is honored
     /// rather than ignored. Building a default-link chain rule in here is the
-    /// bug this contract replaced.
+    /// bug this contract replaced, and the [`CdfMap<Natural>`] return type now
+    /// makes an η-scale map a compile error.
     ///
     /// Only parameters with a closed form are included; the default returns an
     /// empty map. The structural wrappers ([`Censored`] / [`Truncated`] /
@@ -446,7 +440,7 @@ pub trait Distribution: Debug + Send + Sync {
         &self,
         _y: &Array1<f64>,
         _params: &HashMap<&str, &Array1<f64>>,
-    ) -> CdfThetaResult {
+    ) -> Result<CdfMap<Natural>, GamlssError> {
         Ok(HashMap::new())
     }
 
@@ -744,7 +738,7 @@ pub(crate) mod test_helpers {
         family: &D,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         let links = ParamLinks::defaults(family, params);
         family.eta_derivatives(y, params, &links.context())
     }
@@ -794,7 +788,13 @@ pub(crate) mod test_helpers {
         let mut expected: Vec<&str> = d.parameters().to_vec();
         expected.sort();
         assert_eq!(keys, expected);
-        for (name, (u, w)) in &derivs {
+        for (
+            name,
+            ScoreInfo {
+                score: u, info: w, ..
+            },
+        ) in &derivs
+        {
             assert_eq!(u.len(), y.len());
             assert_eq!(w.len(), y.len());
             assert!(finite_array(u));
@@ -867,7 +867,7 @@ pub(crate) mod test_helpers {
         let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let links = ParamLinks::overriding(family, &p, target, link);
         let derivs = family.eta_derivatives(y, &p, &links.context()).unwrap();
-        let analytic_u = derivs.get(target).unwrap().0.clone();
+        let analytic_u = derivs.get(target).unwrap().score.clone();
 
         let eps: f64 = 1e-6;
         let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
@@ -929,7 +929,12 @@ pub(crate) mod test_helpers {
     ) {
         let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let derivs = family.cdf_theta_derivatives(y, &p).unwrap();
-        let Some((analytic_d1, analytic_d2)) = derivs.get(target) else {
+        let Some(CdfGrad {
+            d1: analytic_d1,
+            d2: analytic_d2,
+            ..
+        }) = derivs.get(target)
+        else {
             panic!(
                 "{}::{} supplies no analytic cdf_theta_derivatives entry, so this \
                  check would be vacuous. The structural wrappers fall back to a \
@@ -1124,10 +1129,10 @@ mod tests {
 
         let natural = HashMap::from([(
             "sigma".to_string(),
-            (array![3.0, 5.0], array![4.0, 0.5]), // ∂l/∂σ, i_σ
+            ScoreInfo::new(array![3.0, 5.0], array![4.0, 0.5]), // ∂l/∂σ, i_σ
         )]);
         let out = chain_to_eta(natural, &ctx).unwrap();
-        let (u, w) = &out["sigma"];
+        let (u, w) = (&out["sigma"].score, &out["sigma"].info);
 
         assert!((u[0] - 3.0).abs() < 1e-12); // 1·3
         assert!((u[1] - 10.0).abs() < 1e-12); // 2·5
@@ -1144,10 +1149,11 @@ mod tests {
         let id = IdentityLink;
         let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("mu".to_string(), (array![1.0], array![1e-18]))]);
+        let natural =
+            HashMap::from([("mu".to_string(), ScoreInfo::new(array![1.0], array![1e-18]))]);
         let out = chain_to_eta(natural, &ctx).unwrap();
-        assert_eq!(out["mu"].1[0], 1e-18);
-        assert!(out["mu"].1[0] < MIN_WEIGHT);
+        assert_eq!(out["mu"].info[0], 1e-18);
+        assert!(out["mu"].info[0] < MIN_WEIGHT);
     }
 
     #[test]
@@ -1156,7 +1162,10 @@ mod tests {
         let id = IdentityLink;
         let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("sigma".to_string(), (array![1.0], array![1.0]))]);
+        let natural = HashMap::from([(
+            "sigma".to_string(),
+            ScoreInfo::new(array![1.0], array![1.0]),
+        )]);
         let err = chain_to_eta(natural, &ctx).unwrap_err();
         assert!(matches!(err, GamlssError::Internal(_)), "{err:?}");
     }
@@ -1167,7 +1176,7 @@ mod tests {
         let id = IdentityLink;
         let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("mu".to_string(), (array![1.0], array![1.0]))]);
+        let natural = HashMap::from([("mu".to_string(), ScoreInfo::new(array![1.0], array![1.0]))]);
         let err = chain_to_eta(natural, &ctx).unwrap_err();
         assert!(matches!(err, GamlssError::Internal(_)), "{err:?}");
     }

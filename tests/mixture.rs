@@ -1,8 +1,6 @@
 //! Mixture integration tests. Finite mixtures fit by EM should recover a known
 //! two-component structure and beat a single-component fit.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::Gaussian;
 use glissando::fitting::mixture::fit_mixture;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Term};

@@ -22,7 +22,7 @@
 use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
-use super::{clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext};
+use super::{clamp_prob, DerivativeMap, Distribution, Eta, GamlssError, Link, LinkContext};
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -172,7 +172,7 @@ impl Distribution for Censored {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         self.check_len(y.len())?;
         // Event rows keep the base score / Fisher weight. Censored rows get
         // overwritten with the survival / interval score and the observed-information
@@ -190,7 +190,7 @@ impl Distribution for Censored {
         };
 
         rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
-            let (d1y, d2y) = &grad_y[param];
+            let (d1y, d2y) = (&grad_y[param].d1, &grad_y[param].d2);
             for i in 0..y.len() {
                 match self.status[i] {
                     CensorStatus::Event => {}
@@ -205,7 +205,8 @@ impl Distribution for Censored {
                         w[i] = -d2y[i] / fv + (d1y[i] / fv).powi(2);
                     }
                     CensorStatus::Interval => {
-                        let (d1u, d2u) = &grad_up.as_ref().expect("interval grads")[param];
+                        let up = &grad_up.as_ref().expect("interval grads")[param];
+                        let (d1u, d2u) = (&up.d1, &up.d2);
                         let f_upper = f_up.as_ref().expect("interval upper")[i];
                         let dd = clamp_prob(f_upper - f_y[i]);
                         let d1 = d1u[i] - d1y[i];
@@ -307,8 +308,8 @@ mod tests {
         let base = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         let got = default_link_derivatives(&cens, &y, &p).unwrap();
         for param in ["mu", "sigma"] {
-            let (ub, _) = &base[param];
-            let (ug, _) = &got[param];
+            let (ub, _) = (&base[param].score, &base[param].info);
+            let (ug, _) = (&got[param].score, &got[param].info);
             for i in 0..4 {
                 assert!((ub[i] - ug[i]).abs() < 1e-12);
             }
@@ -417,7 +418,7 @@ mod tests {
         let p = params_view(&owned);
         let d = default_link_derivatives(&cens, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u, w) = &d[name];
+            let (u, w) = (&d[name].score, &d[name].info);
             assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
         }
     }

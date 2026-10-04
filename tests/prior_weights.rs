@@ -9,7 +9,6 @@
 //
 // The mgcv parity benchmarks (B1/B2) don't live here; they're in the benchmark
 // harness, run via `benchmark/run_comparison.sh` + `cargo test --test mgcv_reference`.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;

@@ -1,8 +1,8 @@
 //! Poisson distribution for count data.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::par_zip_map;
 use ndarray::Array1;
@@ -39,7 +39,7 @@ impl Distribution for Poisson {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Log-likelihood: l = y·log(μ) − μ.
         // Natural scale:  ∂l/∂μ = (y−μ)/μ,   i_μ = 1/μ.
         //
@@ -51,7 +51,10 @@ impl Distribution for Poisson {
         // `1/μ` is both the reciprocal in the score and the information itself.
         let i_mu = mu.mapv(|m| 1.0 / m.max(DENOM_FLOOR));
         let u_mu = (y - mu) * &i_mu;
-        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
+        Ok(HashMap::from([(
+            "mu".to_string(),
+            ScoreInfo::new(u_mu, i_mu),
+        )]))
     }
 
     fn loglik_pointwise(
@@ -133,7 +136,7 @@ mod tests {
         let mut p = HashMap::new();
         p.insert("mu", &mu);
         let derivs = default_link_derivatives(&Poisson, &y, &p).unwrap();
-        let (u, _) = &derivs["mu"];
+        let (u, _) = (&derivs["mu"].score, &derivs["mu"].info);
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }
 
@@ -191,11 +194,11 @@ mod tests {
         let owned = [("mu", array![0.0, 1e-320, 1e-8])];
         let p = params_view(&owned);
         let natural = Poisson.theta_derivatives(&y, &p).unwrap();
-        let (u_nat, i_nat) = &natural["mu"];
+        let (u_nat, i_nat) = (&natural["mu"].score, &natural["mu"].info);
         assert!(finite_array(u_nat) && finite_array(i_nat));
 
         let chained = default_link_derivatives(&Poisson, &y, &p).unwrap();
-        let (u, w) = &chained["mu"];
+        let (u, w) = (&chained["mu"].score, &chained["mu"].info);
         assert!(finite_array(u) && finite_array(w), "u={u:?} w={w:?}");
         assert!(w.iter().all(|&v| v >= 0.0));
     }

@@ -2,8 +2,6 @@
 //! standard RS loop, recovers known parameters under right-censoring, and collapses
 //! back to the base family when every row is an event.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{CensorStatus, Censored, Distribution, Gaussian};
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;

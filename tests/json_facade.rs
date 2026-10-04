@@ -1,6 +1,5 @@
-// The JSON facade sits behind the `serialization` feature. `python` is excluded
-// for the usual PyO3 extension-module linking reason.
-#![cfg(all(feature = "serialization", not(feature = "python")))]
+// The JSON facade sits behind the `serialization` feature.
+#![cfg(feature = "serialization")]
 
 //! Native round-trip of the embedding contract (`glissando::json`). These tests
 //! exercise the public facade the way a non-WASM, non-Python embedder would, with

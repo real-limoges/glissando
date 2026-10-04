@@ -6,9 +6,6 @@
 //! recovers a level-specific slope, and resolved factor levels replay verbatim
 //! through a JSON round-trip and at predict time.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::Gaussian;
 use glissando::{Contrast, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;

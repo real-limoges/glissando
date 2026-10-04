@@ -6,7 +6,6 @@
 // map from whatever data was passed to `predict`, so a prediction on a grid, a
 // subset, or reordered groups was evaluated on a different basis than the one
 // the coefficients were fitted on.
-#![cfg(not(feature = "python"))]
 
 mod common;
 

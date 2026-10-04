@@ -5,9 +5,6 @@
 //! for a Gaussian identity-link model `μ = X·β + o`, fitting `y` with offset `o`
 //! is exactly fitting `(y − o)` with no offset.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Gaussian, Poisson};
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;

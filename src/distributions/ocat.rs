@@ -20,7 +20,8 @@
 //! Python `Ocat(n_categories=4)` class.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LinkContext, LogLink,
+    require, DerivativeMap, Distribution, Eta, GamlssError, IdentityLink, Link, LinkContext,
+    LogLink, ScoreInfo,
 };
 use crate::distributions::{MAX_ETA, MIN_ETA};
 use ndarray::Array1;
@@ -227,7 +228,7 @@ impl Distribution for Ocat {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         _ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         let eta_mu = require(self, params, "mu")?;
         let n_obs = y.len();
         let n_thresh = self.n_thresholds();
@@ -321,10 +322,13 @@ impl Distribution for Ocat {
             }
         }
 
-        let mut result: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
-        result.insert("mu".to_string(), (u_mu, w_mu));
+        let mut result: DerivativeMap<Eta> = HashMap::new();
+        result.insert("mu".to_string(), ScoreInfo::computed_on_eta(u_mu, w_mu));
         for (k0, (u_k, w_k)) in u_thresh.into_iter().zip(w_thresh).enumerate() {
-            result.insert(Self::threshold_param_name(k0 + 1).to_string(), (u_k, w_k));
+            result.insert(
+                Self::threshold_param_name(k0 + 1).to_string(),
+                ScoreInfo::computed_on_eta(u_k, w_k),
+            );
         }
         Ok(result)
     }

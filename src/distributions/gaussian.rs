@@ -1,8 +1,8 @@
 //! Gaussian (Normal) distribution.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    require, CdfGrad, DerivativeMap, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, std_normal_cdf, std_normal_pdf, std_normal_quantile};
 use ndarray::Array1;
@@ -39,7 +39,7 @@ impl Distribution for Gaussian {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
         // Natural scale (no link folded in):
         //   μ:  ∂l/∂μ = (y−μ)/σ²,               i_μ = 1/σ².
@@ -69,8 +69,8 @@ impl Distribution for Gaussian {
         let i_sigma = 2.0 * &inv_sigma_sq;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -111,7 +111,7 @@ impl Distribution for Gaussian {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // Natural-scale location-scale derivatives of F = Φ(z),
         // z = (y−μ)/σ, std-normal pdf φ, φ'(z) = −z·φ(z). ∂z/∂μ = −1/σ and
         // ∂z/∂σ = −z/σ, so:
@@ -159,8 +159,8 @@ impl Distribution for Gaussian {
             };
         }
         Ok(HashMap::from([
-            ("mu".to_string(), (d1_mu, d2_mu)),
-            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+            ("mu".to_string(), CdfGrad::new(d1_mu, d2_mu)),
+            ("sigma".to_string(), CdfGrad::new(d1_sigma, d2_sigma)),
         ]))
     }
 
@@ -211,7 +211,7 @@ mod tests {
         let p = params_view(&owned);
         let d = Gaussian.cdf_theta_derivatives(&bounds, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+            let (d1, d2) = (&d[name].d1, &d[name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -242,7 +242,7 @@ mod tests {
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
         let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
-        let (u_mu, w_mu) = &derivs["mu"];
+        let (u_mu, w_mu) = (&derivs["mu"].score, &derivs["mu"].info);
         assert!(u_mu.iter().all(|&v| v.abs() < 1e-12));
         // w_mu = 1/sigma^2 = 1.0
         assert!(w_mu.iter().all(|&v| (v - 1.0).abs() < 1e-12));
@@ -281,9 +281,9 @@ mod tests {
         let natural = Gaussian.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gaussian, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }
@@ -298,7 +298,7 @@ mod tests {
         p.insert("mu", &mu);
         p.insert("sigma", &sigma);
         let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
-        let (_, w_sigma) = &derivs["sigma"];
+        let (_, w_sigma) = (&derivs["sigma"].score, &derivs["sigma"].info);
         assert!(w_sigma.iter().all(|&v| (v - 2.0).abs() < 1e-12));
     }
 
@@ -364,7 +364,7 @@ mod tests {
         let p = params_view(&owned);
         let d = Gaussian.cdf_theta_derivatives(&y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+            let (d1, d2) = (&d[name].d1, &d[name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"

@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Parameter-recovery coverage for a P-spline smooth on a scale parameter.
 //!
 //! `tests/parameter_recovery.rs` and `tests/comprehensive.rs` cover smooths on

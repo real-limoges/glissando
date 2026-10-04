@@ -16,8 +16,8 @@ use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
 };
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma, trigamma};
 use ndarray::Array1;
@@ -89,7 +89,7 @@ impl Distribution for BCPE {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The PE score swaps out the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
         // (= z at τ=2). Natural scale; chain_to_eta reapplies the default links (log, log,
@@ -185,10 +185,10 @@ impl Distribution for BCPE {
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
-            ("nu".to_string(), (u_nu, i_nu)),
-            ("tau".to_string(), (u_tau, i_tau)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
+            ("nu".to_string(), ScoreInfo::new(u_nu, i_nu)),
+            ("tau".to_string(), ScoreInfo::new(u_tau, i_tau)),
         ]))
     }
 
@@ -388,9 +388,9 @@ mod tests {
         let natural = BCPE.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&BCPE, &y, &p).unwrap();
         for name in ["mu", "sigma", "nu", "tau"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }

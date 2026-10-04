@@ -1,8 +1,8 @@
-// Golden characterization tables for `Distribution::theta_derivatives`.
+// Golden characterization tables for `Distribution::eta_derivatives`.
 //
 // PURPOSE. These snapshots freeze the exact `(score, weight)` arrays every
 // family returns, per parameter, at a fixed fixture. Families return natural-scale
-// pairs and `fitting/scoring.rs` applies the `dμ/dη` chain rule, so under
+// pairs and `chain_to_eta` applies the `dμ/dη` chain rule, so under
 // default links these numbers must not move. Any drift here is a defect, not a
 // snapshot to re-accept.
 //
@@ -25,7 +25,6 @@
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test derivative_golden`,
 // then `cargo insta accept`.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{Beta, Binomial};
@@ -126,9 +125,10 @@ fn golden<D: Distribution + ?Sized>(
     let mut scores = BTreeMap::new();
     let mut weights = BTreeMap::new();
     for &name in family.parameters() {
-        let (u, w) = derivs
+        let d = derivs
             .get(name)
             .unwrap_or_else(|| panic!("{}: no derivatives entry for '{}'", family.name(), name));
+        let (u, w) = (&d.score, &d.info);
         assert_eq!(u.len(), y.len(), "{}::{} score length", family.name(), name);
         assert_eq!(
             w.len(),

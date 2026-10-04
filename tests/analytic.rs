@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Closed-form anchors: the iterative fitter must recover the exact analytic
 //! solution on problems where one exists, independent of any snapshot or
 //! regression comparison against past runs.

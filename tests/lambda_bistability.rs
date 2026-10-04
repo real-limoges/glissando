@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! DIAGNOSTIC harness (`#[ignore]`d) for the smoothing-parameter bistability:
 //! a P-spline smooth on the control case (`mu_smooth_recovers_nonlinear_mean_control`)
 //! sometimes collapses onto its penalty null space (edf → ~2, a straight line)

@@ -5,9 +5,6 @@
 //! has to equal a fit on the manually pre-filtered data. `NaAction::Fail` keeps
 //! the historical hard-error behavior.
 
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::Gaussian;
 use glissando::{DataSet, FitConfig, Formula, GamlssError, GamlssModel, NaAction, Term};
 use ndarray::Array1;

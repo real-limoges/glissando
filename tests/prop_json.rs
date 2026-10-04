@@ -1,10 +1,5 @@
-// The JSON facade sits behind the `serialization` feature; `python` is excluded
-// for the usual PyO3 extension-module linking reason, and proptest is non-wasm.
-#![cfg(all(
-    feature = "serialization",
-    not(feature = "python"),
-    not(target_arch = "wasm32")
-))]
+// The JSON facade sits behind the `serialization` feature, and proptest is non-wasm.
+#![cfg(all(feature = "serialization", not(target_arch = "wasm32")))]
 
 //! Property-based coverage of the `glissando::json` embedding facade.
 //!

@@ -13,7 +13,7 @@
 //! [`Distribution::default_link`].
 
 use super::{
-    chain_cdf_to_eta, CdfEtaResult, DerivativesResult, Distribution, GamlssError, LinkContext,
+    chain_cdf_to_eta, CdfGrad, CdfMap, DerivativeMap, Distribution, Eta, GamlssError, LinkContext,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -128,17 +128,17 @@ pub(crate) fn cdf_eta_grads(
     f0: &Array1<f64>,
     params: &HashMap<&str, &Array1<f64>>,
     ctx: &LinkContext,
-) -> CdfEtaResult {
+) -> Result<CdfMap<Eta>, GamlssError> {
     // `remove`, not `get`: the map is freshly built here and dropped on return, so
-    // taking each entry out lets the chain rule work in place. Cloning instead cost
+    // taking each entry out lets the chain rule take it by value and work in place. Cloning instead cost
     // two n-length allocations per analytic parameter, and `Censored` and `Truncated`
     // each call this twice per scoring step.
     let mut analytic = base.cdf_theta_derivatives(at, params)?;
     let mut out = HashMap::new();
     for &p in base.parameters() {
-        if let Some((mut d1, mut d2)) = analytic.remove(p) {
-            chain_cdf_to_eta(&mut d1, &mut d2, ctx.mu_eta(p)?, ctx.mu_eta2(p)?, p)?;
-            out.insert(p.to_string(), (d1, d2));
+        if let Some(natural) = analytic.remove(p) {
+            let chained = chain_cdf_to_eta(natural, ctx.mu_eta(p)?, ctx.mu_eta2(p)?, p)?;
+            out.insert(p.to_string(), chained);
         } else {
             let grads = numeric_cdf_grad(base, at, f0, params, p, ctx)?;
             out.insert(p.to_string(), grads);
@@ -174,7 +174,7 @@ fn numeric_cdf_grad(
     params: &HashMap<&str, &Array1<f64>>,
     param: &str,
     ctx: &LinkContext,
-) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
+) -> Result<CdfGrad<Eta>, GamlssError> {
     let orig = params
         .get(param)
         .copied()
@@ -211,11 +211,11 @@ fn numeric_cdf_grad(
 
     let d1 = (&f_plus - &f_minus) / (2.0 * FD_EPS);
     let d2 = (&f_plus - 2.0 * f0 + &f_minus) / (FD_EPS * FD_EPS);
-    Ok((d1, d2))
+    Ok(CdfGrad::computed_on_eta(d1, d2))
 }
 
 /// Rewrite each base parameter's `(score, weight)` in place. Shared by the three
-/// structural wrappers' `theta_derivatives`: each already has `base_derivs` (the base
+/// structural wrappers' `eta_derivatives`: each already has `base_derivs` (the base
 /// family's own `(u, w)` per parameter) and a per-row rule for overwriting some
 /// or all of it; this factors out only the "loop over `base.parameters()`, take
 /// that parameter's `(u, w)` out of `base_derivs`, hand it to the caller, put the
@@ -233,16 +233,16 @@ fn numeric_cdf_grad(
 /// for one of `base.parameters()`; mirrors each wrapper's previous inline check.
 pub(crate) fn rewrite_base_derivatives(
     base: &dyn Distribution,
-    mut base_derivs: HashMap<String, (Array1<f64>, Array1<f64>)>,
+    mut base_derivs: DerivativeMap<Eta>,
     mut rewrite: impl FnMut(&str, &mut Array1<f64>, &mut Array1<f64>),
-) -> DerivativesResult {
-    let mut out: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
+) -> Result<DerivativeMap<Eta>, GamlssError> {
+    let mut out: DerivativeMap<Eta> = HashMap::new();
     for &param in base.parameters() {
-        let (mut u, mut w) = base_derivs
+        let mut derivs = base_derivs
             .remove(param)
             .ok_or_else(|| base.unknown_param(param))?;
-        rewrite(param, &mut u, &mut w);
-        out.insert(param.to_string(), (u, w));
+        rewrite(param, &mut derivs.score, &mut derivs.info);
+        out.insert(param.to_string(), derivs);
     }
     Ok(out)
 }

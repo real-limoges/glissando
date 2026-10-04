@@ -6,7 +6,6 @@
 // unchanged solution on well-behaved data; both are checked here against the
 // public API. The fine-grained mechanics (a single halving lands a lower
 // deviance) live in unit tests in `src/fitting/scoring.rs`.
-#![cfg(not(feature = "python"))]
 
 mod common;
 

@@ -1,8 +1,9 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    chain_to_eta, clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink,
-    GamlssError, IdentityLink, Link, LinkContext, LogLink, DENOM_FLOOR, MIN_POSITIVE,
+    chain_to_eta, clamp_prob, require, CdfGrad, DerivativeMap, Distribution, Eta, FlooredLogLink,
+    GamlssError, IdentityLink, Link, LinkContext, LogLink, Natural, ScoreInfo, DENOM_FLOOR,
+    MIN_POSITIVE,
 };
 use crate::math::{
     digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
@@ -108,7 +109,7 @@ impl Distribution for StudentT {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         // Build the standardized-residual block once and hand it to both halves.
         // `theta_derivatives` and the ν block each need `(z², w_robust)`, and recomputing
         // it in the second cost two extra O(n) passes plus n divisions on every
@@ -131,7 +132,7 @@ impl Distribution for StudentT {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         self.mu_sigma_derivatives(&Standardized::new(self, y, params)?, params)
     }
 
@@ -195,7 +196,7 @@ impl Distribution for StudentT {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // Natural-scale location-scale derivatives of F = T_ν(z),
         // z = (y−μ)/σ, with standardized t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²).
         // ∂z/∂μ = −1/σ and ∂z/∂σ = −z/σ, so:
@@ -252,8 +253,8 @@ impl Distribution for StudentT {
             };
         }
         Ok(HashMap::from([
-            ("mu".to_string(), (d1_mu, d2_mu)),
-            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+            ("mu".to_string(), CdfGrad::new(d1_mu, d2_mu)),
+            ("sigma".to_string(), CdfGrad::new(d1_sigma, d2_sigma)),
         ]))
     }
 
@@ -338,7 +339,7 @@ impl StudentT {
         &self,
         s: &Standardized,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         let nu = require(self, params, "nu")?;
 
         // μ derivatives (identity link, so the chain rule leaves these untouched).
@@ -360,8 +361,8 @@ impl StudentT {
         });
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -374,7 +375,7 @@ impl StudentT {
         &self,
         s: &Standardized,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
+    ) -> Result<ScoreInfo<Eta>, GamlssError> {
         let nu = require(self, params, "nu")?;
         let z_sq = &s.z_sq;
         let w_robust = &s.w_robust;
@@ -443,7 +444,7 @@ impl StudentT {
         // the negative values the trigamma near-cancellation can produce as well.
         let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| i * nu_i * nu_i);
 
-        Ok((u_nu, w_nu))
+        Ok(ScoreInfo::computed_on_eta(u_nu, w_nu))
     }
 }
 
@@ -605,7 +606,7 @@ mod tests {
         let p = params_view(&owned);
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
         for name in ["mu", "sigma", "nu"] {
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(
                 finite_array(u) && finite_array(w),
                 "{name}: u={u:?} w={w:?}"
@@ -626,7 +627,7 @@ mod tests {
         let p = params_view(&owned);
         let d = StudentT.cdf_theta_derivatives(&bounds, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+            let (d1, d2) = (&d[name].d1, &d[name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -653,11 +654,11 @@ mod tests {
         let natural = StudentT.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
         }
         for name in ["mu", "sigma", "nu"] {
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -717,7 +718,7 @@ mod tests {
         let p = params_view(&owned);
         let d = StudentT.cdf_theta_derivatives(&y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+            let (d1, d2) = (&d[name].d1, &d[name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"

@@ -1,8 +1,8 @@
 //! Weibull distribution for positive continuous data
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
-    MIN_POSITIVE,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
 use ndarray::Array1;
@@ -51,7 +51,7 @@ impl Distribution for Weibull {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // z = (y/μ)^σ ~ Exp(1) at the truth. Natural scale:
         //   μ: ∂l/∂μ = σ(z−1)/μ,                    i_μ = σ²/μ².
         //   σ: ∂l/∂σ = [1 + σ·ln(y/μ)·(1−z)]/σ,     i_σ = (π²/6 + (1−γ)²)/σ².
@@ -101,8 +101,8 @@ impl Distribution for Weibull {
         let i_sigma = inv_sigma_sq.mapv(|iss| i_sigma_numer * iss);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -208,14 +208,14 @@ mod tests {
         let links = ParamLinks::overriding(&Weibull, &p, "mu", &SqrtLink);
         let d = Weibull.eta_derivatives(&y, &p, &links.context()).unwrap();
         for name in ["mu", "sigma"] {
-            let (u, w) = &d[name];
+            let (u, w) = (&d[name].score, &d[name].info);
             assert!(
                 finite_array(u) && finite_array(w),
                 "{name}: u={u:?} w={w:?}"
             );
         }
         // A frozen row contributes nothing, not a saturated something.
-        assert_eq!((d["mu"].0[0], d["mu"].1[0]), (0.0, 0.0));
+        assert_eq!((d["mu"].score[0], d["mu"].info[0]), (0.0, 0.0));
     }
 
     #[test]
@@ -290,9 +290,9 @@ mod tests {
         let natural = Weibull.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Weibull, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }

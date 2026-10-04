@@ -22,7 +22,7 @@ use super::structural::{
     cdf_eta_grads, check_state_len, delegate_to_base, rewrite_base_derivatives,
 };
 use super::{
-    clamp_prob, DerivativesResult, Distribution, GamlssError, Link, LinkContext, PROB_EPS,
+    clamp_prob, CdfMap, DerivativeMap, Distribution, Eta, GamlssError, Link, LinkContext, PROB_EPS,
 };
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -93,7 +93,7 @@ impl Truncated {
         bound: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> Result<(Array1<f64>, super::CdfEtaMap), GamlssError> {
+    ) -> Result<(Array1<f64>, CdfMap<Eta>), GamlssError> {
         let f = self.cdf_at(bound, params)?;
         let sanitized = bound.mapv(|v| if v.is_finite() { v } else { 0.0 });
         let mut grads = cdf_eta_grads(self.base.as_ref(), &sanitized, &f, params, ctx)?;
@@ -101,9 +101,9 @@ impl Truncated {
             if bound[i].is_finite() {
                 continue;
             }
-            for (d1, d2) in grads.values_mut() {
-                d1[i] = 0.0;
-                d2[i] = 0.0;
+            for grad in grads.values_mut() {
+                grad.d1[i] = 0.0;
+                grad.d2[i] = 0.0;
             }
         }
         Ok((f, grads))
@@ -156,7 +156,7 @@ impl Distribution for Truncated {
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         self.check_len(y.len())?;
         // Score / weight = base contribution minus the normalizer's. For the
         // normalizer D = F(hi) − F(lo):
@@ -166,8 +166,8 @@ impl Distribution for Truncated {
         let (f_hi, grad_hi) = self.cdf_and_grads_at(&self.upper, params, ctx)?;
 
         rewrite_base_derivatives(self.base.as_ref(), base_derivs, |param, u, w| {
-            let (d1_lo, d2_lo) = &grad_lo[param];
-            let (d1_hi, d2_hi) = &grad_hi[param];
+            let (d1_lo, d2_lo) = (&grad_lo[param].d1, &grad_lo[param].d2);
+            let (d1_hi, d2_hi) = (&grad_hi[param].d1, &grad_hi[param].d2);
             for i in 0..y.len() {
                 let dmass = (f_hi[i] - f_lo[i]).max(PROB_EPS);
                 let d1 = d1_hi[i] - d1_lo[i];
@@ -360,7 +360,7 @@ mod tests {
         let p = params_view(&owned);
         let d = default_link_derivatives(&trunc, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u, w) = &d[name];
+            let (u, w) = (&d[name].score, &d[name].info);
             assert!(finite_array(u) && finite_array(w), "{name}: {u:?} {w:?}");
         }
     }

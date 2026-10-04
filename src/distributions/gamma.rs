@@ -1,8 +1,8 @@
 //! Gamma distribution for positive continuous data.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
-    MIN_POSITIVE,
+    clamp_prob, require, CdfGrad, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -58,7 +58,7 @@ impl Distribution for Gamma {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
         // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
         // Natural scale:
@@ -120,8 +120,8 @@ impl Distribution for Gamma {
         let i_sigma = 4.0 * &inv_sigma_6 * &psi_prime_alpha - 4.0 * &inv_sigma_4;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -172,7 +172,7 @@ impl Distribution for Gamma {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ², so ∂x/∂μ = −x/μ
         // holds the shape α fixed and the shape-derivative that blocks σ never
         // appears. Writing `mass` for the γ-density factor xᵅ·e⁻ˣ/Γ(α), the
@@ -209,7 +209,7 @@ impl Distribution for Gamma {
             d1[i] = -mass / denom1;
             d2[i] = mass * (1.0 + alpha - x) / denom2;
         }
-        Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
+        Ok(HashMap::from([("mu".to_string(), CdfGrad::new(d1, d2))]))
     }
 
     fn quantile(
@@ -320,9 +320,9 @@ mod tests {
         let natural = Gamma.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gamma, &y, &p).unwrap();
         for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -354,7 +354,7 @@ mod tests {
         ];
         let p = params_view(&owned);
         let d = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
-        let (d1, d2) = &d["mu"];
+        let (d1, d2) = (&d["mu"].d1, &d["mu"].d2);
         assert!(finite_array(d1) && finite_array(d2), "{d1:?} {d2:?}");
     }
 

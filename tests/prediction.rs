@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{cr_spline, linear_intercepts, random, smooth_intercepts, Generator};

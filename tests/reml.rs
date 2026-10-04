@@ -13,7 +13,6 @@
 // existing benchmark harness (`benchmark/run_comparison.sh` + the ignored
 // `tests/mgcv_reference.rs`); duplicating that here would re-implement the same
 // workflow.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;

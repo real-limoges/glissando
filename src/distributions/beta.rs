@@ -1,8 +1,8 @@
 //! Beta distribution for proportions on `(0, 1)`.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, LogitLink,
-    MIN_POSITIVE, TRIGAMMA_FLOOR,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, LogitLink,
+    Natural, ScoreInfo, MIN_POSITIVE, TRIGAMMA_FLOOR,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
 use ndarray::Array1;
@@ -43,7 +43,7 @@ impl Distribution for Beta {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Beta (μ, φ) parameterization: α = μφ, β = (1−μ)φ.
         // l = log Γ(φ) − log Γ(α) − log Γ(β) + (α−1)·log(y) + (β−1)·log(1−y).
         let mu = require(self, params, "mu")?;
@@ -106,8 +106,8 @@ impl Distribution for Beta {
         let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_beta - &psi_prime_phi;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (dl_dmu, i_mu)),
-            ("phi".to_string(), (dl_dphi, i_phi)),
+            ("mu".to_string(), ScoreInfo::new(dl_dmu, i_mu)),
+            ("phi".to_string(), ScoreInfo::new(dl_dphi, i_phi)),
         ]))
     }
 
@@ -204,7 +204,7 @@ mod tests {
         let truthful = [("mu", array![7.6e-24]), ("phi", array![10.0])];
         let a = Beta.theta_derivatives(&y, &params_view(&clamped)).unwrap();
         let b = Beta.theta_derivatives(&y, &params_view(&truthful)).unwrap();
-        let (ua, ub) = (a["mu"].0[0], b["mu"].0[0]);
+        let (ua, ub) = (a["mu"].score[0], b["mu"].score[0]);
         assert!(
             ua.is_finite() && ub.is_finite() && (ua - ub).abs() > 1.0,
             "μ = 1e-10 and μ = 7.6e-24 gave {ua} and {ub}"
@@ -280,9 +280,9 @@ mod tests {
         let natural = Beta.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Beta, &y, &p).unwrap();
         for name in ["mu", "phi"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }

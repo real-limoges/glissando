@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -33,7 +33,7 @@ Documentation = "https://docs.rs/glissando"
 
 [project.optional-dependencies]
 dev = [
-    "maturin>=1.0,<2.0",
+    "maturin>=1.15,<2.0",
     "pytest>=7.0",
 ]
 

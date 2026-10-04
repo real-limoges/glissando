@@ -2,8 +2,6 @@
 //! the parameters of a left-truncated Gaussian, and collapses back to the base
 //! family once the range is unbounded.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Distribution, Gaussian, Truncated};
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;

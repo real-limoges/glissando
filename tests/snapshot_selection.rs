@@ -6,7 +6,6 @@
 // First-time creation / deliberate refresh:
 //   INSTA_UPDATE=auto cargo test --test snapshot_selection
 // then promote the `.snap.new` files by hand (cargo-insta is not installed).
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;

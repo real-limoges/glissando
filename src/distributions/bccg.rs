@@ -13,8 +13,8 @@ use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
 };
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{std_normal_cdf, std_normal_quantile};
 use ndarray::Array1;
@@ -69,7 +69,7 @@ impl Distribution for BCCG {
         &self,
         y: &Array1<f64>,
         params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Box-Cox z-score plus the natural-scale score/Fisher pairs. By the definition
         // of z, T = (y/μ)^ν = 1+νσz,
         // so the bracketed numerators simplify to the forms below.
@@ -116,9 +116,9 @@ impl Distribution for BCCG {
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
-            ("nu".to_string(), (u_nu, i_nu)),
+            ("mu".to_string(), ScoreInfo::new(u_mu, i_mu)),
+            ("sigma".to_string(), ScoreInfo::new(u_sigma, i_sigma)),
+            ("nu".to_string(), ScoreInfo::new(u_nu, i_nu)),
         ]))
     }
 
@@ -315,9 +315,9 @@ mod tests {
         let natural = BCCG.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&BCCG, &y, &p).unwrap();
         for name in ["mu", "sigma", "nu"] {
-            let (u_n, i_n) = &natural[name];
+            let (u_n, i_n) = (&natural[name].score, &natural[name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[name].score, &chained[name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }

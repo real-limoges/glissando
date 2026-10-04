@@ -1,7 +1,7 @@
 // Per-family end-to-end fit snapshots.
 //
 // `tests/regression.rs` snapshots three Gaussian fits, 1 of 15 families. This
-// file picks up the rest, so a change to any family's `theta_derivatives()` shows
+// file picks up the rest, so a change to any family's `eta_derivatives()` shows
 // up as fitted-coefficient drift instead of slipping by unnoticed.
 //
 // It is the end-to-end counterpart to `tests/derivative_golden.rs`: that file
@@ -11,7 +11,6 @@
 // fixtures don't lean on any random-number implementation.
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test regression_families`.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{Beta, Binomial};

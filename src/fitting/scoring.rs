@@ -221,7 +221,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     target_param: &str,
     criterion: SmoothingCriterion,
 ) -> Result<Update, GamlssError> {
-    // 1. Reference every parameter's cached μ; theta_derivatives() wants all of them.
+    // 1. Reference every parameter's cached μ; eta_derivatives() wants all of them.
     //    The outer loop keeps that cache current, so inv_link need not be re-run here.
     let params_ref: HashMap<&str, &Array1<f64>> = family
         .parameters()
@@ -245,9 +245,10 @@ pub(super) fn step<D: Distribution + ?Sized>(
         LinkContext::first_order(entries)
     };
     let all_derivs = family.eta_derivatives(y, &params_ref, &link_ctx)?;
-    let (deriv_u, deriv_w) = all_derivs
+    let target_derivs = all_derivs
         .get(target_param)
         .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", target_param)))?;
+    let (deriv_u, deriv_w) = (&target_derivs.score, &target_derivs.info);
 
     let target = models.get(target_param).ok_or_else(|| {
         GamlssError::Internal(format!("Model for parameter '{}' not found", target_param))
@@ -822,7 +823,7 @@ mod tests {
             SmoothingCriterion::Gcv,
         )
         .unwrap_err();
-        // family.theta_derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
+        // family.eta_derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
         assert!(format!("{}", err).contains("zeta"));
     }
 
