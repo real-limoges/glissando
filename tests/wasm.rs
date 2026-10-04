@@ -7,7 +7,6 @@
 #![cfg(target_arch = "wasm32")]
 
 use glissando::wasm::WasmGamlssModel;
-use glissando::Param;
 use wasm_bindgen_test::*;
 
 // Deliberately noisy Gaussian sample: noise-free data collapses to σ → 0 and trips the IRLS guard.
@@ -22,7 +21,7 @@ const FORMULA: &str = r#"{
 fn fit_linear_gaussian() {
     let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
     assert!(model.converged());
-    let coefs = model.coefficients(Param::Mu).unwrap();
+    let coefs = model.coefficients("mu").unwrap();
     assert_eq!(coefs.len(), 2);
 }
 
@@ -34,18 +33,18 @@ fn predict_returns_one_value_per_row() {
     let pred_json = model.predict(new_data).unwrap();
     let parsed: std::collections::HashMap<String, Vec<f64>> =
         serde_json::from_str(&pred_json).unwrap();
-    assert_eq!(parsed[&Param::Mu].len(), 3);
-    assert_eq!(parsed[&Param::Sigma].len(), 3);
+    assert_eq!(parsed["mu"].len(), 3);
+    assert_eq!(parsed["sigma"].len(), 3);
 }
 
 #[wasm_bindgen_test]
 fn json_round_trip_preserves_coefficients() {
     let model = WasmGamlssModel::fit(Y, DATA, FORMULA, "Gaussian", None).unwrap();
-    let original_coefs = model.coefficients(Param::Mu).unwrap();
+    let original_coefs = model.coefficients("mu").unwrap();
 
     let json = model.to_json().unwrap();
     let restored = WasmGamlssModel::from_json(&json).unwrap();
-    let restored_coefs = restored.coefficients(Param::Mu).unwrap();
+    let restored_coefs = restored.coefficients("mu").unwrap();
 
     assert_eq!(original_coefs.len(), restored_coefs.len());
     for (a, b) in original_coefs.iter().zip(restored_coefs.iter()) {
