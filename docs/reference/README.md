@@ -15,7 +15,3 @@ Start with the cookbook for copy-pasteable examples; use `mathematics.md` when y
 | [`geo2-tp-implementation.md`](geo2-tp-implementation.md) | Implementation guide for the 2D thin-plate regression spline (`s(x, y, bs="tp")`), decision 0009 GEO-2. Planned, not yet built. |
 | [`geo3-parity-implementation.md`](geo3-parity-implementation.md) | Implementation guide for the three spatial mgcv parity scenarios, decision 0009 GEO-3. Planned, not yet built. |
 | [`mathematics.md`](mathematics.md) | Algorithm derivations: per-family log-likelihoods, score functions, expected information, CDF/quantile, and the backfitting and penalty machinery. Built to `mathematics.pdf` by `build-math-pdf.sh`. |
-| [`smooth-basis-implementation.md`](smooth-basis-implementation.md) | Implementation guide for the `SmoothBasis` refactor: one trait per smooth type, the prerequisite for GEO-1 and GEO-2. |
-| [`geo1-mrf-implementation.md`](geo1-mrf-implementation.md) | Implementation guide for GEO-1, the areal Markov random field smooth (`Smooth::Mrf`). |
-| [`geo2-tp-implementation.md`](geo2-tp-implementation.md) | Implementation guide for GEO-2, the isotropic 2D thin-plate regression spline (`Smooth::ThinPlate2D`). |
-| [`geo3-parity-implementation.md`](geo3-parity-implementation.md) | Implementation guide for GEO-3, the three spatial mgcv parity scenarios in the benchmark harness. |
