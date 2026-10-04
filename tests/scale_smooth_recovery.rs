@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Parameter-recovery coverage for a P-spline smooth on a scale parameter.
 //!
 //! `tests/parameter_recovery.rs` and `tests/comprehensive.rs` cover smooths on
@@ -19,6 +16,7 @@
 //! diagnostics live in `tests/lambda_bistability.rs` and
 //! `solver::reml_tests::diagnostic_laml_landscape_control_case` (both `#[ignore]`d).
 
+use glissando::Param;
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use rand::prelude::*;
@@ -69,9 +67,9 @@ fn sigma_smooth_recovers_nonlinear_scale() {
     data.insert_column("x", Array1::from_vec(x_vals.clone()));
 
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept]);
     formula.add_terms(
-        "sigma".to_string(),
+        Param::Sigma,
         vec![
             Term::Intercept,
             Term::Smooth(Smooth::PSpline1D {
@@ -86,14 +84,14 @@ fn sigma_smooth_recovers_nonlinear_scale() {
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).expect("Fit failed");
 
-    let sigma_param = &model.models["sigma"];
+    let sigma_param = &model.models[&Param::Sigma];
     let edf_sigma = sigma_param.edf;
 
     // Predicted σ on the response scale; the test compares log σ̂ against the truth.
     let preds = model
         .predict(&data, &Gaussian::new())
         .expect("predict failed");
-    let fitted_log_sigma: Vec<f64> = preds["sigma"].iter().map(|s| s.ln()).collect();
+    let fitted_log_sigma: Vec<f64> = preds[&Param::Sigma].iter().map(|s| s.ln()).collect();
     let truth_log_sigma: Vec<f64> = x_vals.iter().map(|&x| true_log_sigma(x)).collect();
 
     let corr = correlation(&fitted_log_sigma, &truth_log_sigma);
@@ -141,7 +139,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 
     let mut formula = Formula::new();
     formula.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Smooth(Smooth::PSpline1D {
@@ -153,7 +151,7 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
             }),
         ],
     );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).expect("Fit failed");
 
@@ -170,7 +168,8 @@ fn per_term_edf_sums_to_total_and_linear_truth_warns() {
 
     println!(
         "mu term_edf = {:?}, warnings = {:?}",
-        model.models["mu"].term_edf, model.diagnostics.warnings
+        model.models[&Param::Mu].term_edf,
+        model.diagnostics.warnings
     );
     assert!(
         model.diagnostics.warnings.iter().any(|w| w.contains("mu")),
@@ -199,9 +198,9 @@ fn recovered_curve_does_not_warn() {
     data.insert_column("x", Array1::from_vec(x_vals));
 
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept]);
     formula.add_terms(
-        "sigma".to_string(),
+        Param::Sigma,
         vec![
             Term::Intercept,
             Term::Smooth(Smooth::PSpline1D {
@@ -245,7 +244,7 @@ fn mu_smooth_recovers_nonlinear_mean_control() {
 
     let mut formula = Formula::new();
     formula.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Smooth(Smooth::PSpline1D {
@@ -257,14 +256,14 @@ fn mu_smooth_recovers_nonlinear_mean_control() {
             }),
         ],
     );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).expect("Fit failed");
 
     let preds = model
         .predict(&data, &Gaussian::new())
         .expect("predict failed");
-    let fitted_mu: Vec<f64> = preds["mu"].to_vec();
+    let fitted_mu: Vec<f64> = preds[&Param::Mu].to_vec();
     let truth_mu: Vec<f64> = x_vals.iter().map(|&x| true_log_sigma(x)).collect();
     let corr = correlation(&fitted_mu, &truth_mu);
 

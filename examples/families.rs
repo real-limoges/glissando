@@ -6,6 +6,7 @@
 
 use glissando::distributions::{Gaussian, NegativeBinomial, Weibull, BCCG};
 use glissando::ndarray::Array1;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
 
 // A tiny deterministic LCG in (0, 1), so the example is reproducible without
@@ -62,9 +63,12 @@ fn main() -> Result<(), GamlssError> {
     // BCCG (Cole-Green): the LMS centile family; three parameters (mu, sigma,
     // nu), so the formula names nu. Then read percentile curves off the fit.
     let f = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::smooth(Smooth::ps("x"))],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
     let m = GamlssModel::fit(&data, &pos, &f, &BCCG::new())?;
     let curves = m.centiles(&data, &BCCG::new(), &[3.0, 50.0, 97.0])?;
     println!(

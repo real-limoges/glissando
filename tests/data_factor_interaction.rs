@@ -6,10 +6,8 @@
 //! recovers a level-specific slope, and resolved factor levels replay verbatim
 //! through a JSON round-trip and at predict time.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::Gaussian;
+use glissando::Param;
 use glissando::{Contrast, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -37,11 +35,11 @@ fn factor_recovers_treatment_level_effects() {
     let (base, effects) = (5.0, [0.0, 2.0, -1.5]);
     let (y, data) = factor_dataset(300, base, effects);
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::factor("g")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::factor("g")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
-    let beta = &model.models["mu"].coefficients.0;
+    let beta = &model.models[&Param::Mu].coefficients.0;
     assert_eq!(
         beta.len(),
         3,
@@ -70,21 +68,21 @@ fn factor_recovers_treatment_level_effects() {
 fn factor_sum_to_zero_fits_same_values_as_treatment() {
     let (y, data) = factor_dataset(300, 5.0, [0.0, 2.0, -1.5]);
     let treat = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::factor("g")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::factor("g")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let sum = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, Term::factor_with("g", Contrast::SumToZero)],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let m_treat = GamlssModel::fit(&data, &y, &treat, &Gaussian).unwrap();
     let m_sum = GamlssModel::fit(&data, &y, &sum, &Gaussian).unwrap();
 
     let p_treat = m_treat.predict(&data, &Gaussian).unwrap();
     let p_sum = m_sum.predict(&data, &Gaussian).unwrap();
-    for (a, b) in p_treat["mu"].iter().zip(p_sum["mu"].iter()) {
+    for (a, b) in p_treat[&Param::Mu].iter().zip(p_sum[&Param::Mu].iter()) {
         assert!(
             (a - b).abs() < 1e-6,
             "contrast reparameterization changed fitted μ: {a} vs {b}"
@@ -114,7 +112,7 @@ fn interaction_recovers_level_specific_slope() {
     // μ = intercept + g + x + g:x  (the interaction is the level-1 slope offset).
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::factor("g"),
@@ -122,15 +120,15 @@ fn interaction_recovers_level_specific_slope() {
                 Term::interaction(Term::factor("g"), Term::linear("x")),
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
     let pred = model.predict(&data, &Gaussian).unwrap();
-    for (p, yi) in pred["mu"].iter().zip(y.iter()) {
+    for (p, yi) in pred[&Param::Mu].iter().zip(y.iter()) {
         assert!((p - yi).abs() < 0.05, "interaction fit off: {p} vs {yi}");
     }
     // The interaction coefficient (last column) recovers the 0.8 slope difference.
-    let beta = &model.models["mu"].coefficients.0;
+    let beta = &model.models[&Param::Mu].coefficients.0;
     let interaction_coef = beta[beta.len() - 1];
     assert!(
         (interaction_coef - 0.8).abs() < 0.1,
@@ -145,8 +143,8 @@ fn interaction_recovers_level_specific_slope() {
 fn factor_levels_survive_json_roundtrip() {
     let (y, data) = factor_dataset(300, 5.0, [0.0, 2.0, -1.5]);
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::factor("g")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::factor("g")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
 
     let json = model.to_json(&Gaussian).unwrap();
@@ -159,7 +157,7 @@ fn factor_levels_survive_json_roundtrip() {
     subset.insert_column("g", Array1::from_vec(vec![0.0, 2.0, 2.0, 0.0]));
     let p1 = model.predict(&subset, &Gaussian).unwrap();
     let p2 = reloaded.predict(&subset, &Gaussian).unwrap();
-    for (a, b) in p1["mu"].iter().zip(p2["mu"].iter()) {
+    for (a, b) in p1[&Param::Mu].iter().zip(p2[&Param::Mu].iter()) {
         assert!(
             (a - b).abs() < 1e-12,
             "round-trip prediction mismatch: {a} vs {b}"

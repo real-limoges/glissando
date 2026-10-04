@@ -33,9 +33,8 @@ python = ["pyo3", "numpy", "serialization", "openblas", "parallel"]
 # Parallelism (incompatible with WASM)
 parallel = ["rayon"]
 
-# Test-only: enables Rust-side unit tests of the PyO3 bindings.
-# `pyo3/extension-module` (pulled in via `python`) prevents `cargo test` from linking
-# against libpython, so tests of `src/python.rs` must opt into `auto-initialize`.
+# Test-only: enables Rust-side unit tests of the PyO3 bindings, which need an
+# embedded interpreter (`auto-initialize`).
 test-python = ["python", "pyo3/auto-initialize"]
 
 [dependencies]
@@ -76,9 +75,11 @@ getrandom_02 = { package = "getrandom", version = "0.2", optional = true, featur
 getrandom = { version = "0.4", optional = true, default-features = false, features = ["wasm_js"] }
 
 # Optional: PyO3
-# Note: extension-module is used for building Python modules, but not for running tests
-# When testing, PyO3 needs to link to Python. For this, we rely on pyo3/auto-initialize in dev-dependencies
-pyo3 = { version = "0.28.0", features = ["extension-module"], optional = true }
+# No `extension-module` feature: it is deprecated in PyO3 0.28 and, because it stops
+# PyO3 linking libpython, it broke `cargo test --features test-python` on macOS (the
+# cdylib had undefined Python symbols). maturin sets `PYO3_BUILD_EXTENSION_MODULE`
+# itself, which has the same effect for wheel builds only.
+pyo3 = { version = "0.28.0", optional = true }
 numpy = { version = "0.28.0", optional = true }
 
 [dev-dependencies]

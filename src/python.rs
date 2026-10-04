@@ -16,7 +16,7 @@ use crate::ffi::FamilyHandle;
 use crate::fitting::selection::{self, Direction, StepScope};
 use crate::fitting::{FitConfig, SmoothingCriterion};
 use crate::terms::py_parse;
-use crate::{DataSet, Formula, GamlssModel};
+use crate::{DataSet, Formula, GamlssModel, Param};
 
 // Stateless distribution wrappers. The Python class holds no data of its own.
 macro_rules! py_distribution {
@@ -195,10 +195,19 @@ fn py_dict_to_dataset(py_dict: &Bound<'_, PyDict>) -> PyResult<DataSet> {
     Ok(dataset)
 }
 
+/// Parse a parameter name from a Python dict key. Every inbound name goes
+/// through here, so a misspelling fails up front as a `ValueError` rather than
+/// being ignored or failing deep inside the fit.
+fn parse_param(key: &Bound<'_, PyAny>) -> PyResult<Param> {
+    let name: String = key.extract()?;
+    name.parse()
+        .map_err(|e: crate::GamlssError| PyValueError::new_err(e.to_string()))
+}
+
 fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
     let mut formula = Formula::new();
     for (param, terms) in py_dict.iter() {
-        let param_name: String = param.extract()?;
+        let param_name = parse_param(&param)?;
         // A parameter's value can be an R/mgcv-style **formula string**
         // (`"y ~ s(x) + factor(g)"`) or the structured list of term tuples. A
         // value that extracts as a `str` is parsed as a formula; anything else is
@@ -220,7 +229,7 @@ fn py_dict_to_formula(py_dict: &Bound<'_, PyDict>) -> PyResult<Formula> {
 fn py_dict_to_scope(scope: &Bound<'_, PyDict>) -> PyResult<Vec<StepScope>> {
     let mut out = Vec::with_capacity(scope.len());
     for (param, cands) in scope.iter() {
-        let param_name: String = param.extract()?;
+        let param_name = parse_param(&param)?;
         let term_list: &Bound<pyo3::types::PyList> = cands.cast()?;
         out.push(StepScope {
             param: param_name,
@@ -254,10 +263,15 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     if let Some(v) = config.get_item("links")? {
         // {param_name: link_name}, e.g. {"mu": "probit"}. The link names get
         // validated against the registry at fit time, same as the criterion above.
-        let links: std::collections::HashMap<String, String> = v.extract().map_err(|_| {
+        let links: &Bound<'_, PyDict> = v.cast().map_err(|_| {
             PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
         })?;
-        fit_config.links.extend(links);
+        for (param, link) in links.iter() {
+            let link: String = link.extract().map_err(|_| {
+                PyValueError::new_err("config 'links' must be a dict of {parameter: link_name}")
+            })?;
+            fit_config.links.insert(parse_param(&param)?, link);
+        }
     }
     if let Some(v) = config.get_item("na_action")? {
         let s: String = v.extract()?;
@@ -366,7 +380,7 @@ fn predict_with_family(
     family: &FamilyHandle,
     model: &GamlssModel,
     new_data: &DataSet,
-) -> PyResult<HashMap<String, Array1<f64>>> {
+) -> PyResult<HashMap<Param, Array1<f64>>> {
     model
         .predict(new_data, family.as_distribution())
         .map_err(|e| PyRuntimeError::new_err(format!("Prediction failed: {}", e)))
@@ -376,6 +390,28 @@ fn predict_with_family(
 struct PyGamlssModel {
     inner: GamlssModel,
     family: FamilyHandle,
+}
+
+impl PyGamlssModel {
+    /// The fitted block for `param`, or a `KeyError` naming the available ones.
+    /// A string that is no parameter name at all gets the same `KeyError`.
+    fn fitted_param(&self, param: &str) -> PyResult<&crate::fitting::FittedParameter> {
+        param
+            .parse::<Param>()
+            .ok()
+            .and_then(|p| self.inner.models.get(&p))
+            .ok_or_else(|| {
+                PyKeyError::new_err(format!(
+                    "Parameter '{}' not found. Available: {:?}",
+                    param,
+                    self.inner
+                        .models
+                        .keys()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                ))
+            })
+    }
 }
 
 #[pymethods]
@@ -487,7 +523,7 @@ impl PyGamlssModel {
 
         let py_dict = PyDict::new(py);
         for (param_name, values) in predictions {
-            py_dict.set_item(param_name, values.to_pyarray(py))?;
+            py_dict.set_item(param_name.as_str(), values.to_pyarray(py))?;
         }
         Ok(py_dict.into())
     }
@@ -508,7 +544,7 @@ impl PyGamlssModel {
             inner.set_item("fitted", pr.fitted.to_pyarray(py))?;
             inner.set_item("eta", pr.eta.to_pyarray(py))?;
             inner.set_item("se_eta", pr.se_eta.to_pyarray(py))?;
-            py_dict.set_item(param_name, inner)?;
+            py_dict.set_item(param_name.as_str(), inner)?;
         }
         Ok(py_dict.into())
     }
@@ -540,7 +576,7 @@ impl PyGamlssModel {
             for s in samples {
                 list.append(s.to_pyarray(py))?;
             }
-            py_dict.set_item(param_name, list)?;
+            py_dict.set_item(param_name.as_str(), list)?;
         }
         Ok(py_dict.into())
     }
@@ -551,13 +587,7 @@ impl PyGamlssModel {
         py: Python<'py>,
         param: &str,
     ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
-        let fitted = self.inner.models.get(param).ok_or_else(|| {
-            PyKeyError::new_err(format!(
-                "Parameter '{}' not found. Available: {:?}",
-                param,
-                self.inner.models.keys().collect::<Vec<_>>()
-            ))
-        })?;
+        let fitted = self.fitted_param(param)?;
         Ok(fitted.coefficients.0.to_pyarray(py))
     }
 
@@ -567,13 +597,7 @@ impl PyGamlssModel {
         py: Python<'py>,
         param: &str,
     ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
-        let fitted = self.inner.models.get(param).ok_or_else(|| {
-            PyKeyError::new_err(format!(
-                "Parameter '{}' not found. Available: {:?}",
-                param,
-                self.inner.models.keys().collect::<Vec<_>>()
-            ))
-        })?;
+        let fitted = self.fitted_param(param)?;
         Ok(fitted.fitted_values.to_pyarray(py))
     }
 
@@ -590,9 +614,9 @@ impl PyGamlssModel {
         param: &str,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
         let dataset = py_dict_to_dataset(new_data)?;
-        let x = self
-            .inner
-            .design_matrix(&dataset, param)
+        let x = param
+            .parse()
+            .and_then(|p| self.inner.design_matrix(&dataset, p))
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(x.to_pyarray(py))
     }
@@ -604,9 +628,9 @@ impl PyGamlssModel {
         py: Python<'py>,
         param: &str,
     ) -> PyResult<Bound<'py, PyArray2<f64>>> {
-        let v = self
-            .inner
-            .covariance_matrix(param)
+        let v = param
+            .parse()
+            .and_then(|p| self.inner.covariance_matrix(p))
             .map_err(|e| PyKeyError::new_err(e.to_string()))?;
         Ok(v.0.to_pyarray(py))
     }
@@ -616,9 +640,9 @@ impl PyGamlssModel {
     /// Each key is the mgcv-style term name; each value is a `(first_col, last_col_exclusive)`
     /// tuple of ints. Column order matches `design_matrix` and `coefficients`.
     fn term_index_map(&self, py: Python<'_>, param: &str) -> PyResult<Py<pyo3::types::PyDict>> {
-        let blocks = self
-            .inner
-            .term_index_map(param)
+        let blocks = param
+            .parse()
+            .and_then(|p| self.inner.term_index_map(p))
             .map_err(|e| PyKeyError::new_err(e.to_string()))?;
         let d = pyo3::types::PyDict::new(py);
         for (name, first, last) in blocks {

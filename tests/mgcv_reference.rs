@@ -24,7 +24,6 @@
 // `record_studentt`, which gates μ, σ, ν, EDF, SE and the (unweighted)
 // log-likelihood. mgcv's `scat()` is retained only as a loose, μ-only cross-method
 // sanity check.
-#![cfg(not(feature = "python"))]
 
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;

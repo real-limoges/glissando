@@ -20,9 +20,11 @@
 //! Python `Ocat(n_categories=4)` class.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LinkContext, LogLink,
+    require, DerivativeMap, Distribution, Eta, GamlssError, IdentityLink, Link, LinkContext,
+    LogLink, ScoreInfo,
 };
 use crate::distributions::{MAX_ETA, MIN_ETA};
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -34,7 +36,7 @@ const MIN_PROB: f64 = 1e-10;
 
 /// Ordered-categorical GAMLSS distribution with `R` levels.
 ///
-/// Parameters: `"mu"` (latent linear predictor, identity link) plus `"delta_1"` …
+/// Parameters: `Param::Mu` (latent linear predictor, identity link) plus `Param::Delta1` …
 /// `"delta_{R-1}"` (threshold / increment parameters).
 #[derive(Debug, Clone)]
 pub struct Ocat {
@@ -65,13 +67,13 @@ impl Ocat {
         self.n_categories - 1
     }
 
-    /// Static parameter name for the k-th threshold (k = 1..=4).
-    pub(crate) fn threshold_param_name(k: usize) -> &'static str {
+    /// The parameter for the k-th threshold (k = 1..=4).
+    pub(crate) fn threshold_param(k: usize) -> Param {
         match k {
-            1 => "delta_1",
-            2 => "delta_2",
-            3 => "delta_3",
-            4 => "delta_4",
+            1 => Param::Delta1,
+            2 => Param::Delta2,
+            3 => Param::Delta3,
+            4 => Param::Delta4,
             // Unreachable: `Ocat::new` enforces `n_categories ∈ 2..=5`, so callers
             // only ever pass `k ∈ 1..=n_thresholds = 1..=4`.
             _ => {
@@ -92,23 +94,26 @@ impl Ocat {
     /// Reconstruct thresholds θ₁ < … < θ_{n_thresholds} from the per-observation
     /// response-scale delta params at observation index `i`.
     ///
-    /// `params["delta_1"][i]` = θ₁ (identity link).
-    /// `params["delta_k"][i]` = θ_k − θ_{k-1} = exp(η_k) > 0  for k ≥ 2  (log link).
+    /// `params[&Param::Delta1][i]` = θ₁ (identity link).
+    /// `params[delta_k][i]` = θ_k − θ_{k-1} = exp(η_k) > 0  for k ≥ 2  (log link).
     ///
     /// Calling with a specific `i` is necessary for finite-difference derivative
     /// checking, which perturbs one observation at a time.  During the fitting loop
     /// all elements are equal, so the result is the same for every `i`.
     pub(crate) fn compute_thresholds_at(
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         n_thresholds: usize,
         i: usize,
     ) -> Result<Vec<f64>, GamlssError> {
         let mut thresholds = Vec::with_capacity(n_thresholds);
         for k in 1..=n_thresholds {
-            let name = Self::threshold_param_name(k);
+            let param = Self::threshold_param(k);
             let val = params
-                .get(name)
-                .ok_or_else(|| GamlssError::Input(format!("ocat: missing parameter '{name}'")))?[i];
+                .get(&param)
+                .ok_or_else(|| GamlssError::UnknownParameter {
+                    distribution: "Ocat".to_string(),
+                    param: param.to_string(),
+                })?[i];
             if k == 1 {
                 thresholds.push(val);
             } else {
@@ -140,12 +145,18 @@ impl Ocat {
 }
 
 impl Distribution for Ocat {
-    fn parameters(&self) -> &[&'static str] {
+    fn parameters(&self) -> &[Param] {
         match self.n_categories {
-            2 => &["mu", "delta_1"],
-            3 => &["mu", "delta_1", "delta_2"],
-            4 => &["mu", "delta_1", "delta_2", "delta_3"],
-            5 => &["mu", "delta_1", "delta_2", "delta_3", "delta_4"],
+            2 => &[Param::Mu, Param::Delta1],
+            3 => &[Param::Mu, Param::Delta1, Param::Delta2],
+            4 => &[Param::Mu, Param::Delta1, Param::Delta2, Param::Delta3],
+            5 => &[
+                Param::Mu,
+                Param::Delta1,
+                Param::Delta2,
+                Param::Delta3,
+                Param::Delta4,
+            ],
             // Unreachable: `Ocat::new` rejects any `n_categories` outside `2..=5`.
             n => {
                 unreachable!("Ocat: unsupported n_categories {n} (n_categories ∈ 2..=5 invariant)")
@@ -153,10 +164,10 @@ impl Distribution for Ocat {
         }
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" | "delta_1" => Ok(Box::new(IdentityLink)),
-            "delta_2" | "delta_3" | "delta_4" => Ok(Box::new(LogLink)),
+            Param::Mu | Param::Delta1 => Ok(Box::new(IdentityLink)),
+            Param::Delta2 | Param::Delta3 | Param::Delta4 => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -164,10 +175,10 @@ impl Distribution for Ocat {
     /// No Ocat parameter accepts a link override.
     ///
     /// The `eta_derivatives` override below is written against this family's own
-    /// links and cannot be lifted to a generic chain rule: `params["mu"]` holds
+    /// links and cannot be lifted to a generic chain rule: `params[&Param::Mu]` holds
     /// η rather than μ, and `jac_k` is `exp(η_k)` only because `delta_k` uses a
     /// log link. Substituting any other link leaves both wrong.
-    fn allows_link_override(&self, _param: &str) -> bool {
+    fn allows_link_override(&self, _param: Param) -> bool {
         false
     }
 
@@ -181,11 +192,11 @@ impl Distribution for Ocat {
         }
     }
 
-    fn initial_value(&self, param: &str, _y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, _y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => 0.0,      // latent predictor starts at 0
-            "delta_1" => 0.0, // first threshold at 0; identity link → η₁ = 0
-            _ => 0.5,         // increments start at 0.5; log link seeds η_k = ln(0.5)
+            Param::Mu => 0.0,     // latent predictor starts at 0
+            Param::Delta1 => 0.0, // first threshold at 0; identity link → η₁ = 0
+            _ => 0.5,             // increments start at 0.5; log link seeds η_k = ln(0.5)
         }
     }
 
@@ -219,18 +230,21 @@ impl Distribution for Ocat {
     /// [`chain_to_eta`](crate::distributions::chain_to_eta) assumes. There is no
     /// separable `(∂l/∂θ, i_θ)` for the generic rule to lift.
     ///
-    /// Relatedly, this family's `params["mu"]` already holds **η**, not μ, and
+    /// Relatedly, this family's `params[&Param::Mu]` already holds **η**, not μ, and
     /// `jac_k` below is `exp(η_k)` only under the log link, which is why
     /// [`Self::allows_link_override`] rejects every parameter.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         _ctx: &LinkContext,
-    ) -> DerivativesResult {
-        let eta_mu = require(self, params, "mu")?;
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_obs = y.len();
         let n_thresh = self.n_thresholds();
+        let deltas = (1..=n_thresh)
+            .map(|k| require(self, params, Self::threshold_param(k)))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut u_mu = Array1::zeros(n_obs);
         let mut w_mu = Array1::zeros(n_obs);
@@ -298,7 +312,7 @@ impl Distribution for Ocat {
                 let jac_k = if k == 1 {
                     1.0
                 } else {
-                    params[Self::threshold_param_name(k)][i].max(MIN_PROB)
+                    deltas[k0][i].max(MIN_PROB)
                 };
 
                 u_thresh[k0][i] = if y_r < k {
@@ -321,10 +335,13 @@ impl Distribution for Ocat {
             }
         }
 
-        let mut result: HashMap<String, (Array1<f64>, Array1<f64>)> = HashMap::new();
-        result.insert("mu".to_string(), (u_mu, w_mu));
+        let mut result: DerivativeMap<Eta> = HashMap::new();
+        result.insert(Param::Mu, ScoreInfo::computed_on_eta(u_mu, w_mu));
         for (k0, (u_k, w_k)) in u_thresh.into_iter().zip(w_thresh).enumerate() {
-            result.insert(Self::threshold_param_name(k0 + 1).to_string(), (u_k, w_k));
+            result.insert(
+                Self::threshold_param(k0 + 1),
+                ScoreInfo::computed_on_eta(u_k, w_k),
+            );
         }
         Ok(result)
     }
@@ -332,9 +349,9 @@ impl Distribution for Ocat {
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let eta_mu = require(self, params, "mu")?;
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_thresh = self.n_thresholds();
 
         let ll: Result<Array1<f64>, GamlssError> = (0..y.len())
@@ -358,8 +375,8 @@ impl Distribution for Ocat {
         ll
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let eta_mu = require(self, params, "mu")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_thresh = self.n_thresholds();
         // Use element 0 for thresholds (all elements equal in fitted context).
         let thresholds = Self::compute_thresholds_at(params, n_thresh, 0)?;
@@ -384,9 +401,9 @@ impl Distribution for Ocat {
 
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let eta_mu = require(self, params, "mu")?;
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_thresh = self.n_thresholds();
         let thresholds = Self::compute_thresholds_at(params, n_thresh, 0)?;
 
@@ -409,12 +426,12 @@ impl Distribution for Ocat {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Right-continuous step CDF at the level ⌊y⌋. Proportional-odds model:
         // P(Y ≤ r) = logistic(θ_r − η) for r < R, and 1 at r = R: the same
         // cumulative the per-category mass in `loglik_pointwise` differences.
-        let eta_mu = require(self, params, "mu")?;
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_thresh = self.n_thresholds();
         let r_max = self.n_categories;
         (0..y.len())
@@ -435,10 +452,10 @@ impl Distribution for Ocat {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Smallest level r ∈ {1, …, R} whose cumulative prob ≥ p.
-        let eta_mu = require(self, params, "mu")?;
+        let eta_mu = require(self, params, Param::Mu)?;
         let n_thresh = self.n_thresholds();
         let r_max = self.n_categories;
         (0..p.len())
@@ -470,19 +487,14 @@ mod tests {
     use approx::assert_relative_eq;
     use ndarray::array;
 
-    fn make_params_r4(
-        mu: Array1<f64>,
-        d1: f64,
-        d2: f64,
-        d3: f64,
-    ) -> Vec<(&'static str, Array1<f64>)> {
+    fn make_params_r4(mu: Array1<f64>, d1: f64, d2: f64, d3: f64) -> Vec<(Param, Array1<f64>)> {
         let n = mu.len();
         vec![
-            ("mu", mu),
-            ("delta_1", Array1::from_elem(n, d1)),
+            (Param::Mu, mu),
+            (Param::Delta1, Array1::from_elem(n, d1)),
             // For k≥2 the response-scale value is the positive increment exp(η_k).
-            ("delta_2", Array1::from_elem(n, d2)),
-            ("delta_3", Array1::from_elem(n, d3)),
+            (Param::Delta2, Array1::from_elem(n, d2)),
+            (Param::Delta3, Array1::from_elem(n, d3)),
         ]
     }
 
@@ -501,9 +513,9 @@ mod tests {
     fn monotone_thresholds_from_positive_increments() {
         let n = 3;
         let owned = vec![
-            ("delta_1", Array1::from_elem(n, 0.5_f64)),
-            ("delta_2", Array1::from_elem(n, 1.0_f64)), // increment = 1.0
-            ("delta_3", Array1::from_elem(n, 0.8_f64)), // increment = 0.8
+            (Param::Delta1, Array1::from_elem(n, 0.5_f64)),
+            (Param::Delta2, Array1::from_elem(n, 1.0_f64)), // increment = 1.0
+            (Param::Delta3, Array1::from_elem(n, 0.8_f64)), // increment = 0.8
         ];
         let params = params_view(&owned);
         let thresholds = Ocat::compute_thresholds_at(&params, 3, 0).unwrap();
@@ -534,7 +546,7 @@ mod tests {
         let ocat = Ocat::new(4);
         let y = array![1.0, 2.0, 3.0, 4.0, 1.0, 3.0];
         let owned = make_params_r4(array![-1.5, -0.5, 0.0, 0.5, 1.5, -1.0], -0.5, 1.0, 1.0);
-        check_score_via_finite_diff(&ocat, &y, &owned, "mu", 1e-5);
+        check_score_via_finite_diff(&ocat, &y, &owned, Param::Mu, 1e-5);
     }
 
     #[test]
@@ -542,7 +554,7 @@ mod tests {
         let ocat = Ocat::new(4);
         let y = array![1.0, 2.0, 3.0, 4.0, 2.0, 1.0];
         let owned = make_params_r4(array![0.1, -0.3, 0.5, -0.5, 0.2, 0.8], -0.5, 1.0, 1.0);
-        check_score_via_finite_diff(&ocat, &y, &owned, "delta_1", 1e-5);
+        check_score_via_finite_diff(&ocat, &y, &owned, Param::Delta1, 1e-5);
     }
 
     #[test]
@@ -551,7 +563,7 @@ mod tests {
         // Use non-trivial increment values; log-link so stored value is exp(η₂).
         let y = array![1.0, 2.0, 3.0, 4.0, 3.0, 2.0];
         let owned = make_params_r4(array![0.1, -0.3, 0.5, -0.5, 0.2, 0.8], -0.5, 0.7, 1.2);
-        check_score_via_finite_diff(&ocat, &y, &owned, "delta_2", 1e-5);
+        check_score_via_finite_diff(&ocat, &y, &owned, Param::Delta2, 1e-5);
     }
 
     #[test]
@@ -559,7 +571,7 @@ mod tests {
         let ocat = Ocat::new(4);
         let y = array![1.0, 2.0, 3.0, 4.0, 4.0, 1.0];
         let owned = make_params_r4(array![0.1, -0.3, 0.5, -0.5, 0.2, 0.8], -0.5, 0.7, 1.2);
-        check_score_via_finite_diff(&ocat, &y, &owned, "delta_3", 1e-5);
+        check_score_via_finite_diff(&ocat, &y, &owned, Param::Delta3, 1e-5);
     }
 
     #[test]
@@ -570,10 +582,10 @@ mod tests {
         let y = array![2.0]; // category 2
         let n = 1;
         let owned = vec![
-            ("mu", array![0.0_f64]),
-            ("delta_1", Array1::from_elem(n, 0.0_f64)), // theta_1 = 0
-            ("delta_2", Array1::from_elem(n, 1.0_f64)), // increment → theta_2 = 1
-            ("delta_3", Array1::from_elem(n, 1.0_f64)), // increment → theta_3 = 2
+            (Param::Mu, array![0.0_f64]),
+            (Param::Delta1, Array1::from_elem(n, 0.0_f64)), // theta_1 = 0
+            (Param::Delta2, Array1::from_elem(n, 1.0_f64)), // increment → theta_2 = 1
+            (Param::Delta3, Array1::from_elem(n, 1.0_f64)), // increment → theta_3 = 2
         ];
         let p = params_view(&owned);
         let ll = ocat.loglik_pointwise(&y, &p).unwrap();

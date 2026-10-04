@@ -26,11 +26,11 @@
 // A failure here is a regression in the IRLS machinery, not an expected one.
 // `default_link_fits_reach_the_mle` is the control: if it fails, suspect the
 // oracle before the fitter. Do not repair a failure by loosening a tolerance.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{link_from_name, Distribution, Gamma, Link, Poisson};
 use glissando::distributions::{Binomial, Gaussian};
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ use std::collections::HashMap;
 /// How the oracle models one distribution parameter: its link, and whether it
 /// carries a slope on `x` on top of an intercept.
 struct ParamSpec {
-    name: &'static str,
+    name: Param,
     link: Box<dyn Link>,
     with_slope: bool,
 }
@@ -79,7 +79,7 @@ fn total_loglik<D: Distribution + ?Sized>(
     beta: &[f64],
 ) -> f64 {
     let values = response_scale(specs, beta, x);
-    let params: HashMap<&str, &Array1<f64>> = specs
+    let params: HashMap<Param, &Array1<f64>> = specs
         .iter()
         .zip(values.iter())
         .map(|(s, v)| (s.name, v))
@@ -273,7 +273,7 @@ fn tight() -> FitConfig {
 
 fn formula_mu_only() -> Formula {
     Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -286,7 +286,7 @@ fn formula_mu_only() -> Formula {
 /// `μ ~ 1 + x`, `σ ~ 1`. Two-parameter families need an entry for every
 /// parameter or the fit rejects the formula.
 fn formula_mu_and_sigma() -> Formula {
-    formula_mu_only().with_terms("sigma", vec![Term::Intercept])
+    formula_mu_only().with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 /// Flatten a fitted model's coefficients in `family.parameters()` order.
@@ -294,7 +294,7 @@ fn fitted_coefficients<D: Distribution + ?Sized>(model: &GamlssModel, family: &D
     family
         .parameters()
         .iter()
-        .flat_map(|p| model.models[*p].coefficients.0.to_vec())
+        .flat_map(|p| model.models[p].coefficients.0.to_vec())
         .collect()
 }
 
@@ -427,7 +427,7 @@ fn default_link_fits_reach_the_mle() {
             GamlssModel::fit_with_config(&data, &y, None, &formula_mu_only(), &family, tight())
                 .unwrap();
         let specs = [ParamSpec {
-            name: "mu",
+            name: Param::Mu,
             link: link_from_name("logit").unwrap(),
             with_slope: true,
         }];
@@ -452,7 +452,7 @@ fn default_link_fits_reach_the_mle() {
             GamlssModel::fit_with_config(&data, &y, None, &formula_mu_only(), &family, tight())
                 .unwrap();
         let specs = [ParamSpec {
-            name: "mu",
+            name: Param::Mu,
             link: link_from_name("log").unwrap(),
             with_slope: true,
         }];
@@ -485,12 +485,12 @@ fn default_link_fits_reach_the_mle() {
         .unwrap();
         let specs = [
             ParamSpec {
-                name: "mu",
+                name: Param::Mu,
                 link: link_from_name("identity").unwrap(),
                 with_slope: true,
             },
             ParamSpec {
-                name: "sigma",
+                name: Param::Sigma,
                 link: link_from_name("log").unwrap(),
                 with_slope: false,
             },
@@ -523,11 +523,11 @@ fn binomial_probit_fit_reaches_the_mle() {
         None,
         &formula_mu_only(),
         &family,
-        tight().with_link("mu", "probit"),
+        tight().with_link(Param::Mu, "probit"),
     )
     .unwrap();
     let specs = [ParamSpec {
-        name: "mu",
+        name: Param::Mu,
         link: link_from_name("probit").unwrap(),
         with_slope: true,
     }];
@@ -554,11 +554,11 @@ fn binomial_cloglog_fit_reaches_the_mle() {
         None,
         &formula_mu_only(),
         &family,
-        tight().with_link("mu", "cloglog"),
+        tight().with_link(Param::Mu, "cloglog"),
     )
     .unwrap();
     let specs = [ParamSpec {
-        name: "mu",
+        name: Param::Mu,
         link: link_from_name("cloglog").unwrap(),
         with_slope: true,
     }];
@@ -585,11 +585,11 @@ fn poisson_sqrt_fit_reaches_the_mle() {
         None,
         &formula_mu_only(),
         &family,
-        tight().with_link("mu", "sqrt"),
+        tight().with_link(Param::Mu, "sqrt"),
     )
     .unwrap();
     let specs = [ParamSpec {
-        name: "mu",
+        name: Param::Mu,
         link: link_from_name("sqrt").unwrap(),
         with_slope: true,
     }];
@@ -616,17 +616,17 @@ fn gamma_inverse_fit_reaches_the_mle() {
         None,
         &formula_mu_and_sigma(),
         &family,
-        tight().with_link("mu", "inverse"),
+        tight().with_link(Param::Mu, "inverse"),
     )
     .unwrap();
     let specs = [
         ParamSpec {
-            name: "mu",
+            name: Param::Mu,
             link: link_from_name("inverse").unwrap(),
             with_slope: true,
         },
         ParamSpec {
-            name: "sigma",
+            name: Param::Sigma,
             link: link_from_name("log").unwrap(),
             with_slope: false,
         },

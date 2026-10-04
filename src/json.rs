@@ -71,7 +71,7 @@ use ndarray::Array1;
 use crate::distributions::{from_name, Distribution};
 use crate::fitting::FitConfig;
 use crate::types::{DataSet, Formula};
-use crate::{GamlssError, GamlssModel, PredictionResult};
+use crate::{GamlssError, GamlssModel, Param, PredictionResult};
 
 /// Per-parameter prediction with standard errors, in wire form.
 #[derive(serde::Serialize)]
@@ -142,11 +142,11 @@ pub fn parse_config(json: &str) -> Result<FitConfig, GamlssError> {
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_predictions(
-    predictions: &HashMap<String, Array1<f64>>,
+    predictions: &HashMap<Param, Array1<f64>>,
 ) -> Result<String, GamlssError> {
-    // BTreeMap so the keys come out sorted and deterministic rather than in
-    // HashMap's randomized order, so two predict calls produce byte-identical
-    // output.
+    // BTreeMap keyed by the name string so the keys come out sorted and
+    // deterministic (mu, nu, sigma, tau) rather than in HashMap's randomized order,
+    // so two predict calls produce byte-identical output.
     let result: BTreeMap<&str, Vec<f64>> = predictions
         .iter()
         .map(|(k, v)| (k.as_str(), v.to_vec()))
@@ -157,7 +157,7 @@ pub fn serialize_predictions(
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_predictions_with_se(
-    predictions: &HashMap<String, PredictionResult>,
+    predictions: &HashMap<Param, PredictionResult>,
 ) -> Result<String, GamlssError> {
     let output: BTreeMap<&str, PredictionWithSe> = predictions
         .iter()
@@ -178,7 +178,7 @@ pub fn serialize_predictions_with_se(
 /// # Errors
 /// Returns [`GamlssError::Input`] if serialization fails.
 pub fn serialize_samples(
-    samples: &HashMap<String, Vec<Array1<f64>>>,
+    samples: &HashMap<Param, Vec<Array1<f64>>>,
 ) -> Result<String, GamlssError> {
     let output: BTreeMap<&str, Vec<Vec<f64>>> = samples
         .iter()
@@ -300,7 +300,7 @@ pub fn design_matrix(
     param: &str,
 ) -> Result<String, GamlssError> {
     let new_data = parse_data(data_json)?;
-    let x = model.design_matrix(&new_data, param)?;
+    let x = model.design_matrix(&new_data, param.parse()?)?;
     let rows: Vec<Vec<f64>> = x.rows().into_iter().map(|r| r.to_vec()).collect();
     serde_json::to_string(&rows).map_err(json_err)
 }
@@ -309,10 +309,11 @@ pub fn design_matrix(
 /// for the named distribution parameter, serialized as a JSON array of rows.
 ///
 /// # Errors
-/// Returns [`GamlssError::UnknownParameter`] if `param` is not in the model,
+/// Returns [`GamlssError::InvalidParamName`] if `param` names no parameter,
+/// [`GamlssError::UnknownParameter`] if it is not in the model,
 /// or [`GamlssError::Input`] if serialization fails.
 pub fn covariance_matrix(model: &GamlssModel, param: &str) -> Result<String, GamlssError> {
-    let v = model.covariance_matrix(param)?;
+    let v = model.covariance_matrix(param.parse()?)?;
     let rows: Vec<Vec<f64>> = v.0.rows().into_iter().map(|r| r.to_vec()).collect();
     serde_json::to_string(&rows).map_err(json_err)
 }
@@ -323,10 +324,11 @@ pub fn covariance_matrix(model: &GamlssModel, param: &str) -> Result<String, Gam
 /// Key order is alphabetical (BTreeMap) for deterministic output.
 ///
 /// # Errors
-/// Returns [`GamlssError::UnknownParameter`] if `param` is not in the model,
+/// Returns [`GamlssError::InvalidParamName`] if `param` names no parameter,
+/// [`GamlssError::UnknownParameter`] if it is not in the model,
 /// or [`GamlssError::Input`] if serialization fails.
 pub fn term_index_map(model: &GamlssModel, param: &str) -> Result<String, GamlssError> {
-    let blocks = model.term_index_map(param)?;
+    let blocks = model.term_index_map(param.parse()?)?;
     let map: BTreeMap<&str, [usize; 2]> = blocks
         .iter()
         .map(|(name, first, last)| (name.as_str(), [*first, *last]))
@@ -536,9 +538,9 @@ mod tests {
         let (m_str, fam) = fit(Y, DATA, STR_FORMULA, "Gaussian", None, None).unwrap();
         let (m_list, _) = fit(Y, DATA, FORMULA, "Gaussian", None, None).unwrap();
         let _ = fam;
-        for param in ["mu", "sigma"] {
-            let a = &m_str.models[param].coefficients.0;
-            let b = &m_list.models[param].coefficients.0;
+        for param in [Param::Mu, Param::Sigma] {
+            let a = &m_str.models[&param].coefficients.0;
+            let b = &m_list.models[&param].coefficients.0;
             for (x, z) in a.iter().zip(b.iter()) {
                 assert!((x - z).abs() < 1e-12, "{param}: {x} vs {z}");
             }
@@ -550,7 +552,7 @@ mod tests {
     #[test]
     fn term_list_formula_still_parses() {
         let f = parse_formula(FORMULA).unwrap();
-        assert_eq!(f["mu"].len(), 2);
+        assert_eq!(f[&Param::Mu].len(), 2);
     }
 
     #[test]

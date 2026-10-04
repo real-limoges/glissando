@@ -12,6 +12,7 @@ pub use residuals::*;
 use super::FittedParameter;
 use crate::distributions::Distribution;
 use crate::GamlssError;
+use crate::Param;
 use indexmap::IndexMap;
 use ndarray::Array1;
 use std::collections::HashMap;
@@ -82,25 +83,22 @@ pub fn compute_bic(log_likelihood: f64, total_edf: f64, n_obs: usize) -> f64 {
     compute_gaic(log_likelihood, total_edf, (n_obs as f64).ln())
 }
 
-pub fn total_edf(fitted_params: &IndexMap<String, FittedParameter>) -> f64 {
+pub fn total_edf(fitted_params: &IndexMap<Param, FittedParameter>) -> f64 {
     fitted_params.values().map(|p| p.edf).sum()
 }
 
 /// Snapshot of fitted parameters on the response scale, in the shape the
-/// [`Distribution`] trait expects (parameter name → fitted values). The single
+/// [`Distribution`] trait expects (parameter → fitted values). The single
 /// source for this view; `GamlssModel`'s scoring methods and `selection` build
 /// on it rather than re-collecting the map.
 pub(crate) fn fitted_params_view(
-    models: &IndexMap<String, FittedParameter>,
-) -> HashMap<&str, &Array1<f64>> {
-    models
-        .iter()
-        .map(|(k, v)| (k.as_str(), &v.fitted_values))
-        .collect()
+    models: &IndexMap<Param, FittedParameter>,
+) -> HashMap<Param, &Array1<f64>> {
+    models.iter().map(|(&k, v)| (k, &v.fitted_values)).collect()
 }
 
 pub(crate) fn compute<D: Distribution + ?Sized>(
-    models: &IndexMap<String, FittedParameter>,
+    models: &IndexMap<Param, FittedParameter>,
     family: &D,
     y: &Array1<f64>,
 ) -> Result<ModelDiagnostics, GamlssError> {
@@ -142,7 +140,7 @@ pub(crate) fn compute<D: Distribution + ?Sized>(
 pub fn quantile_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
-    params: &HashMap<&str, &Array1<f64>>,
+    params: &HashMap<Param, &Array1<f64>>,
     seed: Option<u64>,
 ) -> Result<Array1<f64>, GamlssError> {
     use crate::math::std_normal_quantile;
@@ -261,14 +259,14 @@ mod tests {
     #[test]
     fn total_edf_sums_per_parameter_edf() {
         let mut params = IndexMap::new();
-        params.insert("mu".to_string(), dummy_fitted_param(3.5));
-        params.insert("sigma".to_string(), dummy_fitted_param(1.2));
+        params.insert(Param::Mu, dummy_fitted_param(3.5));
+        params.insert(Param::Sigma, dummy_fitted_param(1.2));
         assert!((total_edf(&params) - 4.7).abs() < 1e-12);
     }
 
     #[test]
     fn total_edf_empty_returns_zero() {
-        let params: IndexMap<String, FittedParameter> = IndexMap::new();
+        let params: IndexMap<Param, FittedParameter> = IndexMap::new();
         assert_eq!(total_edf(&params), 0.0);
     }
 }

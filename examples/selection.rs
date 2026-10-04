@@ -6,6 +6,7 @@
 use glissando::distributions::Gaussian;
 use glissando::ndarray::Array1;
 use glissando::selection::{lr_test, step_gaic, Direction, StepScope};
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssError, GamlssModel, Term};
 
 fn main() -> Result<(), GamlssError> {
@@ -48,7 +49,7 @@ fn main() -> Result<(), GamlssError> {
 
     // Forward stepwise over candidate linear terms {x, z} on mu.
     let scope = vec![StepScope {
-        param: "mu".to_string(),
+        param: Param::Mu,
         candidates: vec![Term::linear("x"), Term::linear("z")],
     }];
     let result = step_gaic(

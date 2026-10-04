@@ -1,9 +1,8 @@
 //! Hurdle integration tests: a `Hurdle` wrapper fits end-to-end and recovers
 //! both the zero-atom probability and the positive-part parameters.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Distribution, Gamma, Hurdle};
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -19,8 +18,8 @@ fn dummy_data(n: usize) -> DataSet {
 fn gamma_latent(mu: f64, sigma: f64, m: usize) -> Array1<f64> {
     let p = Array1::from_iter((0..m).map(|i| (i as f64 + 0.5) / m as f64));
     let owned = [
-        ("mu", Array1::from_elem(m, mu)),
-        ("sigma", Array1::from_elem(m, sigma)),
+        (Param::Mu, Array1::from_elem(m, mu)),
+        (Param::Sigma, Array1::from_elem(m, sigma)),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     Gamma.quantile(&p, &view).unwrap()
@@ -41,22 +40,22 @@ fn hurdle_recovers_zero_fraction_and_positive_mean() {
 
     let data = dummy_data(n);
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("xi", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Xi, vec![Term::Intercept]);
 
     let hurdle = Hurdle::new(Box::new(Gamma::new()));
     let fit = GamlssModel::fit(&data, &y, &formula, &hurdle).unwrap();
 
     // Fitted xi uses a logit link. Inverse-link the intercept to read it on the probability scale.
-    let xi_hat = fit.models["xi"].fitted_values[0];
+    let xi_hat = fit.models[&Param::Xi].fitted_values[0];
     assert!(
         (xi_hat - true_xi).abs() < 0.05,
         "hurdle xi {xi_hat} should recover the zero fraction ≈ {true_xi}"
     );
 
     // Positive-part mean lands near 3; in a hurdle model the zeros do not enter the μ fit.
-    let mu_hat = fit.models["mu"].fitted_values[0];
+    let mu_hat = fit.models[&Param::Mu].fitted_values[0];
     assert!(
         (mu_hat - 3.0).abs() < 0.5,
         "positive-part mu {mu_hat} should recover ≈ 3.0"

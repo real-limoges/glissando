@@ -1,8 +1,8 @@
-// Golden characterization tables for `Distribution::theta_derivatives`.
+// Golden characterization tables for `Distribution::eta_derivatives`.
 //
 // PURPOSE. These snapshots freeze the exact `(score, weight)` arrays every
 // family returns, per parameter, at a fixed fixture. Families return natural-scale
-// pairs and `fitting/scoring.rs` applies the `dμ/dη` chain rule, so under
+// pairs and `chain_to_eta` applies the `dμ/dη` chain rule, so under
 // default links these numbers must not move. Any drift here is a defect, not a
 // snapshot to re-accept.
 //
@@ -25,7 +25,6 @@
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test derivative_golden`,
 // then `cargo insta accept`.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{Beta, Binomial};
@@ -33,6 +32,7 @@ use glissando::distributions::{
     CensorStatus, Censored, Distribution, Gamma, Gaussian, Hurdle, Link, LinkContext,
     NegativeBinomial, Ocat, Poisson, StudentT, Truncated, Weibull, BCCG, BCPE, BCT,
 };
+use glissando::Param;
 use ndarray::{array, Array1};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -66,13 +66,13 @@ fn fmt_vec(v: &Array1<f64>) -> Vec<String> {
 /// A [`LinkContext`] borrows the links and η it reports on, so the owner has to
 /// outlive it; hence the two-step `let links = ...; let ctx = links.context();`.
 struct DefaultLinks {
-    names: Vec<&'static str>,
+    names: Vec<Param>,
     links: Vec<Box<dyn Link>>,
     etas: Vec<Array1<f64>>,
 }
 
 impl DefaultLinks {
-    fn new<D: Distribution + ?Sized>(family: &D, owned: &[(&'static str, Array1<f64>)]) -> Self {
+    fn new<D: Distribution + ?Sized>(family: &D, owned: &[(Param, Array1<f64>)]) -> Self {
         let mut names = Vec::new();
         let mut links = Vec::new();
         let mut etas = Vec::new();
@@ -115,9 +115,9 @@ impl DefaultLinks {
 fn golden<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
-    owned: &[(&'static str, Array1<f64>)],
+    owned: &[(Param, Array1<f64>)],
 ) -> DerivativeGolden {
-    let params: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+    let params: HashMap<Param, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
     let links = DefaultLinks::new(family, owned);
     let derivs = family
         .eta_derivatives(y, &params, &links.context())
@@ -126,9 +126,10 @@ fn golden<D: Distribution + ?Sized>(
     let mut scores = BTreeMap::new();
     let mut weights = BTreeMap::new();
     for &name in family.parameters() {
-        let (u, w) = derivs
-            .get(name)
+        let d = derivs
+            .get(&name)
             .unwrap_or_else(|| panic!("{}: no derivatives entry for '{}'", family.name(), name));
+        let (u, w) = (&d.score, &d.info);
         assert_eq!(u.len(), y.len(), "{}::{} score length", family.name(), name);
         assert_eq!(
             w.len(),
@@ -163,8 +164,8 @@ fn golden_gaussian() {
     // constant σ-weight can land by accident.
     let y = array![-1.5, 0.0, 1.0, 2.5, -0.25, 3.0];
     let owned = [
-        ("mu", array![-0.5, 0.25, 0.5, 2.0, 0.0, 2.75]),
-        ("sigma", array![1.0, 1.5, 0.8, 0.5, 2.0, 1.25]),
+        (Param::Mu, array![-0.5, 0.25, 0.5, 2.0, 0.0, 2.75]),
+        (Param::Sigma, array![1.0, 1.5, 0.8, 0.5, 2.0, 1.25]),
     ];
     insta::assert_yaml_snapshot!(golden(&Gaussian::new(), &y, &owned));
 }
@@ -172,7 +173,7 @@ fn golden_gaussian() {
 #[test]
 fn golden_poisson() {
     let y = array![0.0, 1.0, 2.0, 5.0, 9.0, 3.0];
-    let owned = [("mu", array![0.5, 1.0, 2.0, 4.0, 8.0, 3.5])];
+    let owned = [(Param::Mu, array![0.5, 1.0, 2.0, 4.0, 8.0, 3.5])];
     insta::assert_yaml_snapshot!(golden(&Poisson::new(), &y, &owned));
 }
 
@@ -180,7 +181,7 @@ fn golden_poisson() {
 fn golden_binomial() {
     // n_trials = 10, successes spanning both boundaries and the interior.
     let y = array![0.0, 1.0, 5.0, 9.0, 10.0, 3.0];
-    let owned = [("mu", array![0.1, 0.2, 0.5, 0.85, 0.95, 0.4])];
+    let owned = [(Param::Mu, array![0.1, 0.2, 0.5, 0.85, 0.95, 0.4])];
     insta::assert_yaml_snapshot!(golden(&Binomial::new(10), &y, &owned));
 }
 
@@ -188,8 +189,8 @@ fn golden_binomial() {
 fn golden_gamma() {
     let y = array![0.5, 1.0, 2.0, 4.0, 0.25, 3.0];
     let owned = [
-        ("mu", array![1.0, 1.5, 2.0, 3.0, 0.5, 2.5]),
-        ("sigma", array![0.5, 0.8, 1.0, 1.2, 0.3, 0.9]),
+        (Param::Mu, array![1.0, 1.5, 2.0, 3.0, 0.5, 2.5]),
+        (Param::Sigma, array![0.5, 0.8, 1.0, 1.2, 0.3, 0.9]),
     ];
     insta::assert_yaml_snapshot!(golden(&Gamma::new(), &y, &owned));
 }
@@ -200,8 +201,8 @@ fn golden_negative_binomial() {
     // which the refactor must reproduce via `i_σ := (∂l/∂σ)²`.
     let y = array![0.0, 1.0, 3.0, 7.0, 12.0, 2.0];
     let owned = [
-        ("mu", array![1.0, 2.0, 3.0, 6.0, 10.0, 2.5]),
-        ("sigma", array![0.5, 0.8, 1.0, 0.3, 1.5, 0.6]),
+        (Param::Mu, array![1.0, 2.0, 3.0, 6.0, 10.0, 2.5]),
+        (Param::Sigma, array![0.5, 0.8, 1.0, 0.3, 1.5, 0.6]),
     ];
     insta::assert_yaml_snapshot!(golden(&NegativeBinomial::new(), &y, &owned));
 }
@@ -210,8 +211,8 @@ fn golden_negative_binomial() {
 fn golden_beta() {
     let y = array![0.1, 0.25, 0.5, 0.75, 0.9, 0.4];
     let owned = [
-        ("mu", array![0.2, 0.3, 0.5, 0.7, 0.85, 0.45]),
-        ("phi", array![2.0, 5.0, 10.0, 3.0, 8.0, 4.0]),
+        (Param::Mu, array![0.2, 0.3, 0.5, 0.7, 0.85, 0.45]),
+        (Param::Phi, array![2.0, 5.0, 10.0, 3.0, 8.0, 4.0]),
     ];
     insta::assert_yaml_snapshot!(golden(&Beta::new(), &y, &owned));
 }
@@ -222,9 +223,9 @@ fn golden_student_t() {
     // rule, not the KKT boundary projection (covered separately below).
     let y = array![-2.0, -0.5, 0.0, 1.5, 3.0, 0.75];
     let owned = [
-        ("mu", array![-1.0, 0.0, 0.25, 1.0, 2.5, 0.5]),
-        ("sigma", array![1.0, 1.5, 0.8, 1.2, 2.0, 0.9]),
-        ("nu", array![5.0, 8.0, 4.0, 12.0, 6.0, 20.0]),
+        (Param::Mu, array![-1.0, 0.0, 0.25, 1.0, 2.5, 0.5]),
+        (Param::Sigma, array![1.0, 1.5, 0.8, 1.2, 2.0, 0.9]),
+        (Param::Nu, array![5.0, 8.0, 4.0, 12.0, 6.0, 20.0]),
     ];
     insta::assert_yaml_snapshot!(golden(&StudentT::new(), &y, &owned));
 }
@@ -237,9 +238,9 @@ fn golden_student_t_at_nu_floor() {
     // override, so this table must stay bit-stable across the whole refactor.
     let y = array![-3.0, -1.0, 0.0, 1.0, 4.0, 0.5];
     let owned = [
-        ("mu", array![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-        ("sigma", array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        ("nu", array![2.0, 2.0, 2.0, 2.0, 2.0, 2.0]),
+        (Param::Mu, array![0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        (Param::Sigma, array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        (Param::Nu, array![2.0, 2.0, 2.0, 2.0, 2.0, 2.0]),
     ];
     insta::assert_yaml_snapshot!(golden(&StudentT::new(), &y, &owned));
 }
@@ -248,8 +249,8 @@ fn golden_student_t_at_nu_floor() {
 fn golden_weibull() {
     let y = array![0.5, 1.0, 1.5, 2.5, 0.25, 3.5];
     let owned = [
-        ("mu", array![1.0, 1.2, 2.0, 2.0, 0.5, 3.0]),
-        ("sigma", array![1.0, 1.5, 2.0, 0.8, 2.5, 1.2]),
+        (Param::Mu, array![1.0, 1.2, 2.0, 2.0, 0.5, 3.0]),
+        (Param::Sigma, array![1.0, 1.5, 2.0, 0.8, 2.5, 1.2]),
     ];
     insta::assert_yaml_snapshot!(golden(&Weibull::new(), &y, &owned));
 }
@@ -260,12 +261,12 @@ fn golden_weibull() {
 
 /// Shared Box-Cox fixture: strictly positive `y`/`μ`, and a `ν` spanning the
 /// sign change (ν = 0 is the log-transform limit the code special-cases).
-fn boxcox_fixture() -> (Array1<f64>, [(&'static str, Array1<f64>); 3]) {
+fn boxcox_fixture() -> (Array1<f64>, [(Param, Array1<f64>); 3]) {
     let y = array![0.5, 1.0, 1.8, 3.0, 0.75, 2.2];
     let owned = [
-        ("mu", array![1.0, 1.2, 2.0, 2.5, 0.8, 2.0]),
-        ("sigma", array![0.2, 0.3, 0.15, 0.4, 0.25, 0.35]),
-        ("nu", array![-1.0, -0.5, 0.0, 0.5, 1.0, 2.0]),
+        (Param::Mu, array![1.0, 1.2, 2.0, 2.5, 0.8, 2.0]),
+        (Param::Sigma, array![0.2, 0.3, 0.15, 0.4, 0.25, 0.35]),
+        (Param::Nu, array![-1.0, -0.5, 0.0, 0.5, 1.0, 2.0]),
     ];
     (y, owned)
 }
@@ -283,7 +284,7 @@ fn golden_bct() {
         base[0].clone(),
         base[1].clone(),
         base[2].clone(),
-        ("tau", array![3.0, 5.0, 8.0, 4.0, 12.0, 6.0]),
+        (Param::Tau, array![3.0, 5.0, 8.0, 4.0, 12.0, 6.0]),
     ];
     insta::assert_yaml_snapshot!(golden(&BCT::new(), &y, &owned));
 }
@@ -295,7 +296,7 @@ fn golden_bcpe() {
         base[0].clone(),
         base[1].clone(),
         base[2].clone(),
-        ("tau", array![1.0, 1.5, 2.0, 3.0, 0.8, 4.0]),
+        (Param::Tau, array![1.0, 1.5, 2.0, 3.0, 0.8, 4.0]),
     ];
     insta::assert_yaml_snapshot!(golden(&BCPE::new(), &y, &owned));
 }
@@ -306,14 +307,14 @@ fn golden_bcpe() {
 
 #[test]
 fn golden_ocat_4_categories() {
-    // `params["mu"]` holds η, not μ (identity link on the latent scale);
+    // `params[&Param::Mu]` holds η, not μ (identity link on the latent scale);
     // `delta_1` is the first threshold and `delta_2..` are positive increments.
     let y = array![1.0, 2.0, 3.0, 4.0, 2.0, 1.0];
     let owned = [
-        ("mu", array![-1.0, -0.25, 0.0, 0.5, 1.0, 0.25]),
-        ("delta_1", array![-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
-        ("delta_2", array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        ("delta_3", array![1.5, 1.5, 1.5, 1.5, 1.5, 1.5]),
+        (Param::Mu, array![-1.0, -0.25, 0.0, 0.5, 1.0, 0.25]),
+        (Param::Delta1, array![-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
+        (Param::Delta2, array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        (Param::Delta3, array![1.5, 1.5, 1.5, 1.5, 1.5, 1.5]),
     ];
     insta::assert_yaml_snapshot!(golden(&Ocat::new(4), &y, &owned));
 }
@@ -324,11 +325,11 @@ fn golden_ocat_5_categories() {
     // tests, the fourth threshold's log-link arm never had a derivative test.
     let y = array![1.0, 2.0, 3.0, 4.0, 5.0, 3.0];
     let owned = [
-        ("mu", array![-1.5, -0.5, 0.0, 0.75, 1.5, 0.25]),
-        ("delta_1", array![-1.5, -1.5, -1.5, -1.5, -1.5, -1.5]),
-        ("delta_2", array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        ("delta_3", array![1.25, 1.25, 1.25, 1.25, 1.25, 1.25]),
-        ("delta_4", array![0.75, 0.75, 0.75, 0.75, 0.75, 0.75]),
+        (Param::Mu, array![-1.5, -0.5, 0.0, 0.75, 1.5, 0.25]),
+        (Param::Delta1, array![-1.5, -1.5, -1.5, -1.5, -1.5, -1.5]),
+        (Param::Delta2, array![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+        (Param::Delta3, array![1.25, 1.25, 1.25, 1.25, 1.25, 1.25]),
+        (Param::Delta4, array![0.75, 0.75, 0.75, 0.75, 0.75, 0.75]),
     ];
     insta::assert_yaml_snapshot!(golden(&Ocat::new(5), &y, &owned));
 }
@@ -339,11 +340,11 @@ fn golden_ocat_5_categories() {
 
 /// Base fixture shared by the wrapper tables, so a wrapper's table can be read
 /// directly against `golden_gaussian`'s.
-fn wrapper_base_fixture() -> (Array1<f64>, [(&'static str, Array1<f64>); 2]) {
+fn wrapper_base_fixture() -> (Array1<f64>, [(Param, Array1<f64>); 2]) {
     let y = array![-1.0, 0.0, 0.5, 1.5, 2.0, 3.0];
     let owned = [
-        ("mu", array![0.0, 0.25, 0.5, 1.0, 1.5, 2.0]),
-        ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0, 0.9]),
+        (Param::Mu, array![0.0, 0.25, 0.5, 1.0, 1.5, 2.0]),
+        (Param::Sigma, array![1.0, 1.2, 0.8, 1.5, 1.0, 0.9]),
     ];
     (y, owned)
 }
@@ -393,8 +394,8 @@ fn golden_truncated_over_gamma() {
     // to any change in how the perturbation is taken.
     let y = array![0.5, 1.0, 1.5, 2.0, 0.75, 2.5];
     let owned = [
-        ("mu", array![1.0, 1.2, 1.5, 2.0, 0.8, 2.2]),
-        ("sigma", array![0.5, 0.7, 1.0, 0.6, 0.9, 0.8]),
+        (Param::Mu, array![1.0, 1.2, 1.5, 2.0, 0.8, 2.2]),
+        (Param::Sigma, array![0.5, 0.7, 1.0, 0.6, 0.9, 0.8]),
     ];
     let lower = array![0.1, 0.1, 0.2, 0.2, 0.05, 0.05];
     let upper = array![5.0, 5.0, 6.0, 6.0, 4.0, 4.0];
@@ -408,9 +409,9 @@ fn golden_hurdle_over_gamma() {
     // contribution); positives go through the zero-truncated base.
     let y = array![0.0, 1.0, 0.0, 2.5, 0.5, 3.0];
     let owned = [
-        ("mu", array![1.0, 1.5, 2.0, 2.0, 1.0, 2.5]),
-        ("sigma", array![0.5, 0.8, 1.0, 0.6, 0.9, 0.7]),
-        ("xi", array![0.2, 0.3, 0.5, 0.25, 0.4, 0.15]),
+        (Param::Mu, array![1.0, 1.5, 2.0, 2.0, 1.0, 2.5]),
+        (Param::Sigma, array![0.5, 0.8, 1.0, 0.6, 0.9, 0.7]),
+        (Param::Xi, array![0.2, 0.3, 0.5, 0.25, 0.4, 0.15]),
     ];
     let family = Hurdle::new(Box::new(Gamma::new()));
     insta::assert_yaml_snapshot!(golden(&family, &y, &owned));

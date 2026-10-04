@@ -6,13 +6,11 @@
 //! the same family; and LMS centile curves are monotone with C50 = the fitted
 //! median μ.
 
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{linear, Generator};
 use glissando::distributions::{Distribution, BCCG};
+use glissando::Param;
 use glissando::{Formula, GamlssModel, Term};
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, LogNormal, Normal};
@@ -22,14 +20,12 @@ use statrs::distribution::{ContinuousCDF, LogNormal, Normal};
 /// likelihood.
 fn recovery_formula() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept, linear("x")])
-        .with_terms("sigma", vec![Term::Intercept])
-        .with_terms("nu", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept, linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Nu, vec![Term::Intercept])
 }
 
-fn params_view<'a>(
-    owned: &'a [(&'static str, Array1<f64>)],
-) -> std::collections::HashMap<&'a str, &'a Array1<f64>> {
+fn params_view(owned: &[(Param, Array1<f64>)]) -> std::collections::HashMap<Param, &Array1<f64>> {
     owned.iter().map(|(k, v)| (*k, v)).collect()
 }
 
@@ -44,7 +40,7 @@ fn bccg_recovers_known_parameters() {
     assert!(model.converged(), "BCCG fit should converge");
 
     // μ coefficients are on the log scale: [b0 ≈ intercept, b1 ≈ slope].
-    let mu_beta = &model.models["mu"].coefficients.0;
+    let mu_beta = &model.models[&Param::Mu].coefficients.0;
     assert!(
         (mu_beta[0] - intercept).abs() < 0.1,
         "μ intercept: {} vs {}",
@@ -59,7 +55,7 @@ fn bccg_recovers_known_parameters() {
     );
 
     // σ (log link, intercept-only): exp(coef) ≈ σ.
-    let sigma_hat = model.models["sigma"].coefficients.0[0].exp();
+    let sigma_hat = model.models[&Param::Sigma].coefficients.0[0].exp();
     assert!(
         (sigma_hat - sigma).abs() < 0.05,
         "σ̂ {} vs {}",
@@ -69,7 +65,7 @@ fn bccg_recovers_known_parameters() {
 
     // ν (identity link, intercept-only): coef ≈ ν. Skewness is the noisiest
     // parameter, so the band is deliberately wide but still excludes 0 and 1.
-    let nu_hat = model.models["nu"].coefficients.0[0];
+    let nu_hat = model.models[&Param::Nu].coefficients.0[0];
     assert!((nu_hat - nu).abs() < 0.4, "ν̂ {} vs {}", nu_hat, nu);
 }
 
@@ -78,9 +74,12 @@ fn bccg_reduces_to_normal_at_nu_one() {
     // At ν = 1 the Box-Cox transform is z = (y/μ − 1)/σ, so BCCG(μ, σ, 1) is a
     // Normal(μ, μσ). Validate cdf/quantile against statrs's *independent* Normal.
     let owned = [
-        ("mu", Array1::from_vec(vec![4.0, 4.0, 4.0, 4.0, 4.0])),
-        ("sigma", Array1::from_vec(vec![0.2, 0.2, 0.2, 0.2, 0.2])),
-        ("nu", Array1::from_vec(vec![1.0, 1.0, 1.0, 1.0, 1.0])),
+        (Param::Mu, Array1::from_vec(vec![4.0, 4.0, 4.0, 4.0, 4.0])),
+        (
+            Param::Sigma,
+            Array1::from_vec(vec![0.2, 0.2, 0.2, 0.2, 0.2]),
+        ),
+        (Param::Nu, Array1::from_vec(vec![1.0, 1.0, 1.0, 1.0, 1.0])),
     ];
     let p = params_view(&owned);
     let bccg = BCCG::new();
@@ -113,9 +112,12 @@ fn bccg_reduces_to_lognormal_at_nu_zero() {
     // At ν = 0 the transform is z = log(y/μ)/σ, so BCCG(μ, σ, 0) is a
     // LogNormal(log μ, σ). Validate against statrs's independent LogNormal.
     let owned = [
-        ("mu", Array1::from_vec(vec![2.0, 2.0, 2.0, 2.0, 2.0])),
-        ("sigma", Array1::from_vec(vec![0.4, 0.4, 0.4, 0.4, 0.4])),
-        ("nu", Array1::from_vec(vec![0.0, 0.0, 0.0, 0.0, 0.0])),
+        (Param::Mu, Array1::from_vec(vec![2.0, 2.0, 2.0, 2.0, 2.0])),
+        (
+            Param::Sigma,
+            Array1::from_vec(vec![0.4, 0.4, 0.4, 0.4, 0.4]),
+        ),
+        (Param::Nu, Array1::from_vec(vec![0.0, 0.0, 0.0, 0.0, 0.0])),
     ];
     let p = params_view(&owned);
     let bccg = BCCG::new();
@@ -162,7 +164,7 @@ fn bccg_centiles_are_monotone_and_median_is_mu() {
     }
 
     // C50 is the fitted median μ exactly (p = 0.5 ⇒ z_p = 0 ⇒ y = μ).
-    let mu = &model.predict(&data, &BCCG::new()).unwrap()["mu"];
+    let mu = &model.predict(&data, &BCCG::new()).unwrap()[&Param::Mu];
     for (i, (&c, &m)) in centiles["C50"].iter().zip(mu.iter()).enumerate() {
         assert!((c - m).abs() < 1e-6, "row {i}: C50 {c} vs μ {m}");
     }
@@ -185,8 +187,8 @@ fn bccg_json_roundtrip_predicts_identically() {
     let reloaded_family = desc.build().unwrap();
     assert_eq!(reloaded_family.name(), "BCCG");
     let preds2 = reloaded.predict(&data, reloaded_family.as_ref()).unwrap();
-    for key in ["mu", "sigma", "nu"] {
-        for (a, b) in preds[key].iter().zip(preds2[key].iter()) {
+    for key in [Param::Mu, Param::Sigma, Param::Nu] {
+        for (a, b) in preds[&key].iter().zip(preds2[&key].iter()) {
             assert!((a - b).abs() < 1e-12, "{key}: {a} vs {b} after round-trip");
         }
     }

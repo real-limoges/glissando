@@ -1,9 +1,7 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{intercept_only, linear, linear_intercepts, smooth_intercepts, Generator};
+use glissando::Param;
 use glissando::{
     distributions::{Gaussian, Poisson},
     selection::{ic_table, lr_test, step_gaic, Direction, StepResult, StepScope},
@@ -20,8 +18,8 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
     // y depends on x1, so the null (intercept-only) model fits worse than mu ~ x1.
     let (y, data) = rng.gaussian_with_noise_columns(200, 4.0, 1.0, 0.5);
 
-    let null = intercept_only(&["mu", "sigma"]);
-    let with_x1 = linear_intercepts("x1", &["mu", "sigma"]);
+    let null = intercept_only(&[Param::Mu, Param::Sigma]);
+    let with_x1 = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let m_null = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let m_x1 = GamlssModel::fit(&data, &y, &with_x1, &Gaussian::new()).unwrap();
 
@@ -65,10 +63,10 @@ fn ic_table_ranks_better_fit_below_worse_fit() {
 fn mu_x1_plus_noise(noise_col: &str) -> Formula {
     let mut f = Formula::new();
     f.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![Term::Intercept, linear("x1"), linear(noise_col)],
     );
-    f.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    f.add_terms(Param::Sigma, vec![Term::Intercept]);
     f
 }
 
@@ -77,8 +75,8 @@ fn lr_test_has_power_for_a_genuine_term() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
-    let null = intercept_only(&["mu", "sigma"]);
-    let alt = linear_intercepts("x1", &["mu", "sigma"]);
+    let null = intercept_only(&[Param::Mu, Param::Sigma]);
+    let alt = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let small = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &alt, &Gaussian::new()).unwrap();
 
@@ -102,7 +100,7 @@ fn lr_test_noise_term_is_weaker_than_genuine_term() {
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
     // Correct model mu ~ x1, then add the pure-noise column x2.
-    let correct = linear_intercepts("x1", &["mu", "sigma"]);
+    let correct = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let with_noise = mu_x1_plus_noise("x2");
     let small = GamlssModel::fit(&data, &y, &correct, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &with_noise, &Gaussian::new()).unwrap();
@@ -126,8 +124,8 @@ fn lr_test_rejects_misordered_pair() {
     let mut rng = Generator::new(5);
     let (y, data) = rng.gaussian_with_noise_columns(150, 4.0, 1.0, 0.5);
 
-    let null = intercept_only(&["mu", "sigma"]);
-    let alt = linear_intercepts("x1", &["mu", "sigma"]);
+    let null = intercept_only(&[Param::Mu, Param::Sigma]);
+    let alt = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let small = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &alt, &Gaussian::new()).unwrap();
 
@@ -148,7 +146,7 @@ fn lr_test_rejects_misordered_pair() {
 fn mu_term_names(r: &StepResult) -> Vec<String> {
     let mut names: Vec<String> = r
         .formula
-        .get("mu")
+        .get(&Param::Mu)
         .expect("mu present")
         .iter()
         .map(|t| t.term_name())
@@ -160,7 +158,7 @@ fn mu_term_names(r: &StepResult) -> Vec<String> {
 /// Candidate scope: all three predictors are eligible to add or drop on `mu`.
 fn mu_scope() -> Vec<StepScope> {
     vec![StepScope {
-        param: "mu".to_string(),
+        param: Param::Mu,
         candidates: vec![linear("x1"), linear("x2"), linear("x3")],
     }]
 }
@@ -170,7 +168,7 @@ fn step_gaic_forward_selects_signal_rejects_noise() {
     let mut rng = Generator::new(2024);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
 
-    let start = intercept_only(&["mu", "sigma"]);
+    let start = intercept_only(&[Param::Mu, Param::Sigma]);
     // BIC penalty (k = log n) is the parsimonious choice: it reliably keeps the
     // true predictor and rejects the pure-noise columns. (AIC's k = 2 is loose
     // enough that a noise column's deviance drop sometimes clears the penalty.
@@ -218,10 +216,10 @@ fn step_gaic_backward_drops_noise_keeps_signal() {
     // Start from the full model: mu ~ 1 + x1 + x2 + x3.
     let full = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, linear("x1"), linear("x2"), linear("x3")],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let k = (y.len() as f64).ln(); // BIC: parsimonious, drops the noise columns.
     let result = step_gaic(
@@ -258,7 +256,7 @@ fn step_gaic_backward_drops_noise_keeps_signal() {
 fn step_gaic_is_deterministic() {
     let mut rng = Generator::new(13);
     let (y, data) = rng.gaussian_with_noise_columns(250, 3.0, 1.0, 0.6);
-    let start = intercept_only(&["mu", "sigma"]);
+    let start = intercept_only(&[Param::Mu, Param::Sigma]);
 
     let run = || {
         step_gaic(
@@ -292,7 +290,7 @@ fn step_gaic_is_deterministic() {
 fn step_gaic_trace_is_monotone_decreasing() {
     let mut rng = Generator::new(2024);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
-    let start = intercept_only(&["mu", "sigma"]);
+    let start = intercept_only(&[Param::Mu, Param::Sigma]);
 
     let result = step_gaic(
         &data,
@@ -326,8 +324,8 @@ fn lr_test_p_value_matches_chi_squared_survival() {
     use statrs::distribution::{ChiSquared, ContinuousCDF};
     let mut rng = Generator::new(7);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
-    let null = intercept_only(&["mu", "sigma"]);
-    let alt = linear_intercepts("x1", &["mu", "sigma"]);
+    let null = intercept_only(&[Param::Mu, Param::Sigma]);
+    let alt = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let small = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &alt, &Gaussian::new()).unwrap();
 
@@ -356,8 +354,8 @@ fn lr_test_handles_fractional_df_from_a_penalized_smooth() {
     // A nonlinear (sinusoidal) mean so the P-spline can't collapse to a straight
     // line. Its effective df stays fractional on either linear-algebra backend.
     let (y, data) = rng.sinusoidal_gaussian(200, 0.3);
-    let linear_mu = linear_intercepts("x", &["mu", "sigma"]);
-    let smooth_mu = smooth_intercepts("x", 12, &["mu", "sigma"]);
+    let linear_mu = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
+    let smooth_mu = smooth_intercepts("x", 12, &[Param::Mu, Param::Sigma]);
     let small = GamlssModel::fit(&data, &y, &linear_mu, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &smooth_mu, &Gaussian::new()).unwrap();
 
@@ -379,8 +377,8 @@ fn lr_test_handles_fractional_df_from_a_penalized_smooth() {
 fn lr_test_error_message_names_the_nesting_requirement() {
     let mut rng = Generator::new(5);
     let (y, data) = rng.gaussian_with_noise_columns(150, 4.0, 1.0, 0.5);
-    let null = intercept_only(&["mu", "sigma"]);
-    let alt = linear_intercepts("x1", &["mu", "sigma"]);
+    let null = intercept_only(&[Param::Mu, Param::Sigma]);
+    let alt = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let small = GamlssModel::fit(&data, &y, &null, &Gaussian::new()).unwrap();
     let big = GamlssModel::fit(&data, &y, &alt, &Gaussian::new()).unwrap();
 
@@ -413,24 +411,24 @@ fn ic_table_ranks_three_models() {
     let m_null = GamlssModel::fit(
         &data,
         &y,
-        &intercept_only(&["mu", "sigma"]),
+        &intercept_only(&[Param::Mu, Param::Sigma]),
         &Gaussian::new(),
     )
     .unwrap();
     let m_x1 = GamlssModel::fit(
         &data,
         &y,
-        &linear_intercepts("x1", &["mu", "sigma"]),
+        &linear_intercepts("x1", &[Param::Mu, Param::Sigma]),
         &Gaussian::new(),
     )
     .unwrap();
     let m_full = {
         let f = Formula::new()
             .with_terms(
-                "mu",
+                Param::Mu,
                 vec![Term::Intercept, linear("x1"), linear("x2"), linear("x3")],
             )
-            .with_terms("sigma", vec![Term::Intercept]);
+            .with_terms(Param::Sigma, vec![Term::Intercept]);
         GamlssModel::fit(&data, &y, &f, &Gaussian::new()).unwrap()
     };
 
@@ -464,8 +462,8 @@ fn ic_table_compares_non_nested_families() {
     // Count data: Poisson and Gaussian are non-nested, but ic_table still ranks them.
     let mut rng = Generator::new(13);
     let (y, data) = rng.poisson_data(300, 0.5, 0.3);
-    let formula_p = linear_intercepts("x", &["mu"]);
-    let formula_g = linear_intercepts("x", &["mu", "sigma"]);
+    let formula_p = linear_intercepts("x", &[Param::Mu]);
+    let formula_g = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let m_pois = GamlssModel::fit(&data, &y, &formula_p, &Poisson::new()).unwrap();
     let m_gauss = GamlssModel::fit(&data, &y, &formula_g, &Gaussian::new()).unwrap();
 
@@ -493,8 +491,8 @@ fn step_gaic_both_adds_signal_and_drops_noise() {
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
     // Start with the noise term present and the signal absent.
     let start = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, linear("x2")])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, linear("x2")])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let result = step_gaic(
         &data,
         &y,
@@ -525,9 +523,9 @@ fn step_gaic_selects_a_term_on_sigma() {
     let mut rng = Generator::new(31);
     // Heteroskedastic: σ depends on x, so a term on sigma is true signal.
     let (y, data) = rng.heteroskedastic_gaussian(400);
-    let start = linear_intercepts("x", &["mu", "sigma"]); // mu~x, sigma~1
+    let start = linear_intercepts("x", &[Param::Mu, Param::Sigma]); // mu~x, sigma~1
     let scope = vec![StepScope {
-        param: "sigma".to_string(),
+        param: Param::Sigma,
         candidates: vec![linear("x")],
     }];
     let result = step_gaic(
@@ -544,7 +542,7 @@ fn step_gaic_selects_a_term_on_sigma() {
 
     let sigma_names: Vec<String> = result
         .formula
-        .get("sigma")
+        .get(&Param::Sigma)
         .unwrap()
         .iter()
         .map(|t| t.term_name())
@@ -560,14 +558,14 @@ fn step_gaic_selects_a_term_on_sigma() {
 fn step_gaic_selects_on_both_mu_and_sigma() {
     let mut rng = Generator::new(77);
     let (y, data) = rng.heteroskedastic_gaussian(400);
-    let start = intercept_only(&["mu", "sigma"]);
+    let start = intercept_only(&[Param::Mu, Param::Sigma]);
     let scope = vec![
         StepScope {
-            param: "mu".to_string(),
+            param: Param::Mu,
             candidates: vec![linear("x")],
         },
         StepScope {
-            param: "sigma".to_string(),
+            param: Param::Sigma,
             candidates: vec![linear("x")],
         },
     ];
@@ -583,25 +581,25 @@ fn step_gaic_selects_on_both_mu_and_sigma() {
     )
     .unwrap();
 
-    let has = |param: &str, term: &str| {
+    let has = |param: Param, term: &str| {
         result
             .formula
-            .get(param)
+            .get(&param)
             .unwrap()
             .iter()
             .any(|t| t.term_name() == term)
     };
-    assert!(has("mu", "x"), "mu should gain x");
-    assert!(has("sigma", "x"), "sigma should gain x");
+    assert!(has(Param::Mu, "x"), "mu should gain x");
+    assert!(has(Param::Sigma, "x"), "sigma should gain x");
 }
 
 #[test]
 fn step_gaic_recovers_signal_for_a_poisson_family() {
     let mut rng = Generator::new(2024);
     let (y, data) = rng.poisson_with_noise_columns(400, 1.5, 0.5);
-    let start = intercept_only(&["mu"]);
+    let start = intercept_only(&[Param::Mu]);
     let scope = vec![StepScope {
-        param: "mu".to_string(),
+        param: Param::Mu,
         candidates: vec![linear("x1"), linear("x2")],
     }];
     let result = step_gaic(
@@ -637,7 +635,7 @@ fn step_gaic_recovers_signal_for_a_poisson_family() {
 fn step_gaic_empty_scope_is_a_noop() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.gaussian_with_noise_columns(120, 4.0, 1.0, 0.5);
-    let start = linear_intercepts("x1", &["mu", "sigma"]);
+    let start = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let result = step_gaic(
         &data,
         &y,
@@ -661,9 +659,9 @@ fn step_gaic_forward_with_all_candidates_present_is_a_noop() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.gaussian_with_noise_columns(120, 4.0, 1.0, 0.5);
     // x1 is already in the starting formula, and forward can only add absent terms.
-    let start = linear_intercepts("x1", &["mu", "sigma"]);
+    let start = linear_intercepts("x1", &[Param::Mu, Param::Sigma]);
     let scope = vec![StepScope {
-        param: "mu".to_string(),
+        param: Param::Mu,
         candidates: vec![linear("x1")],
     }];
     let result = step_gaic(
@@ -685,9 +683,9 @@ fn step_gaic_rejects_a_non_improving_move() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.gaussian_with_noise_columns(300, 4.0, 1.0, 0.5);
     // Only a pure-noise candidate is on offer, and under BIC it never beats the penalty.
-    let start = linear_intercepts("x1", &["mu", "sigma"]); // already correct
+    let start = linear_intercepts("x1", &[Param::Mu, Param::Sigma]); // already correct
     let scope = vec![StepScope {
-        param: "mu".to_string(),
+        param: Param::Mu,
         candidates: vec![linear("x2")],
     }];
     let result = step_gaic(
@@ -720,7 +718,7 @@ fn step_gaic_is_deterministic_at_formula_level_across_seeds_and_k() {
                     &data,
                     &y,
                     &Gaussian::new(),
-                    intercept_only(&["mu", "sigma"]),
+                    intercept_only(&[Param::Mu, Param::Sigma]),
                     &mu_scope(),
                     k,
                     Direction::Both,

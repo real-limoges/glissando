@@ -1,9 +1,7 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{cr_spline, linear_intercepts, random, smooth_intercepts, Generator};
+use glissando::Param;
 use glissando::{
     distributions::{Gamma, Gaussian, Poisson},
     DataSet, Formula, GamlssError, GamlssModel, Smooth, Term,
@@ -17,7 +15,7 @@ fn test_predict_on_training_data() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -25,8 +23,8 @@ fn test_predict_on_training_data() {
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
 
     // They must match the fitted values
-    let mu_pred = &predictions["mu"];
-    let mu_fitted = &model.models["mu"].fitted_values;
+    let mu_pred = &predictions[&Param::Mu];
+    let mu_fitted = &model.models[&Param::Mu].fitted_values;
 
     for i in 0..mu_pred.len() {
         let diff = (mu_pred[i] - mu_fitted[i]).abs();
@@ -46,7 +44,7 @@ fn test_predict_on_new_data() {
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(200, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -55,10 +53,10 @@ fn test_predict_on_new_data() {
     new_data.insert_column("x", Array1::from_vec(vec![0.0, 50.0, 100.0, 150.0, 200.0]));
 
     let predictions = model.predict(&new_data, &Gaussian::new()).unwrap();
-    let mu_pred = &predictions["mu"];
+    let mu_pred = &predictions[&Param::Mu];
 
     // Linear model, so mu = intercept + slope * x. The predictions must lie on that line.
-    let coeffs = &model.models["mu"].coefficients.0;
+    let coeffs = &model.models[&Param::Mu].coefficients.0;
     let intercept = coeffs[0];
     let slope = coeffs[1];
 
@@ -80,13 +78,13 @@ fn test_predict_with_se() {
     let mut rng = Generator::new(456);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let results = model.predict_with_se(&data, &Gaussian::new()).unwrap();
 
-    let mu_result = &results["mu"];
+    let mu_result = &results[&Param::Mu];
 
     // Standard errors can't go negative
     for i in 0..mu_result.se_eta.len() {
@@ -123,13 +121,13 @@ fn test_predict_poisson() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     // Predict on training data
     let predictions = model.predict(&data, &Poisson::new()).unwrap();
-    let mu_pred = &predictions["mu"];
+    let mu_pred = &predictions[&Param::Mu];
 
     // Every prediction must be positive, which the Poisson log link guarantees.
     for i in 0..mu_pred.len() {
@@ -147,12 +145,12 @@ fn test_posterior_samples() {
     let mut rng = Generator::new(999);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Draw posterior samples for mu
-    let samples = model.posterior_samples("mu", 100, None).unwrap();
+    let samples = model.posterior_samples(Param::Mu, 100, None).unwrap();
 
     assert_eq!(samples.len(), 100, "Should have 100 samples");
 
@@ -162,7 +160,7 @@ fn test_posterior_samples() {
     }
 
     // The sample mean should be near the fitted coefficients
-    let fitted_coeffs = &model.models["mu"].coefficients.0;
+    let fitted_coeffs = &model.models[&Param::Mu].coefficients.0;
     let mut mean_intercept = 0.0;
     let mut mean_slope = 0.0;
     for sample in &samples {
@@ -187,7 +185,7 @@ fn test_predict_samples() {
     let mut rng = Generator::new(111);
     let (y, data) = rng.linear_gaussian(50, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -197,7 +195,7 @@ fn test_predict_samples() {
         .unwrap();
 
     // mu predictions first
-    let mu_samples = &pred_samples["mu"];
+    let mu_samples = &pred_samples[&Param::Mu];
     assert_eq!(mu_samples.len(), 50, "Should have 50 prediction samples");
 
     // Every sample covers all the observations
@@ -223,13 +221,13 @@ fn test_predict_with_smooth() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x));
 
-    let formula = smooth_intercepts("x", 10, &["mu", "sigma"]);
+    let formula = smooth_intercepts("x", 10, &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Predict on training data
     let predictions = model.predict(&data, &Gaussian::new()).unwrap();
-    let mu_pred = &predictions["mu"];
+    let mu_pred = &predictions[&Param::Mu];
 
     // The predictions must follow the sine wave. sin is 0 at 0, pi, and 2*pi,
     // so the predictions there should sit near 0 too.
@@ -282,10 +280,10 @@ fn predict_with_se_for_poisson_log_link() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
     let results = model.predict_with_se(&data, &Poisson::new()).unwrap();
-    let mu = &results["mu"];
+    let mu = &results[&Param::Mu];
 
     assert_eq!(mu.fitted.len(), n);
     assert_eq!(mu.eta.len(), n);
@@ -331,14 +329,14 @@ fn predict_samples_shape_matches_request_for_poisson() {
     let mut data = DataSet::new();
     data.insert_column("x", Array1::from_vec(x.clone()));
 
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     for &n_samples in &[1usize, 10, 100] {
         let samples = model
             .predict_samples(&data, &Poisson::new(), n_samples, None)
             .unwrap();
-        let mu_samples = &samples["mu"];
+        let mu_samples = &samples[&Param::Mu];
         assert_eq!(mu_samples.len(), n_samples, "outer dim should be n_samples");
         for s in mu_samples {
             assert_eq!(s.len(), n, "inner dim should be n_obs");
@@ -363,14 +361,14 @@ fn design_matrix_dot_beta_equals_eta() {
 
     // Intercept + CR spline: no redundant linear term to cause collinearity.
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 8)]);
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, cr_spline("x", 8)]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let x = model.design_matrix(&data, "mu").unwrap();
-    let beta = &model.models["mu"].coefficients.0;
+    let x = model.design_matrix(&data, Param::Mu).unwrap();
+    let beta = &model.models[&Param::Mu].coefficients.0;
     let eta_exported = x.dot(beta);
-    let eta_fitted = &model.models["mu"].eta;
+    let eta_fitted = &model.models[&Param::Mu].eta;
 
     assert_eq!(eta_exported.len(), n);
     for i in 0..n {
@@ -394,10 +392,10 @@ fn design_matrix_dot_beta_equals_eta() {
 fn covariance_matrix_is_symmetric_and_psd() {
     let mut rng = Generator::new(88);
     let (y, data) = rng.linear_gaussian(60, 2.0, 1.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    for param in &["mu", "sigma"] {
+    for param in [Param::Mu, Param::Sigma] {
         let v = model.covariance_matrix(param).unwrap();
         let mat = &v.0;
         let p = mat.nrows();
@@ -430,13 +428,13 @@ fn term_index_map_is_contiguous_and_complete() {
     let (y, data) = rng.linear_gaussian(n, 2.0, 4.0, 1.0);
 
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 7)]);
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, cr_spline("x", 7)]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    for param in &["mu", "sigma"] {
+    for param in [Param::Mu, Param::Sigma] {
         let blocks = model.term_index_map(param).unwrap();
-        let n_coeffs = model.models[*param].coefficients.0.len();
+        let n_coeffs = model.models[&param].coefficients.0.len();
         let x_ncols = model.design_matrix(&data, param).unwrap().ncols();
 
         assert!(
@@ -500,7 +498,7 @@ fn term_name_strings_are_correct() {
 
     let mut formula = Formula::new();
     formula.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             cr_spline("x", 6),
@@ -510,16 +508,16 @@ fn term_name_strings_are_correct() {
             }),
         ],
     );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
     let model = GamlssModel::fit(&data2, &y, &formula, &Gaussian::new()).unwrap();
 
-    let blocks = model.term_index_map("mu").unwrap();
+    let blocks = model.term_index_map(Param::Mu).unwrap();
     let names: Vec<&str> = blocks.iter().map(|(n, _, _)| n.as_str()).collect();
     assert_eq!(names[0], "(intercept)");
     assert_eq!(names[1], "s(x)");
     assert_eq!(names[2], "s(group)");
 
-    let sigma_blocks = model.term_index_map("sigma").unwrap();
+    let sigma_blocks = model.term_index_map(Param::Sigma).unwrap();
     assert_eq!(sigma_blocks[0].0, "(intercept)");
 }
 
@@ -528,7 +526,7 @@ fn term_name_strings_are_correct() {
 fn seeded_predict_samples_are_reproducible() {
     let mut rng = Generator::new(321);
     let (y, data) = rng.linear_gaussian(50, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let n_samples = 20;
@@ -543,9 +541,10 @@ fn seeded_predict_samples_are_reproducible() {
 
     // Same seed, so the arrays must be bit-identical.
     for s in 0..n_samples {
-        for v in 0..run1["mu"][s].len() {
+        for v in 0..run1[&Param::Mu][s].len() {
             assert_eq!(
-                run1["mu"][s][v], run2["mu"][s][v],
+                run1[&Param::Mu][s][v],
+                run2[&Param::Mu][s][v],
                 "seeded runs differ at sample {s}, obs {v}"
             );
         }
@@ -555,9 +554,9 @@ fn seeded_predict_samples_are_reproducible() {
     let run_unseeded = model
         .predict_samples(&data, &Gaussian::new(), n_samples, None)
         .unwrap();
-    let all_equal = run1["mu"]
+    let all_equal = run1[&Param::Mu]
         .iter()
-        .zip(run_unseeded["mu"].iter())
+        .zip(run_unseeded[&Param::Mu].iter())
         .all(|(a, b)| a.iter().zip(b.iter()).all(|(x, y)| x == y));
     assert!(!all_equal, "unseeded run should differ from seeded run");
 }
@@ -567,11 +566,11 @@ fn seeded_predict_samples_are_reproducible() {
 fn seeded_posterior_samples_are_reproducible() {
     let mut rng = Generator::new(444);
     let (y, data) = rng.linear_gaussian(60, 1.5, 2.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let run1 = model.posterior_samples("mu", 30, Some(7)).unwrap();
-    let run2 = model.posterior_samples("mu", 30, Some(7)).unwrap();
+    let run1 = model.posterior_samples(Param::Mu, 30, Some(7)).unwrap();
+    let run2 = model.posterior_samples(Param::Mu, 30, Some(7)).unwrap();
 
     for (s1, s2) in run1.iter().zip(run2.iter()) {
         for (a, b) in s1.0.iter().zip(s2.0.iter()) {
@@ -585,7 +584,7 @@ fn test_predict_missing_column_error() {
     let mut rng = Generator::new(333);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -614,8 +613,8 @@ fn cr_spline_prediction_reuses_training_knots() {
     train_data.insert_column("x", x_train.clone());
 
     let mut formula = glissando::Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept, cr_spline("x", 6)]);
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, cr_spline("x", 6)]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&train_data, &y_train, &formula, &Gaussian::new())
         .expect("CrSpline1D fit should succeed");
@@ -629,11 +628,11 @@ fn cr_spline_prediction_reuses_training_knots() {
     new_data.insert_column("x", x_combined);
 
     let preds = model.predict(&new_data, &Gaussian::new()).unwrap();
-    let mu_pred = &preds["mu"];
+    let mu_pred = &preds[&Param::Mu];
 
     // The last n_train entries of mu_pred are the x_train rows, so they must match
     // the model's fitted values, which were computed with the stored training knots.
-    let mu_fitted = &model.models["mu"].fitted_values;
+    let mu_fitted = &model.models[&Param::Mu].fitted_values;
     let offset = n_extra;
     for i in 0..n_train {
         let diff = (mu_pred[offset + i] - mu_fitted[i]).abs();
@@ -654,14 +653,14 @@ fn cr_spline_prediction_reuses_training_knots() {
 fn centiles_median_equals_fitted_mu_for_gaussian() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(120, 1.0, 3.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let centiles = model.centiles(&data, &Gaussian::new(), &[50.0]).unwrap();
     let fitted = model.predict(&data, &Gaussian::new()).unwrap();
     // Symmetric family, so the 50th centile is the fitted mean.
     let c50 = &centiles["C50"];
-    let mu = &fitted["mu"];
+    let mu = &fitted[&Param::Mu];
     for (i, (&c, &m)) in c50.iter().zip(mu.iter()).enumerate() {
         assert!((c - m).abs() < 1e-6, "row {}: C50 {} vs mu {}", i, c, m);
     }
@@ -671,7 +670,7 @@ fn centiles_median_equals_fitted_mu_for_gaussian() {
 fn centiles_are_strictly_increasing_in_level() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(80, 1.0, 2.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let levels = [2.0, 10.0, 25.0, 50.0, 75.0, 90.0, 98.0];
@@ -700,7 +699,7 @@ fn centiles_have_nominal_coverage() {
     // property, checked from the centile side.
     let mut rng = Generator::new(2024);
     let (y, data) = rng.linear_gaussian(2000, 1.0, 3.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let centiles = model
@@ -723,7 +722,7 @@ fn centiles_have_nominal_coverage() {
 fn quantile_prediction_matches_per_row_levels() {
     let mut rng = Generator::new(11);
     let (y, data) = rng.linear_gaussian(60, 1.0, 2.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // A flat 0.5 level should reproduce the 50th centile, which is the fitted mu.
@@ -732,7 +731,7 @@ fn quantile_prediction_matches_per_row_levels() {
         .quantile_prediction(&data, &Gaussian::new(), &p)
         .unwrap();
     let fitted = model.predict(&data, &Gaussian::new()).unwrap();
-    for (&qi, &mui) in q.iter().zip(fitted["mu"].iter()) {
+    for (&qi, &mui) in q.iter().zip(fitted[&Param::Mu].iter()) {
         assert!((qi - mui).abs() < 1e-6);
     }
 }
@@ -762,24 +761,24 @@ fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
     data.insert_column("g", Array1::from_vec(g));
     let y = Array1::from_vec(y);
 
-    // No Intercept on "mu", deliberately: with it absent, `apply_constraint` is false, so
+    // No Intercept on Param::Mu, deliberately: with it absent, `apply_constraint` is false, so
     // the RandomEffect basis stays the raw one-hot indicator matrix checked column-by-column
     // here, instead of the sum-to-zero-reparameterized version.
     let mut formula = Formula::new();
-    formula.add_terms("mu", vec![random("g")]);
-    formula.add_terms("sigma", vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![random("g")]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let mut model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Simulate a model serialized before `RandomEffect::levels` existed: clear the
     // levels that `resolve_terms` filled in at fit time.
-    for term in &mut model.models.get_mut("mu").unwrap().terms {
+    for term in &mut model.models.get_mut(&Param::Mu).unwrap().terms {
         if let Term::Smooth(Smooth::RandomEffect { levels, .. }) = term {
             levels.clear();
         }
     }
 
-    let design = model.design_matrix(&data, "mu").unwrap();
+    let design = model.design_matrix(&data, Param::Mu).unwrap();
     assert_eq!(
         design.ncols(),
         3,
@@ -801,16 +800,16 @@ fn legacy_random_effect_predict_falls_back_to_first_occurrence_order() {
     }
 }
 
-// A model fit with Gaussian's default identity link for "mu" must reject a
-// predict-time family swap to Poisson (whose default link for "mu" is log).
-// Both families carry a "mu" parameter, so only the family-identity check
+// A model fit with Gaussian's default identity link for Param::Mu must reject a
+// predict-time family swap to Poisson (whose default link for Param::Mu is log).
+// Both families carry a Param::Mu parameter, so only the family-identity check
 // catches this. Without it, predict would apply exp(eta) to coefficients that
 // were fit under the identity link and return wrong values.
 #[test]
 fn predict_rejects_mismatched_family() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let err = model.predict(&data, &Poisson::new()).unwrap_err();
@@ -824,7 +823,7 @@ fn predict_rejects_mismatched_family() {
 fn predict_with_se_rejects_mismatched_family() {
     let mut rng = Generator::new(8);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let err = model.predict_with_se(&data, &Poisson::new()).unwrap_err();
@@ -838,7 +837,7 @@ fn predict_with_se_rejects_mismatched_family() {
 fn predict_samples_rejects_mismatched_family() {
     let mut rng = Generator::new(9);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let err = model
@@ -854,15 +853,15 @@ fn predict_samples_rejects_mismatched_family() {
 // GamlssModel value hand-built without going through fit/from_json) must skip
 // the check entirely rather than reject every family, matching the
 // `FittedParameter::link` backward-compat precedent. The test uses Gamma (also
-// ["mu", "sigma"], but LogLink for "mu" instead of Gaussian's IdentityLink) so a
+// [Param::Mu, Param::Sigma], but LogLink for Param::Mu instead of Gaussian's IdentityLink) so a
 // mismatch is exercised, not only a same-family self-check. Poisson (only "mu")
-// would trip on the missing "sigma" parameter instead, which wouldn't isolate
+// would trip on the missing Param::Sigma parameter instead, which wouldn't isolate
 // the behavior under test.
 #[test]
 fn model_with_no_family_skips_validation() {
     let mut rng = Generator::new(10);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     let bare = GamlssModel {
         family: None,
@@ -881,7 +880,7 @@ fn model_with_no_family_skips_validation() {
 fn json_roundtrip_backfills_family_and_still_predicts() {
     let mut rng = Generator::new(11);
     let (y, data) = rng.linear_gaussian(100, 2.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 
@@ -894,7 +893,7 @@ fn json_roundtrip_backfills_family_and_still_predicts() {
     );
     // The correct family still predicts fine...
     let preds = reloaded.predict(&data, &family).unwrap();
-    assert!(preds.contains_key("mu"));
+    assert!(preds.contains_key(&Param::Mu));
     // ...and a mismatched one is rejected, as it would be for a freshly fit model.
     let err = reloaded.predict(&data, &Poisson::new()).unwrap_err();
     assert!(matches!(err, GamlssError::FamilyMismatch { .. }));

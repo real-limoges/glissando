@@ -1,9 +1,7 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::Generator;
+use glissando::Param;
 use glissando::{
     distributions::{Gaussian, Poisson},
     DataSet, Formula, GamlssModel, Smooth, Term,
@@ -19,7 +17,7 @@ fn test_poisson_recovery() {
 
     let mut formulas = Formula::new();
     formulas.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -31,7 +29,7 @@ fn test_poisson_recovery() {
     let model =
         GamlssModel::fit(&data, &y, &formulas, &Poisson::new()).expect("Poisson Fit Failed!");
 
-    let coeffs = &model.models["mu"].coefficients;
+    let coeffs = &model.models[&Param::Mu].coefficients;
 
     // Recover the true coefficients.
     assert!(
@@ -51,7 +49,7 @@ fn test_heteroskedastic_gaussian_recovery() {
 
     let mut formulas = Formula::new();
     formulas.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -60,7 +58,7 @@ fn test_heteroskedastic_gaussian_recovery() {
         ],
     );
     formulas.add_terms(
-        "sigma".to_string(),
+        Param::Sigma,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -72,8 +70,8 @@ fn test_heteroskedastic_gaussian_recovery() {
     let model =
         GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).expect("Gaussian Fit Failed!");
 
-    let mu = &model.models["mu"].coefficients;
-    let sigma = &model.models["sigma"].coefficients;
+    let mu = &model.models[&Param::Mu].coefficients;
+    let sigma = &model.models[&Param::Sigma].coefficients;
 
     // Mu recovery (truth: 10.0, 2.0)
     assert!((mu[0] - 10.0).abs() < 0.15);
@@ -91,7 +89,7 @@ fn test_tensor_product_complexity() {
 
     let mut formulas = Formula::new();
     formulas.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![Term::Smooth(Smooth::TensorProduct {
             col_name_1: "x1".to_string(),
             n_splines_1: 5,
@@ -104,12 +102,12 @@ fn test_tensor_product_complexity() {
             range_2: None,
         })],
     );
-    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model =
         GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).expect("Tensor Fit Failed!");
 
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
 
     // Check that smoothing happened.
     // Shouldn't be a flat plane (EDF ~3), shouldn't be unpenalized (EDF 25).
@@ -127,7 +125,7 @@ fn test_model_convergence_invariants() {
 
     let mut formulas = Formula::new();
     formulas.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -135,7 +133,7 @@ fn test_model_convergence_invariants() {
             },
         ],
     );
-    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formulas.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model_1 = GamlssModel::fit(&data, &y, &formulas, &Gaussian::new()).unwrap();
 
@@ -157,8 +155,8 @@ fn test_model_convergence_invariants() {
         GamlssModel::fit(&data_shuffled, &y_shuffled, &formulas, &Gaussian::new()).unwrap();
 
     // Row order shouldn't matter: coefficients must come out identical.
-    let b1 = &model_1.models["mu"].coefficients;
-    let b2 = &model_2.models["mu"].coefficients;
+    let b1 = &model_1.models[&Param::Mu].coefficients;
+    let b2 = &model_2.models[&Param::Mu].coefficients;
 
     assert!(
         (b1[0] - b2[0]).abs() < 1e-6,

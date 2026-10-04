@@ -1,9 +1,7 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{random, Generator};
+use glissando::Param;
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use rand::RngExt;
@@ -36,14 +34,14 @@ fn random_effect_recovers_group_means() {
     data.insert_column("group", Array1::from_vec(group_ids.clone()));
 
     let mut formula = Formula::new();
-    formula.add_terms("mu", vec![Term::Intercept, random("group")]);
-    formula.add_terms("sigma", vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, random("group")]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     assert!(model.converged());
 
     // The fitted η_i for an obs in group g should land near grand_mean + offset[g].
-    let mu_fitted = &model.models["mu"].fitted_values;
+    let mu_fitted = &model.models[&Param::Mu].fitted_values;
     for (g_idx, off) in group_offsets.iter().enumerate() {
         let expected = grand_mean + off;
         // first observation in this group
@@ -62,7 +60,7 @@ fn random_effect_recovers_group_means() {
     // EDF should show the random effect adding fit beyond an intercept-only model.
     // With strong group separation and 4 groups (3 free degrees of freedom after the
     // sum-to-zero constraint), EDF must sit clearly above 1.
-    let edf = model.models["mu"].edf;
+    let edf = model.models[&Param::Mu].edf;
     assert!(
         edf > 1.5,
         "RandomEffect should add EDF beyond the intercept; got {:.3}",
@@ -89,12 +87,12 @@ fn random_effect_with_few_groups_runs() {
     data.insert_column("g", Array1::from_vec(group_ids));
 
     let mut formula = Formula::new();
-    formula.add_terms("mu", vec![Term::Intercept, random("g")]);
-    formula.add_terms("sigma", vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, random("g")]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     assert!(model.converged());
-    assert!(model.models["mu"]
+    assert!(model.models[&Param::Mu]
         .coefficients
         .iter()
         .all(|c: &f64| c.is_finite()));

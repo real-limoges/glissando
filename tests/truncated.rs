@@ -2,16 +2,15 @@
 //! the parameters of a left-truncated Gaussian, and collapses back to the base
 //! family once the range is unbounded.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Distribution, Gaussian, Truncated};
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
 fn intercept_only() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 fn dummy_data(n: usize) -> DataSet {
@@ -24,8 +23,8 @@ fn dummy_data(n: usize) -> DataSet {
 /// `N(mu, sigma) | Y > lo`, built deterministically so results are identical run to run.
 fn truncated_latent(mu: f64, sigma: f64, lo: f64, n: usize) -> Array1<f64> {
     let owned = [
-        ("mu", Array1::from_elem(n, mu)),
-        ("sigma", Array1::from_elem(n, sigma)),
+        (Param::Mu, Array1::from_elem(n, mu)),
+        (Param::Sigma, Array1::from_elem(n, sigma)),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     let f_lo = Gaussian
@@ -44,8 +43,8 @@ fn truncated_latent(mu: f64, sigma: f64, lo: f64, n: usize) -> Array1<f64> {
 fn full_range_matches_plain_gaussian_fit() {
     let n = 80;
     let owned = [
-        ("mu", Array1::from_elem(n, 3.0)),
-        ("sigma", Array1::from_elem(n, 1.5)),
+        (Param::Mu, Array1::from_elem(n, 3.0)),
+        (Param::Sigma, Array1::from_elem(n, 1.5)),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     let p = Array1::from_iter((0..n).map(|i| (i as f64 + 0.5) / n as f64));
@@ -60,8 +59,8 @@ fn full_range_matches_plain_gaussian_fit() {
     let trunc = Truncated::new(Box::new(Gaussian::new()), lo, hi);
     let trunc_fit = GamlssModel::fit(&data, &y, &formula, &trunc).unwrap();
 
-    let plain_mu = plain.models["mu"].coefficients.0[0];
-    let trunc_mu = trunc_fit.models["mu"].coefficients.0[0];
+    let plain_mu = plain.models[&Param::Mu].coefficients.0[0];
+    let trunc_mu = trunc_fit.models[&Param::Mu].coefficients.0[0];
     assert!(
         (plain_mu - trunc_mu).abs() < 1e-6,
         "(−∞,∞) truncation mu {trunc_mu} should match plain {plain_mu}"
@@ -83,8 +82,8 @@ fn left_truncation_recovers_parameters() {
     let trunc = Truncated::new(Box::new(Gaussian::new()), lower, upper);
     let fit = GamlssModel::fit(&data, &y, &formula, &trunc).unwrap();
 
-    let mu_hat = fit.models["mu"].coefficients.0[0];
-    let sigma_hat = fit.models["sigma"].fitted_values[0];
+    let mu_hat = fit.models[&Param::Mu].coefficients.0[0];
+    let sigma_hat = fit.models[&Param::Sigma].fitted_values[0];
     assert!(
         (mu_hat - true_mu).abs() < 0.4,
         "truncated MLE mu {mu_hat} should recover ≈ {true_mu}"

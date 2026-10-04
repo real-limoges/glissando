@@ -1,10 +1,11 @@
 //! Poisson distribution for count data.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::par_zip_map;
+use crate::Param;
 use ndarray::Array1;
 use statrs::function::gamma::{gamma_ur, ln_gamma};
 use std::collections::HashMap;
@@ -22,13 +23,13 @@ impl Poisson {
 }
 
 impl Distribution for Poisson {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(LogLink)),
+            Param::Mu => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -38,8 +39,8 @@ impl Distribution for Poisson {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Log-likelihood: l = y·log(μ) − μ.
         // Natural scale:  ∂l/∂μ = (y−μ)/μ,   i_μ = 1/μ.
         //
@@ -47,26 +48,26 @@ impl Distribution for Poisson {
         // classic `u_η = y − μ`, `w_η = μ` exactly. The weight is returned
         // unfloored: `MIN_WEIGHT` is applied once, in `scoring::step`, after the
         // chain rule.
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         // `1/μ` is both the reciprocal in the score and the information itself.
         let i_mu = mu.mapv(|m| 1.0 / m.max(DENOM_FLOOR));
         let u_mu = (y - mu) * &i_mu;
-        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
+        Ok(HashMap::from([(Param::Mu, ScoreInfo::new(u_mu, i_mu))]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         Ok(par_zip_map(y, mu, |yi, mui| {
             yi * mui.max(MIN_POSITIVE).ln() - mui - ln_gamma(yi + 1.0)
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        Ok(require(self, params, "mu")?.to_owned())
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        Ok(require(self, params, Param::Mu)?.to_owned())
     }
 
     fn is_discrete(&self) -> bool {
@@ -76,11 +77,11 @@ impl Distribution for Poisson {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // F(⌊y⌋ | μ) = Q(⌊y⌋+1, μ) = gamma_ur(⌊y⌋+1, μ), the upper-incomplete-gamma
         // identity for the Poisson CDF. No summation loop.
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         Ok(par_zip_map(y, mu, |yi, mui| {
             if yi < 0.0 {
                 return 0.0;
@@ -92,9 +93,9 @@ impl Distribution for Poisson {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         Ok(par_zip_map(p, mu, |pi, mui| {
             let m = mui.max(MIN_POSITIVE);
             discrete_quantile(pi.clamp(0.0, 1.0 - 1e-12), |k| gamma_ur(k as f64 + 1.0, m))
@@ -122,7 +123,7 @@ mod tests {
         let y = array![0.0, 1.0, 5.0, 10.0];
         let mu = array![1.0, 2.0, 4.0, 9.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
+        p.insert(Param::Mu, &mu);
         derivative_keys_match_parameters(&Poisson, p, &y);
     }
 
@@ -131,16 +132,16 @@ mod tests {
         let y = array![1.0, 2.0, 4.0];
         let mu = y.clone();
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
+        p.insert(Param::Mu, &mu);
         let derivs = default_link_derivatives(&Poisson, &y, &p).unwrap();
-        let (u, _) = &derivs["mu"];
+        let (u, _) = (&derivs[&Param::Mu].score, &derivs[&Param::Mu].info);
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }
 
     #[test]
     fn poisson_unknown_parameter_errors() {
         let y = array![1.0];
-        let p: HashMap<&str, &Array1<f64>> = HashMap::new();
+        let p: HashMap<Param, &Array1<f64>> = HashMap::new();
         let err = Poisson.theta_derivatives(&y, &p).unwrap_err();
         assert!(matches!(err, GamlssError::UnknownParameter { .. }));
     }
@@ -148,7 +149,7 @@ mod tests {
     #[test]
     fn loglik_poisson_matches_manual() {
         // l = y log(μ) − μ − log Γ(y+1). y=0, μ=1 → −1.
-        let owned = [("mu", array![1.0])];
+        let owned = [(Param::Mu, array![1.0])];
         let p = params_view(&owned);
         let ll = Poisson.loglik(&array![0.0], &p).unwrap();
         assert!((ll - (-1.0)).abs() < 1e-12);
@@ -156,7 +157,7 @@ mod tests {
 
     #[test]
     fn variance_poisson_is_mu() {
-        let owned = [("mu", array![1.0, 4.0, 9.0])];
+        let owned = [(Param::Mu, array![1.0, 4.0, 9.0])];
         let p = params_view(&owned);
         let v = Poisson.variance(&p).unwrap();
         assert_eq!(v, array![1.0, 4.0, 9.0]);
@@ -165,8 +166,8 @@ mod tests {
     #[test]
     fn score_matches_finite_diff_poisson() {
         let y = array![0.0, 3.0, 7.0, 12.0];
-        let owned = [("mu", array![1.0, 3.5, 6.0, 10.0])];
-        check_score_via_finite_diff(&Poisson, &y, &owned, "mu", 1e-5);
+        let owned = [(Param::Mu, array![1.0, 3.5, 6.0, 10.0])];
+        check_score_via_finite_diff(&Poisson, &y, &owned, Param::Mu, 1e-5);
     }
 
     #[test]
@@ -176,9 +177,9 @@ mod tests {
         // tell a natural-scale score from an η-scale one. `sqrt` can: it wants
         // `dμ/dη = 2√μ`, which this family no longer hardcodes.
         let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
-        let owned = [("mu", array![0.5, 1.5, 3.0, 8.0, 5.0])];
-        check_eta_score_via_finite_diff(&Poisson, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Poisson, &y, &owned, "mu", &InverseLink, 1e-5);
+        let owned = [(Param::Mu, array![0.5, 1.5, 3.0, 8.0, 5.0])];
+        check_eta_score_via_finite_diff(&Poisson, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Poisson, &y, &owned, Param::Mu, &InverseLink, 1e-5);
     }
 
     #[test]
@@ -188,14 +189,14 @@ mod tests {
         // both the natural score and the chained η-score finite there, including
         // where μ has underflowed to exactly zero.
         let y = array![0.0, 3.0, 10.0];
-        let owned = [("mu", array![0.0, 1e-320, 1e-8])];
+        let owned = [(Param::Mu, array![0.0, 1e-320, 1e-8])];
         let p = params_view(&owned);
         let natural = Poisson.theta_derivatives(&y, &p).unwrap();
-        let (u_nat, i_nat) = &natural["mu"];
+        let (u_nat, i_nat) = (&natural[&Param::Mu].score, &natural[&Param::Mu].info);
         assert!(finite_array(u_nat) && finite_array(i_nat));
 
         let chained = default_link_derivatives(&Poisson, &y, &p).unwrap();
-        let (u, w) = &chained["mu"];
+        let (u, w) = (&chained[&Param::Mu].score, &chained[&Param::Mu].info);
         assert!(finite_array(u) && finite_array(w), "u={u:?} w={w:?}");
         assert!(w.iter().all(|&v| v >= 0.0));
     }
@@ -203,14 +204,14 @@ mod tests {
     #[test]
     fn cdf_matches_pmf_poisson() {
         let ks = array![0.0, 1.0, 3.0, 7.0, 12.0];
-        let owned = [("mu", array![2.0, 2.0, 4.0, 6.0, 10.0])];
+        let owned = [(Param::Mu, array![2.0, 2.0, 4.0, 6.0, 10.0])];
         check_discrete_cdf_matches_pmf(&Poisson, &ks, &owned, 1e-9);
     }
 
     #[test]
     fn cdf_monotone_and_quantile_inverts_poisson() {
         let grid = Array1::from_iter((0..30).map(|i| i as f64));
-        let owned = [("mu", array![5.0])];
+        let owned = [(Param::Mu, array![5.0])];
         check_cdf_monotone_in_unit(&Poisson, &grid, &owned);
         // Quantile is the smallest k with F(k) ≥ p; check it brackets the CDF.
         let p = params_view(&owned);

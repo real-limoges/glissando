@@ -34,6 +34,12 @@ pub enum GamlssError {
     #[error("Invalid input: {0}")]
     Input(String),
 
+    /// A string that names no distribution parameter at all (see
+    /// [`Param`](crate::Param)). [`UnknownParameter`](Self::UnknownParameter) is the
+    /// other case: a real parameter that this particular family does not have.
+    #[error("'{name}' is not a distribution parameter name (expected one of mu, sigma, nu, tau, phi, xi, delta_1..delta_4)")]
+    InvalidParamName { name: String },
+
     #[error("Unknown parameter '{param}' for distribution '{distribution}'")]
     UnknownParameter { distribution: String, param: String },
 

@@ -1,10 +1,11 @@
 //! Binomial distribution: counts of successes out of `n` trials.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogitLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogitLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
+use crate::Param;
 use ndarray::Array1;
 use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
@@ -44,13 +45,13 @@ impl Binomial {
 }
 
 impl Distribution for Binomial {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(LogitLink)),
+            Param::Mu => Ok(Box::new(LogitLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -60,8 +61,8 @@ impl Distribution for Binomial {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Binomial log-likelihood: l = y·log(μ) + (n−y)·log(1−μ) + log C(n, y).
         // Natural scale:
         //   ∂l/∂μ = (y − n·μ) / (μ(1−μ)),   i_μ = n / (μ(1−μ)).
@@ -81,22 +82,22 @@ impl Distribution for Binomial {
         //
         // `1.0 - MIN_POSITIVE` was also never the upper clamp its name suggests once μ
         // got close to 1.
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(y.len());
 
         let var_unit = mu.mapv(|m| (m * (1.0 - m)).max(DENOM_FLOOR));
         let u_mu = par_zip3_map(y, n.as_ref(), mu, |yi, ni, mi| yi - ni * mi) / &var_unit;
         let i_mu = n.as_ref() / &var_unit;
 
-        Ok(HashMap::from([("mu".to_string(), (u_mu, i_mu))]))
+        Ok(HashMap::from([(Param::Mu, ScoreInfo::new(u_mu, i_mu))]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(y.len());
         Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
             let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
@@ -106,8 +107,8 @@ impl Distribution for Binomial {
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(mu.len());
         Ok(par_zip_map(n.as_ref(), mu, |ni, mi| {
             let m = mi.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
@@ -117,9 +118,9 @@ impl Distribution for Binomial {
 
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(mu.len());
         Ok(n.as_ref() * mu)
     }
@@ -131,10 +132,10 @@ impl Distribution for Binomial {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // F(⌊y⌋ | n, μ) = I_{1−μ}(n−⌊y⌋, ⌊y⌋+1) = beta_reg(n−⌊y⌋, ⌊y⌋+1, 1−μ).
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(y.len());
         Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
             if yi < 0.0 {
@@ -152,9 +153,9 @@ impl Distribution for Binomial {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
+        let mu = require(self, params, Param::Mu)?;
         let n = self.trials(p.len());
         Ok(par_zip3_map(p, mu, n.as_ref(), |pi, mui, ni| {
             let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
@@ -180,9 +181,9 @@ impl Distribution for Binomial {
         }
     }
 
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => {
+            Param::Mu => {
                 // y is counts. Pool across observations as Σy/Σn so heterogeneous
                 // per-observation trial counts don't bias the seed. `n_trials[0]`
                 // alone is wrong when trials vary by row.
@@ -219,7 +220,7 @@ mod tests {
         let y = array![5.0, 10.0, 15.0, 8.0];
         let mu = array![0.25, 0.5, 0.7, 0.4];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
+        p.insert(Param::Mu, &mu);
         derivative_keys_match_parameters(&bin, p, &y);
     }
 
@@ -230,9 +231,9 @@ mod tests {
         let y = array![3.0, 10.0, 2.0];
         let mu = array![0.3, 0.5, 0.4];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
+        p.insert(Param::Mu, &mu);
         let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u_mu, _) = &derivs["mu"];
+        let (u_mu, _) = (&derivs[&Param::Mu].score, &derivs[&Param::Mu].info);
         assert_relative_eq!(u_mu[0], 3.0 - 10.0 * 0.3, epsilon = 1e-12);
         assert_relative_eq!(u_mu[1], 10.0 - 20.0 * 0.5, epsilon = 1e-12);
     }
@@ -243,9 +244,9 @@ mod tests {
         let y = array![3.0, 5.0, 7.0];
         let mu = array![0.3, 0.5, 0.7];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
+        p.insert(Param::Mu, &mu);
         let derivs = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u, _) = &derivs["mu"];
+        let (u, _) = (&derivs[&Param::Mu].score, &derivs[&Param::Mu].info);
         assert!(u.iter().all(|&v| v.abs() < 1e-12));
     }
 
@@ -254,11 +255,11 @@ mod tests {
         let bin = Binomial::new(10);
         // All-zero counts → naive 0.0, must be clamped up.
         let y_zero = array![0.0, 0.0];
-        let v0 = bin.initial_value("mu", &y_zero);
+        let v0 = bin.initial_value(Param::Mu, &y_zero);
         assert!((0.1..=0.9).contains(&v0));
         // All-max counts → naive 1.0, must be clamped down.
         let y_full = array![10.0, 10.0];
-        let v1 = bin.initial_value("mu", &y_full);
+        let v1 = bin.initial_value(Param::Mu, &y_full);
         assert!((0.1..=0.9).contains(&v1));
     }
 
@@ -266,7 +267,7 @@ mod tests {
     fn loglik_binomial_matches_manual() {
         // n=2, y=1, mu=0.5 → log C(2,1) + 1·log(0.5) + 1·log(0.5) = log 2 + 2 log 0.5
         let bin = Binomial::new(2);
-        let owned = [("mu", array![0.5])];
+        let owned = [(Param::Mu, array![0.5])];
         let p = params_view(&owned);
         let ll = bin.loglik(&array![1.0], &p).unwrap();
         let expected = 2.0_f64.ln() + 2.0 * 0.5_f64.ln();
@@ -276,7 +277,7 @@ mod tests {
     #[test]
     fn variance_binomial_is_n_mu_one_minus_mu() {
         let bin = Binomial::new(10);
-        let owned = [("mu", array![0.3, 0.5])];
+        let owned = [(Param::Mu, array![0.3, 0.5])];
         let p = params_view(&owned);
         let v = bin.variance(&p).unwrap();
         assert!((v[0] - 10.0 * 0.3 * 0.7).abs() < 1e-12);
@@ -286,7 +287,7 @@ mod tests {
     #[test]
     fn expected_value_binomial_is_n_times_mu() {
         let bin = Binomial::new(10);
-        let owned = [("mu", array![0.3, 0.5])];
+        let owned = [(Param::Mu, array![0.3, 0.5])];
         let p = params_view(&owned);
         let e = bin.expected_value(&p).unwrap();
         assert!((e[0] - 3.0).abs() < 1e-12);
@@ -297,8 +298,8 @@ mod tests {
     fn score_matches_finite_diff_binomial() {
         let bin = Binomial::new(10);
         let y = array![3.0, 5.0, 8.0];
-        let owned = [("mu", array![0.3, 0.5, 0.7])];
-        check_score_via_finite_diff(&bin, &y, &owned, "mu", 1e-5);
+        let owned = [(Param::Mu, array![0.3, 0.5, 0.7])];
+        check_score_via_finite_diff(&bin, &y, &owned, Param::Mu, 1e-5);
     }
 
     #[test]
@@ -308,10 +309,10 @@ mod tests {
         // These are the links behind two of the four `link_mle_oracle` shortfalls.
         let bin = Binomial::new(10);
         let y = array![0.0, 3.0, 5.0, 8.0, 10.0];
-        let owned = [("mu", array![0.15, 0.35, 0.5, 0.8, 0.93])];
-        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &ProbitLink, 1e-5);
-        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &CloglogLink, 1e-5);
-        check_eta_score_via_finite_diff(&bin, &y, &owned, "mu", &CauchitLink, 1e-5);
+        let owned = [(Param::Mu, array![0.15, 0.35, 0.5, 0.8, 0.93])];
+        check_eta_score_via_finite_diff(&bin, &y, &owned, Param::Mu, &ProbitLink, 1e-5);
+        check_eta_score_via_finite_diff(&bin, &y, &owned, Param::Mu, &CloglogLink, 1e-5);
+        check_eta_score_via_finite_diff(&bin, &y, &owned, Param::Mu, &CauchitLink, 1e-5);
     }
 
     #[test]
@@ -321,14 +322,14 @@ mod tests {
         // the old `MIN_POSITIVE` clamp used to mask.
         let bin = Binomial::new(10);
         let y = array![0.0, 10.0, 5.0, 3.0];
-        let owned = [("mu", array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
+        let owned = [(Param::Mu, array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
         let p = params_view(&owned);
         let natural = bin.theta_derivatives(&y, &p).unwrap();
-        let (u_n, i_n) = &natural["mu"];
+        let (u_n, i_n) = (&natural[&Param::Mu].score, &natural[&Param::Mu].info);
         assert!(finite_array(u_n) && finite_array(i_n), "natural: {u_n:?}");
 
         let chained = default_link_derivatives(&bin, &y, &p).unwrap();
-        let (u, w) = &chained["mu"];
+        let (u, w) = (&chained[&Param::Mu].score, &chained[&Param::Mu].info);
         assert!(finite_array(u) && finite_array(w), "chained: {u:?}");
         assert!(w.iter().all(|&v| v >= 0.0));
     }
@@ -353,11 +354,11 @@ mod tests {
         let y = array![4.0];
         for &eta in &[-4.0_f64, -6.0] {
             let mu = ProbitLink.inv_link(eta);
-            let owned = [("mu", array![mu])];
+            let owned = [(Param::Mu, array![mu])];
             let p = params_view(&owned);
-            let links = ParamLinks::overriding(&bin, &p, "mu", &ProbitLink);
-            let u = bin.eta_derivatives(&y, &p, &links.context()).unwrap()["mu"]
-                .0
+            let links = ParamLinks::overriding(&bin, &p, Param::Mu, &ProbitLink);
+            let u = bin.eta_derivatives(&y, &p, &links.context()).unwrap()[&Param::Mu]
+                .score
                 .clone();
 
             let n_mu = 10.0 * mu;
@@ -383,7 +384,7 @@ mod tests {
     fn cdf_matches_pmf_binomial() {
         let bin = Binomial::new(20);
         let ks = array![0.0, 5.0, 10.0, 15.0, 20.0];
-        let owned = [("mu", array![0.25, 0.4, 0.5, 0.6, 0.75])];
+        let owned = [(Param::Mu, array![0.25, 0.4, 0.5, 0.6, 0.75])];
         check_discrete_cdf_matches_pmf(&bin, &ks, &owned, 1e-9);
     }
 
@@ -391,13 +392,13 @@ mod tests {
     fn cdf_endpoints_and_quantile_inverts_binomial() {
         let bin = Binomial::new(15);
         // F(n) = 1 and F(y < 0) = 0 at the support boundaries.
-        let boundary_params = [("mu", array![0.4, 0.4])];
+        let boundary_params = [(Param::Mu, array![0.4, 0.4])];
         let p = params_view(&boundary_params);
         let at_boundary = bin.cdf(&array![15.0, -1.0], &p).unwrap();
         assert_eq!(at_boundary[0], 1.0);
         assert_eq!(at_boundary[1], 0.0);
 
-        let owned = [("mu", array![0.4])];
+        let owned = [(Param::Mu, array![0.4])];
         let p = params_view(&owned);
         for &prob in &[0.05, 0.5, 0.95] {
             let q = bin.quantile(&array![prob], &p).unwrap()[0];
@@ -412,7 +413,7 @@ mod tests {
         // Distinct n per row exercises the broadcast path.
         let bin = Binomial::with_trials(array![10.0, 20.0, 5.0]);
         let ks = array![3.0, 10.0, 2.0];
-        let owned = [("mu", array![0.3, 0.5, 0.4])];
+        let owned = [(Param::Mu, array![0.3, 0.5, 0.4])];
         check_discrete_cdf_matches_pmf(&bin, &ks, &owned, 1e-9);
     }
 }

@@ -31,7 +31,7 @@
 //! # Quick start
 //!
 //! ```
-//! use glissando::{GamlssModel, DataSet, Formula, Term};
+//! use glissando::{GamlssModel, DataSet, Formula, Param, Term};
 //! use glissando::distributions::Gaussian;
 //! use ndarray::Array1;
 //!
@@ -40,8 +40,8 @@
 //! data.insert_column("x", Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0]));
 //!
 //! let formula = Formula::new()
-//!     .with_terms("mu", vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }])
-//!     .with_terms("sigma", vec![Term::Intercept]);
+//!     .with_terms(Param::Mu, vec![Term::Intercept, Term::Linear { col_name: "x".to_string() }])
+//!     .with_terms(Param::Sigma, vec![Term::Intercept]);
 //!
 //! let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 //! assert!(model.converged());
@@ -80,4 +80,4 @@ pub use fitting::selection::{self, Direction, IcRow, LrTest, StepRecord, StepRes
 pub use fitting::{FitConfig, FitDiagnostics, NaAction, ParamDiagnostic, SmoothingCriterion};
 pub use model::{GamlssModel, PredictionResult};
 pub use terms::{Contrast, Smooth, Term};
-pub use types::{parse_formula_string, Coefficients, CovarianceMatrix, DataSet, Formula};
+pub use types::{parse_formula_string, Coefficients, CovarianceMatrix, DataSet, Formula, Param};

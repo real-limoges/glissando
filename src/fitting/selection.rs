@@ -20,6 +20,7 @@ use crate::types::{DataSet, Formula};
 use crate::FitConfig;
 use crate::GamlssError;
 use crate::GamlssModel;
+use crate::Param;
 use ndarray::Array1;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -29,7 +30,7 @@ use std::collections::HashMap;
 /// Snapshot of a fitted model's parameters in the shape the [`Distribution`]
 /// trait expects. Thin wrapper over the shared [`super::diagnostics::fitted_params_view`]
 /// so the `&GamlssModel` call sites read cleanly.
-fn params_view(model: &GamlssModel) -> HashMap<&str, &Array1<f64>> {
+fn params_view(model: &GamlssModel) -> HashMap<Param, &Array1<f64>> {
     super::diagnostics::fitted_params_view(&model.models)
 }
 
@@ -150,8 +151,9 @@ pub fn lr_test<D: Distribution + ?Sized>(
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StepScope {
-    /// Distribution parameter the candidates apply to (`"mu"`, `"sigma"`, …).
-    pub param: String,
+    /// Distribution parameter the candidates apply to. It must be one of the
+    /// family's parameters; [`step_gaic`] rejects it otherwise.
+    pub param: Param,
     /// Terms eligible to add (if absent) or drop (if present) on `param`.
     pub candidates: Vec<Term>,
 }
@@ -210,28 +212,28 @@ pub struct StepResult {
 }
 
 /// True if `param`'s term list in `f` already contains a term with `t`'s name.
-fn has_term(f: &Formula, param: &str, t: &Term) -> bool {
-    f.get(param)
+fn has_term(f: &Formula, param: Param, t: &Term) -> bool {
+    f.get(&param)
         .is_some_and(|ts| ts.iter().any(|x| x.term_name() == t.term_name()))
 }
 
 /// Copy of `f` with `t` appended to `param`'s term list.
-fn with_added(f: &Formula, param: &str, t: &Term) -> Formula {
-    let mut terms = f.get(param).cloned().unwrap_or_default();
+fn with_added(f: &Formula, param: Param, t: &Term) -> Formula {
+    let mut terms = f.get(&param).cloned().unwrap_or_default();
     terms.push(t.clone());
-    f.clone().with_terms(param.to_string(), terms)
+    f.clone().with_terms(param, terms)
 }
 
 /// Copy of `f` with every term named like `t` removed from `param`'s term list.
-fn with_dropped(f: &Formula, param: &str, t: &Term) -> Formula {
+fn with_dropped(f: &Formula, param: Param, t: &Term) -> Formula {
     let terms: Vec<Term> = f
-        .get(param)
+        .get(&param)
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .filter(|x| x.term_name() != t.term_name())
         .collect();
-    f.clone().with_terms(param.to_string(), terms)
+    f.clone().with_terms(param, terms)
 }
 
 /// Greedy stepwise term selection by GAIC(`k`), the `stepGAIC` analog.
@@ -270,6 +272,15 @@ pub fn step_gaic<D: Distribution + ?Sized>(
     // search going.
     const EPS: f64 = 1e-6;
 
+    // A scope entry for a parameter the family lacks could never change the
+    // fit, so the search would just skip it silently. Say so instead.
+    if let Some(s) = scope
+        .iter()
+        .find(|s| !family.parameters().contains(&s.param))
+    {
+        return Err(family.unknown_param(s.param));
+    }
+
     let mut current = start;
     let mut model = GamlssModel::fit_with_config(data, y, None, &current, family, config.clone())?;
     let mut best_gaic = model.gaic(family, y, k)?;
@@ -281,7 +292,7 @@ pub fn step_gaic<D: Distribution + ?Sized>(
     struct Candidate {
         is_add: bool,
         term_name: String,
-        param: String,
+        param: Param,
         trial: Formula,
     }
     type CandidateOutcome = Result<Option<(f64, f64, String, Formula, GamlssModel)>, GamlssError>;
@@ -293,7 +304,7 @@ pub fn step_gaic<D: Distribution + ?Sized>(
         let mut candidates: Vec<Candidate> = Vec::new();
         for s in scope {
             for t in &s.candidates {
-                let present = has_term(&current, &s.param, t);
+                let present = has_term(&current, s.param, t);
                 let is_add = match direction {
                     Direction::Forward if present => continue,
                     Direction::Forward => true,
@@ -302,14 +313,14 @@ pub fn step_gaic<D: Distribution + ?Sized>(
                     Direction::Both => !present,
                 };
                 let trial = if is_add {
-                    with_added(&current, &s.param, t)
+                    with_added(&current, s.param, t)
                 } else {
-                    with_dropped(&current, &s.param, t)
+                    with_dropped(&current, s.param, t)
                 };
                 candidates.push(Candidate {
                     is_add,
                     term_name: t.term_name().to_string(),
-                    param: s.param.clone(),
+                    param: s.param,
                     trial,
                 });
             }

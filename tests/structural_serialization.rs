@@ -1,12 +1,13 @@
 //! Serialization integration tests: structural wrappers (and a finite mixture) come
 //! through a `to_json → from_json → build()` round-trip and predict identically.
 
-#![cfg(all(feature = "serialization", not(feature = "python")))]
+#![cfg(feature = "serialization")]
 
 use glissando::distributions::{
     CensorStatus, Censored, Distribution, FamilyDescriptor, Gaussian, Hurdle, Ocat, Truncated,
 };
 use glissando::fitting::mixture::fit_mixture;
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, MixtureModel, Term};
 use ndarray::Array1;
 
@@ -18,15 +19,15 @@ fn dummy_data(n: usize) -> DataSet {
 
 fn intercept_only() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 fn latent_gaussian(mu: f64, sigma: f64, n: usize) -> Array1<f64> {
     let p = Array1::from_iter((0..n).map(|i| (i as f64 + 0.5) / n as f64));
     let owned = [
-        ("mu", Array1::from_elem(n, mu)),
-        ("sigma", Array1::from_elem(n, sigma)),
+        (Param::Mu, Array1::from_elem(n, mu)),
+        (Param::Sigma, Array1::from_elem(n, sigma)),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     Gaussian.quantile(&p, &view).unwrap()
@@ -63,8 +64,8 @@ fn censored_descriptor_round_trips() {
     let rebuilt = desc.build().unwrap();
     let p1 = model.predict(&dummy_data(n), &family).unwrap();
     let p2 = reloaded.predict(&dummy_data(n), rebuilt.as_ref()).unwrap();
-    for k in ["mu", "sigma"] {
-        for (a, b) in p1[k].iter().zip(p2[k].iter()) {
+    for k in [Param::Mu, Param::Sigma] {
+        for (a, b) in p1[&k].iter().zip(p2[&k].iter()) {
             assert!((a - b).abs() < 1e-12, "{k}: {a} vs {b}");
         }
     }
@@ -86,8 +87,11 @@ fn truncated_descriptor_round_trips_with_infinite_bounds() {
     assert_eq!(rebuilt.name(), "Truncated");
     // Rebuilt loglik equals the original on the data, which means the bounds match.
     let owned = [
-        ("mu", model.models["mu"].fitted_values.clone()),
-        ("sigma", model.models["sigma"].fitted_values.clone()),
+        (Param::Mu, model.models[&Param::Mu].fitted_values.clone()),
+        (
+            Param::Sigma,
+            model.models[&Param::Sigma].fitted_values.clone(),
+        ),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     let ll_orig = family.loglik_pointwise(&y, &view).unwrap();
@@ -105,7 +109,7 @@ fn hurdle_descriptor_round_trips() {
     let back: FamilyDescriptor = serde_json::from_str(&json).unwrap();
     let rebuilt = back.build().unwrap();
     assert_eq!(rebuilt.name(), "Hurdle");
-    assert_eq!(rebuilt.parameters(), &["mu", "sigma", "xi"]);
+    assert_eq!(rebuilt.parameters(), &[Param::Mu, Param::Sigma, Param::Xi]);
 }
 
 #[test]
@@ -148,8 +152,8 @@ fn ocat_descriptor_round_trips() {
         .collect();
 
     // Intercept-only: mu plus one threshold offset per extra category.
-    let mut formula = Formula::new().with_terms("mu", vec![Term::Intercept]);
-    for name in ["delta_1", "delta_2", "delta_3"] {
+    let mut formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept]);
+    for name in [Param::Delta1, Param::Delta2, Param::Delta3] {
         formula = formula.with_terms(name, vec![Term::Intercept]);
     }
 
@@ -183,7 +187,7 @@ fn ocat_descriptor_round_trips() {
     // diverge here.
     let preds2 = reloaded.predict(&dummy_data(n), rebuilt.as_ref()).unwrap();
     for key in family.parameters() {
-        for (a, b) in preds[*key].iter().zip(preds2[*key].iter()) {
+        for (a, b) in preds[key].iter().zip(preds2[key].iter()) {
             assert!((a - b).abs() < 1e-12, "{key}: {a} vs {b}");
         }
     }

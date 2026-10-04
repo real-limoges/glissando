@@ -1,10 +1,11 @@
 //! Negative Binomial (NB2) distribution for overdispersed count data.
 
 use super::{
-    discrete_quantile, require, DerivativesResult, Distribution, GamlssError, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map};
+use crate::Param;
 use ndarray::Array1;
 use statrs::function::beta::beta_reg;
 use statrs::function::gamma::ln_gamma;
@@ -24,13 +25,13 @@ impl NegativeBinomial {
 }
 
 impl Distribution for NegativeBinomial {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" | "sigma" => Ok(Box::new(LogLink)),
+            Param::Mu | Param::Sigma => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -40,10 +41,10 @@ impl Distribution for NegativeBinomial {
     /// (often 10–30× too large for count data). The seed is the method-of-moments
     /// estimate `(var(y) − mean(y))/mean(y)²`, floored at 0.1 like gamlss NBI's
     /// `sigma.initial`.
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => y.mean().expect("validate_inputs rejects empty y"),
-            "sigma" => {
+            Param::Mu => y.mean().expect("validate_inputs rejects empty y"),
+            Param::Sigma => {
                 let m = y.mean().expect("validate_inputs rejects empty y");
                 let v = y.std(1.0).powi(2);
                 let mom = (v - m) / (m * m).max(MIN_POSITIVE);
@@ -64,8 +65,8 @@ impl Distribution for NegativeBinomial {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // NB2 log-likelihood:
         //   l = log Γ(y + 1/σ) − log Γ(1/σ) − log y!
         //       + (1/σ)·log(1/(1+σμ)) + y·log(σμ/(1+σμ)).
@@ -74,8 +75,8 @@ impl Distribution for NegativeBinomial {
         // Under the default log link `mu_eta = μ`, so `chain_to_eta` recovers the
         // previous `u_μ = (y−μ)/(1+σμ)` and `w_μ = μ/(1+σμ)`. Weights are returned
         // unfloored.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
 
         // **Every guard here is on a denominator, never on μ or σ themselves.** This
         // body used to clamp both up to `MIN_POSITIVE`, which the folded η-scale form
@@ -117,18 +118,18 @@ impl Distribution for NegativeBinomial {
         let i_sigma = u_sigma.mapv(|u| u * u);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let r = 1.0 / si.max(MIN_POSITIVE);
             let p = r / (r + mui);
@@ -138,9 +139,9 @@ impl Distribution for NegativeBinomial {
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip_map(mu, sigma, |m, s| m + s * m * m))
     }
 
@@ -151,11 +152,11 @@ impl Distribution for NegativeBinomial {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // size r = 1/σ, success prob q = r/(r+μ); F(⌊y⌋) = I_q(r, ⌊y⌋+1) = beta_reg(r, ⌊y⌋+1, q).
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             if yi < 0.0 {
                 return 0.0;
@@ -169,10 +170,10 @@ impl Distribution for NegativeBinomial {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
             let r = 1.0 / si.max(MIN_POSITIVE);
             let q = r / (r + mui.max(MIN_POSITIVE));
@@ -204,16 +205,16 @@ mod tests {
         let mu = array![1.0, 4.0, 8.0, 20.0];
         let sigma = array![0.5, 0.5, 0.5, 0.5];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         derivative_keys_match_parameters(&NegativeBinomial, p, &y);
     }
 
     #[test]
     fn loglik_negative_binomial_finite() {
         let owned = [
-            ("mu", array![1.0, 4.0, 8.0]),
-            ("sigma", array![0.5, 0.5, 0.5]),
+            (Param::Mu, array![1.0, 4.0, 8.0]),
+            (Param::Sigma, array![0.5, 0.5, 0.5]),
         ];
         let p = params_view(&owned);
         let ll = NegativeBinomial
@@ -224,7 +225,7 @@ mod tests {
 
     #[test]
     fn variance_negative_binomial_is_mu_plus_sigma_mu_squared() {
-        let owned = [("mu", array![2.0]), ("sigma", array![0.5])];
+        let owned = [(Param::Mu, array![2.0]), (Param::Sigma, array![0.5])];
         let p = params_view(&owned);
         let v = NegativeBinomial.variance(&p).unwrap();
         // 2 + 0.5·4 = 4
@@ -235,11 +236,11 @@ mod tests {
     fn score_matches_finite_diff_negative_binomial() {
         let y = array![0.0, 4.0, 10.0];
         let owned = [
-            ("mu", array![1.0, 4.0, 8.0]),
-            ("sigma", array![0.5, 0.3, 0.4]),
+            (Param::Mu, array![1.0, 4.0, 8.0]),
+            (Param::Sigma, array![0.5, 0.3, 0.4]),
         ];
-        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", 1e-5);
+        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&NegativeBinomial, &y, &owned, Param::Sigma, 1e-5);
     }
 
     #[test]
@@ -248,12 +249,26 @@ mod tests {
         // is the only thing that can tell a natural-scale score from an η-scale one.
         let y = array![0.0, 4.0, 10.0];
         let owned = [
-            ("mu", array![1.0, 4.0, 8.0]),
-            ("sigma", array![0.5, 0.3, 0.4]),
+            (Param::Mu, array![1.0, 4.0, 8.0]),
+            (Param::Sigma, array![0.5, 0.3, 0.4]),
         ];
-        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "mu", &InverseLink, 1e-5);
-        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, "sigma", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&NegativeBinomial, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(
+            &NegativeBinomial,
+            &y,
+            &owned,
+            Param::Mu,
+            &InverseLink,
+            1e-5,
+        );
+        check_eta_score_via_finite_diff(
+            &NegativeBinomial,
+            &y,
+            &owned,
+            Param::Sigma,
+            &SqrtLink,
+            1e-5,
+        );
     }
 
     #[test]
@@ -262,16 +277,16 @@ mod tests {
         // forms canceled.
         let y = array![0.0, 3.0, 7.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8]),
-            ("sigma", array![1e-8, 0.0, 1e-320]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8]),
+            (Param::Sigma, array![1e-8, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
         let natural = NegativeBinomial.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&NegativeBinomial, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }
@@ -281,8 +296,8 @@ mod tests {
     fn cdf_matches_pmf_negative_binomial() {
         let ks = array![0.0, 2.0, 5.0, 10.0, 20.0];
         let owned = [
-            ("mu", array![2.0, 4.0, 6.0, 8.0, 15.0]),
-            ("sigma", array![0.5, 0.5, 0.3, 0.4, 0.2]),
+            (Param::Mu, array![2.0, 4.0, 6.0, 8.0, 15.0]),
+            (Param::Sigma, array![0.5, 0.5, 0.3, 0.4, 0.2]),
         ];
         check_discrete_cdf_matches_pmf(&NegativeBinomial, &ks, &owned, 1e-9);
     }
@@ -290,7 +305,7 @@ mod tests {
     #[test]
     fn cdf_monotone_and_quantile_inverts_negative_binomial() {
         let grid = Array1::from_iter((0..40).map(|i| i as f64));
-        let owned = [("mu", array![6.0]), ("sigma", array![0.4])];
+        let owned = [(Param::Mu, array![6.0]), (Param::Sigma, array![0.4])];
         check_cdf_monotone_in_unit(&NegativeBinomial, &grid, &owned);
         let p = params_view(&owned);
         for &prob in &[0.05, 0.5, 0.95] {

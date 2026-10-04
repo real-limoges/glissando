@@ -1,10 +1,11 @@
 //! Gamma distribution for positive continuous data.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
-    MIN_POSITIVE,
+    clamp_prob, require, CdfGrad, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use crate::Param;
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, Gamma as SGamma};
 use statrs::function::gamma::{gamma_lr, ln_gamma};
@@ -24,13 +25,13 @@ impl Gamma {
 }
 
 impl Distribution for Gamma {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" | "sigma" => Ok(Box::new(LogLink)),
+            Param::Mu | Param::Sigma => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -40,10 +41,10 @@ impl Distribution for Gamma {
     /// Gamma data (e.g. μ=4.5, σ=0.45 → SD≈2.0, but the init should be 0.45).
     /// A bad σ_init makes REML over-penalize the σ smooth on the first RS
     /// iteration and warm-start into a full collapse of that smooth.
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => y.mean().expect("validate_inputs rejects empty y"),
-            "sigma" => {
+            Param::Mu => y.mean().expect("validate_inputs rejects empty y"),
+            Param::Sigma => {
                 let mu = y.mean().expect("validate_inputs rejects empty y");
                 let cv = y.std(1.0) / mu.max(MIN_POSITIVE);
                 cv.clamp(0.05, 10.0)
@@ -57,8 +58,8 @@ impl Distribution for Gamma {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Gamma (μ, σ) parameterization: α = 1/σ², θ = μσ².
         // l = −α·log(θ) − log Γ(α) + (α−1)·log(y) − y/θ.
         // Natural scale:
@@ -67,8 +68,8 @@ impl Distribution for Gamma {
         //      i_σ = (4/σ⁶)·ψ'(α) − 4/σ⁴.
         // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers the
         // old η-scale pairs exactly off these. Weights come back unfloored.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
 
         // **Every guard here is on a denominator or a Gamma-function argument, never
         // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`.
@@ -120,18 +121,18 @@ impl Distribution for Gamma {
         let i_sigma = 4.0 * &inv_sigma_6 * &psi_prime_alpha - 4.0 * &inv_sigma_4;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let s = si.max(MIN_POSITIVE);
             let alpha = 1.0 / (s * s);
@@ -143,20 +144,20 @@ impl Distribution for Gamma {
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip_map(mu, sigma, |m, s| m * m * s * s))
     }
 
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // shape α = 1/σ², scale s = μσ²; F(y) = P(α, y/s) = gamma_lr(α, y/s).
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             if yi <= 0.0 {
                 return 0.0; // support is y > 0
@@ -171,8 +172,8 @@ impl Distribution for Gamma {
     fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // μ enters F = P(α, x) only through x = y/(μσ²), α = 1/σ², so ∂x/∂μ = −x/μ
         // holds the shape α fixed and the shape-derivative that blocks σ never
         // appears. Writing `mass` for the γ-density factor xᵅ·e⁻ˣ/Γ(α), the
@@ -184,8 +185,8 @@ impl Distribution for Gamma {
         // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
         // σ enters both α and x, so its CDF derivative needs ∂P/∂α (non-elementary).
         // That one is left to the wrapper's numeric fallback.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         let mut d1 = Array1::<f64>::zeros(y.len());
         let mut d2 = Array1::<f64>::zeros(y.len());
         for i in 0..y.len() {
@@ -209,17 +210,17 @@ impl Distribution for Gamma {
             d1[i] = -mass / denom1;
             d2[i] = mass * (1.0 + alpha - x) / denom2;
         }
-        Ok(HashMap::from([("mu".to_string(), (d1, d2))]))
+        Ok(HashMap::from([(Param::Mu, CdfGrad::new(d1, d2))]))
     }
 
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // statrs Gamma is (shape, rate); rate = 1/scale = 1/(μσ²).
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
             let s = si.max(MIN_POSITIVE);
             let shape = 1.0 / (s * s);
@@ -253,16 +254,16 @@ mod tests {
         let mu = array![1.0, 2.0, 4.0, 6.0];
         let sigma = array![0.5, 0.4, 0.3, 0.6];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         derivative_keys_match_parameters(&Gamma, p, &y);
     }
 
     #[test]
     fn loglik_gamma_finite_on_typical_inputs() {
         let owned = [
-            ("mu", array![2.0, 2.0, 4.0]),
-            ("sigma", array![0.5, 0.4, 0.3]),
+            (Param::Mu, array![2.0, 2.0, 4.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.3]),
         ];
         let p = params_view(&owned);
         let ll = Gamma.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
@@ -271,7 +272,10 @@ mod tests {
 
     #[test]
     fn variance_gamma_is_mu_squared_sigma_squared() {
-        let owned = [("mu", array![2.0, 3.0]), ("sigma", array![0.5, 0.5])];
+        let owned = [
+            (Param::Mu, array![2.0, 3.0]),
+            (Param::Sigma, array![0.5, 0.5]),
+        ];
         let p = params_view(&owned);
         let v = Gamma.variance(&p).unwrap();
         // μ²σ² = 4·0.25 = 1; 9·0.25 = 2.25.
@@ -283,11 +287,11 @@ mod tests {
     fn score_matches_finite_diff_gamma() {
         let y = array![1.0, 2.5, 5.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0]),
-            ("sigma", array![0.5, 0.4, 0.3]),
+            (Param::Mu, array![1.5, 2.0, 4.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.3]),
         ];
-        check_score_via_finite_diff(&Gamma, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&Gamma, &y, &owned, "sigma", 1e-5);
+        check_score_via_finite_diff(&Gamma, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&Gamma, &y, &owned, Param::Sigma, 1e-5);
     }
 
     #[test]
@@ -297,13 +301,13 @@ mod tests {
         // the one this family most needs covered.
         let y = array![1.0, 2.5, 5.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0]),
-            ("sigma", array![0.5, 0.4, 0.3]),
+            (Param::Mu, array![1.5, 2.0, 4.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.3]),
         ];
-        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &InverseLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gamma, &y, &owned, "sigma", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, Param::Mu, &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gamma, &y, &owned, Param::Sigma, &InverseLink, 1e-5);
     }
 
     #[test]
@@ -313,16 +317,16 @@ mod tests {
         // first to underflow, so this fixture is the one that pins the guard.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8]),
-            ("sigma", array![1e-60, 0.0, 1e-320]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8]),
+            (Param::Sigma, array![1e-60, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
         let natural = Gamma.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gamma, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -332,13 +336,13 @@ mod tests {
         // Only μ is analytic; σ is intentionally left to the numeric fallback.
         let y = array![0.5, 1.5, 3.0, 7.0];
         let owned = [
-            ("mu", array![1.0, 2.0, 4.0, 6.0]),
-            ("sigma", array![0.5, 0.4, 0.3, 0.6]),
+            (Param::Mu, array![1.0, 2.0, 4.0, 6.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.3, 0.6]),
         ];
-        check_cdf_theta_derivatives_via_finite_diff(&Gamma, &y, &owned, "mu", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gamma, &y, &owned, Param::Mu, 2e-4);
         let p = params_view(&owned);
         let derivs = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
-        assert!(!derivs.contains_key("sigma"));
+        assert!(!derivs.contains_key(&Param::Sigma));
     }
 
     #[test]
@@ -349,12 +353,12 @@ mod tests {
         // survives, and `inf · 0` is NaN.
         let y = array![1.0, 2.0, 0.5, 3.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8, 1e13]),
-            ("sigma", array![0.5, 0.5, 1e-8, 1e13]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8, 1e13]),
+            (Param::Sigma, array![0.5, 0.5, 1e-8, 1e13]),
         ];
         let p = params_view(&owned);
         let d = Gamma.cdf_theta_derivatives(&y, &p).unwrap();
-        let (d1, d2) = &d["mu"];
+        let (d1, d2) = (&d[&Param::Mu].d1, &d[&Param::Mu].d2);
         assert!(finite_array(d1) && finite_array(d2), "{d1:?} {d2:?}");
     }
 
@@ -362,8 +366,8 @@ mod tests {
     fn cdf_quantile_roundtrip_gamma() {
         let y = array![0.5, 1.5, 3.0, 7.0];
         let owned = [
-            ("mu", array![1.0, 2.0, 4.0, 6.0]),
-            ("sigma", array![0.5, 0.4, 0.3, 0.6]),
+            (Param::Mu, array![1.0, 2.0, 4.0, 6.0]),
+            (Param::Sigma, array![0.5, 0.4, 0.3, 0.6]),
         ];
         check_cdf_quantile_roundtrip(&Gamma, &y, &owned, 1e-6);
         check_cdf_pdf_consistency(&Gamma, &y, &owned, 1e-4, 1e-3);
@@ -372,10 +376,13 @@ mod tests {
     #[test]
     fn cdf_monotone_gamma_and_zero_below_support() {
         let grid = Array1::from_iter((0..60).map(|i| i as f64 * 0.2));
-        let owned = [("mu", array![3.0]), ("sigma", array![0.5])];
+        let owned = [(Param::Mu, array![3.0]), (Param::Sigma, array![0.5])];
         check_cdf_monotone_in_unit(&Gamma, &grid, &owned);
         // Both boundary points (y = 0 and y < 0) sit outside the y > 0 support.
-        let boundary_params = [("mu", array![3.0, 3.0]), ("sigma", array![0.5, 0.5])];
+        let boundary_params = [
+            (Param::Mu, array![3.0, 3.0]),
+            (Param::Sigma, array![0.5, 0.5]),
+        ];
         let p = params_view(&boundary_params);
         let at_boundary = Gamma.cdf(&array![0.0, -1.0], &p).unwrap();
         assert_eq!(at_boundary[0], 0.0);

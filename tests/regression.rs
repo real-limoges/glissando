@@ -18,12 +18,12 @@
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test regression`, then
 // `cargo insta accept` to commit the `.snap` files.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;
 
 use common::{linear_intercepts, pspline, Generator};
+use glissando::Param;
 use glissando::{
     distributions::{Distribution, Gaussian},
     FitConfig, Formula, GamlssModel, SmoothingCriterion, Term,
@@ -86,17 +86,17 @@ impl ModelSnapshot {
         let coefficients: BTreeMap<String, Vec<String>> = model
             .models
             .iter()
-            .map(|(k, v)| (k.clone(), fmt_vec(&v.coefficients.0)))
+            .map(|(k, v)| (k.to_string(), fmt_vec(&v.coefficients.0)))
             .collect();
         let edf: BTreeMap<String, String> = model
             .models
             .iter()
-            .map(|(k, v)| (k.clone(), fmt(v.edf)))
+            .map(|(k, v)| (k.to_string(), fmt(v.edf)))
             .collect();
         let lambdas: BTreeMap<String, Vec<String>> = model
             .models
             .iter()
-            .map(|(k, v)| (k.clone(), fmt_lambda_vec(&v.lambdas)))
+            .map(|(k, v)| (k.to_string(), fmt_lambda_vec(&v.lambdas)))
             .collect();
         Self {
             converged: model.converged(),
@@ -115,7 +115,7 @@ impl ModelSnapshot {
 fn snapshot_gaussian_linear() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     let snap = ModelSnapshot::from_fit(&model, &Gaussian::new(), &y);
     insta::assert_yaml_snapshot!(snap);
@@ -127,7 +127,7 @@ fn snapshot_heteroskedastic_gaussian() {
     let (y, data) = rng.heteroskedastic_gaussian(120);
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -136,7 +136,7 @@ fn snapshot_heteroskedastic_gaussian() {
             ],
         )
         .with_terms(
-            "sigma",
+            Param::Sigma,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -154,8 +154,8 @@ fn snapshot_gaussian_pspline() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(120, 1.0, 5.0, 1.0);
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 6)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 6)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let model =
         GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), gcv_config())
             .unwrap();
@@ -173,7 +173,7 @@ fn snapshot_gaussian_pspline() {
 fn intercept_plus_pspline_converges_for_poisson() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
-    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
+    let formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)]);
     let model = GamlssModel::fit(
         &data,
         &y,
@@ -204,9 +204,9 @@ fn gaussian_linear_matches_ols_closed_form() {
     let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
     let intercept = (sum_y - slope * sum_x) / n;
 
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
-    let beta_mu = &model.models["mu"].coefficients.0;
+    let beta_mu = &model.models[&Param::Mu].coefficients.0;
 
     assert!(
         (beta_mu[0] - intercept).abs() < 1e-3,

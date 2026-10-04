@@ -1,12 +1,14 @@
 //! Student's t distribution for heavy-tailed continuous data.
 
 use super::{
-    chain_to_eta, clamp_prob, require, DerivativesResult, Distribution, FlooredLogLink,
-    GamlssError, IdentityLink, Link, LinkContext, LogLink, DENOM_FLOOR, MIN_POSITIVE,
+    chain_to_eta, clamp_prob, require, CdfGrad, DerivativeMap, Distribution, Eta, FlooredLogLink,
+    GamlssError, IdentityLink, Link, LinkContext, LogLink, Natural, ScoreInfo, DENOM_FLOOR,
+    MIN_POSITIVE,
 };
 use crate::math::{
     digamma_batch, median, median_abs_deviation, par_zip3_map, par_zip_map, trigamma_batch,
 };
+use crate::Param;
 use ndarray::Array1;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use statrs::function::gamma::ln_gamma;
@@ -39,15 +41,15 @@ impl StudentT {
 }
 
 impl Distribution for StudentT {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma", "nu"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma, Param::Nu]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(IdentityLink)),
-            "sigma" => Ok(Box::new(LogLink)),
-            "nu" => Ok(Box::new(FlooredLogLink { floor: NU_FLOOR })),
+            Param::Mu => Ok(Box::new(IdentityLink)),
+            Param::Sigma => Ok(Box::new(LogLink)),
+            Param::Nu => Ok(Box::new(FlooredLogLink { floor: NU_FLOOR })),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -60,8 +62,8 @@ impl Distribution for StudentT {
     /// floor. Under any other link the projection's freeze branch would fire on
     /// the wrong condition, which is the lift-off case it exists to
     /// handle. μ and σ go through `chain_to_eta` like any other family.
-    fn allows_link_override(&self, param: &str) -> bool {
-        param != "nu"
+    fn allows_link_override(&self, param: Param) -> bool {
+        param != Param::Nu
     }
 
     /// Robust IRLS seeds for heavy-tailed data. The trait default (sample mean,
@@ -71,10 +73,10 @@ impl Distribution for StudentT {
     /// - `σ` = 1.4826·MAD(y) (the MAD-to-σ consistency factor for a normal core),
     /// - `ν` = `NU_INIT` = 5 (a fixed moderate seed; see its doc for why a kurtosis
     ///   estimate is avoided).
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => median(y),
-            "sigma" => {
+            Param::Mu => median(y),
+            Param::Sigma => {
                 let s = 1.4826 * median_abs_deviation(y);
                 if s < 1e-4 {
                     1.0
@@ -82,10 +84,10 @@ impl Distribution for StudentT {
                     s
                 }
             }
-            "nu" => NU_INIT,
+            Param::Nu => NU_INIT,
             other => {
                 debug_assert!(
-                    matches!(other, "mu" | "sigma" | "nu"),
+                    matches!(other, Param::Mu | Param::Sigma | Param::Nu),
                     "StudentT has no parameter '{other}'"
                 );
                 NU_INIT
@@ -102,13 +104,13 @@ impl Distribution for StudentT {
     /// floor, so the generic rule would force the freeze branch unconditionally,
     /// which is wrong in the lift-off case the projection exists to handle.
     ///
-    /// Consequently `allows_link_override("nu")` is false.
+    /// Consequently `allows_link_override(Param::Nu)` is false.
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult {
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         // Build the standardized-residual block once and hand it to both halves.
         // `theta_derivatives` and the ν block each need `(z², w_robust)`, and recomputing
         // it in the second cost two extra O(n) passes plus n divisions on every
@@ -118,7 +120,7 @@ impl Distribution for StudentT {
         // came out NaN (`z² = ∞` → `w_robust = 0` → `(0·∞ − 1)/ν`).
         let shared = Standardized::new(self, y, params)?;
         let mut out = chain_to_eta(self.mu_sigma_derivatives(&shared, params)?, ctx)?;
-        out.insert("nu".to_string(), self.nu_eta_derivatives(&shared, params)?);
+        out.insert(Param::Nu, self.nu_eta_derivatives(&shared, params)?);
         Ok(out)
     }
 
@@ -130,19 +132,19 @@ impl Distribution for StudentT {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         self.mu_sigma_derivatives(&Standardized::new(self, y, params)?, params)
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = y.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -160,9 +162,9 @@ impl Distribution for StudentT {
 
     /// `Var(Y) = σ²·ν/(ν−2)` for `ν > 2`. For `ν ≤ 2` the variance is undefined; the
     /// denominator is clamped at `MIN_POSITIVE` so Pearson residuals stay finite.
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         Ok(par_zip_map(sigma, nu, |s, nu_i| {
             let denom = (nu_i - 2.0).max(MIN_POSITIVE);
             s * s * nu_i / denom
@@ -172,13 +174,13 @@ impl Distribution for StudentT {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Location-scale t: F(y) = T_ν((y−μ)/σ). ν varies per observation, so build
         // one StudentsT per row (mirrors the indexed loglik_pointwise loop above).
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = y.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -194,8 +196,8 @@ impl Distribution for StudentT {
     fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // Natural-scale location-scale derivatives of F = T_ν(z),
         // z = (y−μ)/σ, with standardized t-pdf g and g'(z) = −g·(ν+1)z/(ν+z²).
         // ∂z/∂μ = −1/σ and ∂z/∂σ = −z/σ, so:
@@ -207,9 +209,9 @@ impl Distribution for StudentT {
         // σ·(−zg/σ) = −zg and (2zg + z²g') − zg = zg + z²g'.
         // ν has no elementary CDF derivative (incomplete-beta shape derivative) and
         // is left to the wrapper's numeric fallback.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
 
         let mut d1_mu = Array1::<f64>::zeros(y.len());
         let mut d2_mu = Array1::<f64>::zeros(y.len());
@@ -252,19 +254,19 @@ impl Distribution for StudentT {
             };
         }
         Ok(HashMap::from([
-            ("mu".to_string(), (d1_mu, d2_mu)),
-            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+            (Param::Mu, CdfGrad::new(d1_mu, d2_mu)),
+            (Param::Sigma, CdfGrad::new(d1_sigma, d2_sigma)),
         ]))
     }
 
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = p.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -302,11 +304,11 @@ impl Standardized {
     fn new(
         family: &StudentT,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Self, GamlssError> {
-        let mu = require(family, params, "mu")?;
-        let sigma = require(family, params, "sigma")?;
-        let nu = require(family, params, "nu")?;
+        let mu = require(family, params, Param::Mu)?;
+        let sigma = require(family, params, Param::Sigma)?;
+        let nu = require(family, params, Param::Nu)?;
 
         // Guard each reciprocal at the power it is used at, rather than clamping σ:
         // raising an already-guarded reciprocal to a power would overflow to infinity
@@ -337,9 +339,9 @@ impl StudentT {
     fn mu_sigma_derivatives(
         &self,
         s: &Standardized,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
-        let nu = require(self, params, "nu")?;
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
+        let nu = require(self, params, Param::Nu)?;
 
         // μ derivatives (identity link, so the chain rule leaves these untouched).
         // The score uses the robustifying weight (that IS dl/dμ); the working weight
@@ -360,8 +362,8 @@ impl StudentT {
         });
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
@@ -373,9 +375,9 @@ impl StudentT {
     fn nu_eta_derivatives(
         &self,
         s: &Standardized,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> Result<(Array1<f64>, Array1<f64>), GamlssError> {
-        let nu = require(self, params, "nu")?;
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<ScoreInfo<Eta>, GamlssError> {
+        let nu = require(self, params, Param::Nu)?;
         let z_sq = &s.z_sq;
         let w_robust = &s.w_robust;
 
@@ -443,7 +445,7 @@ impl StudentT {
         // the negative values the trigamma near-cancellation can produce as well.
         let w_nu = par_zip_map(&i_nu, nu, |i, nu_i| i * nu_i * nu_i);
 
-        Ok((u_nu, w_nu))
+        Ok(ScoreInfo::computed_on_eta(u_nu, w_nu))
     }
 }
 
@@ -466,9 +468,9 @@ mod tests {
         let sigma = array![1.0, 1.0, 0.8, 1.2];
         let nu = array![5.0, 10.0, 4.0, 8.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
-        p.insert("nu", &nu);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
+        p.insert(Param::Nu, &nu);
         derivative_keys_match_parameters(&StudentT, p, &y);
     }
 
@@ -476,9 +478,9 @@ mod tests {
     fn loglik_studentt_matches_cauchy_at_zero() {
         // Student-t with ν=1, μ=0, σ=1 is standard Cauchy. Density at y=0 is 1/π.
         let owned = [
-            ("mu", array![0.0]),
-            ("sigma", array![1.0]),
-            ("nu", array![1.0]),
+            (Param::Mu, array![0.0]),
+            (Param::Sigma, array![1.0]),
+            (Param::Nu, array![1.0]),
         ];
         let p = params_view(&owned);
         let ll = StudentT.loglik(&array![0.0], &p).unwrap();
@@ -489,9 +491,9 @@ mod tests {
     #[test]
     fn loglik_studentt_finite_on_typical_inputs() {
         let owned = [
-            ("mu", array![0.0, 1.0, 2.0]),
-            ("sigma", array![1.0, 1.5, 0.5]),
-            ("nu", array![5.0, 10.0, 4.0]),
+            (Param::Mu, array![0.0, 1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.5, 0.5]),
+            (Param::Nu, array![5.0, 10.0, 4.0]),
         ];
         let p = params_view(&owned);
         let ll = StudentT.loglik(&array![0.5, 0.5, 1.5], &p).unwrap();
@@ -501,9 +503,9 @@ mod tests {
     #[test]
     fn variance_studentt_uses_sigma_sq_nu_over_nu_minus_two() {
         let owned = [
-            ("mu", array![0.0]),
-            ("sigma", array![1.0]),
-            ("nu", array![4.0]),
+            (Param::Mu, array![0.0]),
+            (Param::Sigma, array![1.0]),
+            (Param::Nu, array![4.0]),
         ];
         let p = params_view(&owned);
         // σ²·ν/(ν−2) = 1·4/2 = 2.
@@ -514,7 +516,7 @@ mod tests {
     #[test]
     fn variance_studentt_clamps_at_low_nu() {
         // ν ≤ 2 is undefined; clamp keeps the value finite for downstream Pearson math.
-        let owned = [("sigma", array![1.0]), ("nu", array![1.5])];
+        let owned = [(Param::Sigma, array![1.0]), (Param::Nu, array![1.5])];
         let p = params_view(&owned);
         let v = StudentT.variance(&p).unwrap();
         assert!(v[0].is_finite());
@@ -526,17 +528,17 @@ mod tests {
         // A clean core around 10 with a few gross outliers. The non-robust trait
         // default (mean/SD) would be dragged toward the outliers; median/MAD resist.
         let y = array![9.8, 10.1, 9.9, 10.2, 10.0, 9.7, 10.3, 9.95, 10.05, 1000.0, -800.0];
-        let mu0 = StudentT.initial_value("mu", &y);
+        let mu0 = StudentT.initial_value(Param::Mu, &y);
         assert!(
             (mu0 - 10.0).abs() < 0.5,
             "median seed should sit near the core (got {mu0})"
         );
-        let sigma0 = StudentT.initial_value("sigma", &y);
+        let sigma0 = StudentT.initial_value(Param::Sigma, &y);
         assert!(
             sigma0 > 0.0 && sigma0 < 2.0,
             "MAD-based scale seed should reflect the core spread, not the outliers (got {sigma0})"
         );
-        let nu0 = StudentT.initial_value("nu", &y);
+        let nu0 = StudentT.initial_value(Param::Nu, &y);
         assert_eq!(
             nu0, NU_INIT,
             "ν seed is a fixed moderate default, not derived from the (outlier-sensitive) kurtosis"
@@ -547,7 +549,7 @@ mod tests {
     fn nu_link_floors_below_two() {
         // The floored log link must keep ν ≥ 2 regardless of how negative η drifts,
         // so the variance σ²ν/(ν−2) stays finite during iteration.
-        let link = StudentT.default_link("nu").unwrap();
+        let link = StudentT.default_link(Param::Nu).unwrap();
         assert!(link.inv_link(-50.0) >= NU_FLOOR - 1e-12);
         assert!(link.inv_link(-1.0) >= NU_FLOOR - 1e-12);
         // Above the floor it behaves like a plain log link.
@@ -559,13 +561,13 @@ mod tests {
     fn score_matches_finite_diff_studentt() {
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0]),
-            ("sigma", array![1.0, 1.2, 0.8]),
-            ("nu", array![5.0, 8.0, 4.0]),
+            (Param::Mu, array![0.0, 0.5, 1.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.8]),
+            (Param::Nu, array![5.0, 8.0, 4.0]),
         ];
-        check_score_via_finite_diff(&StudentT, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&StudentT, &y, &owned, "sigma", 1e-5);
-        check_score_via_finite_diff(&StudentT, &y, &owned, "nu", 1e-5);
+        check_score_via_finite_diff(&StudentT, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&StudentT, &y, &owned, Param::Sigma, 1e-5);
+        check_score_via_finite_diff(&StudentT, &y, &owned, Param::Nu, 1e-5);
     }
 
     #[test]
@@ -580,14 +582,14 @@ mod tests {
         // `Distribution::eta_derivatives` on this type).
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
-            ("mu", array![0.5, 0.75, 1.0]),
-            ("sigma", array![1.0, 1.2, 0.8]),
-            ("nu", array![5.0, 8.0, 4.0]),
+            (Param::Mu, array![0.5, 0.75, 1.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.8]),
+            (Param::Nu, array![5.0, 8.0, 4.0]),
         ];
-        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "mu", &LogLink, 1e-5);
-        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&StudentT, &y, &owned, "sigma", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, Param::Mu, &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&StudentT, &y, &owned, Param::Sigma, &InverseLink, 1e-5);
     }
 
     #[test]
@@ -598,14 +600,14 @@ mod tests {
         // `0 · 1e300` = 0, so the ν score alone went NaN while μ and σ stayed finite.
         let y = array![1.0, 2.0];
         let owned = [
-            ("mu", array![1.0, 2.0]),
-            ("sigma", array![0.0, 1.0]),
-            ("nu", array![5.0, 5.0]),
+            (Param::Mu, array![1.0, 2.0]),
+            (Param::Sigma, array![0.0, 1.0]),
+            (Param::Nu, array![5.0, 5.0]),
         ];
         let p = params_view(&owned);
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
-        for name in ["mu", "sigma", "nu"] {
-            let (u, w) = &chained[name];
+        for name in [Param::Mu, Param::Sigma, Param::Nu] {
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(
                 finite_array(u) && finite_array(w),
                 "{name}: u={u:?} w={w:?}"
@@ -619,14 +621,14 @@ mod tests {
         // `g' = −g(ν+1)z/(ν+z²)` is ∞/∞ = NaN rather than the 0 it tends to.
         let bounds = array![1e300, -1e300, 1e200];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0]),
-            ("sigma", array![1e-10, 1e-10, 1.0]),
-            ("nu", array![5.0, 5.0, 5.0]),
+            (Param::Mu, array![0.0, 0.0, 0.0]),
+            (Param::Sigma, array![1e-10, 1e-10, 1.0]),
+            (Param::Nu, array![5.0, 5.0, 5.0]),
         ];
         let p = params_view(&owned);
         let d = StudentT.cdf_theta_derivatives(&bounds, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (d1, d2) = (&d[&name].d1, &d[&name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -641,23 +643,23 @@ mod tests {
         // canceled.
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0]),
+            (Param::Mu, array![0.0, 0.5, 1.0]),
             // Spans well past `exp(MIN_ETA) ≈ 9.4e-14`, the smallest σ a log link
             // reaches inside its own η clamp. σ = 0 exactly is excluded: there
             // `z = (y−μ)/σ` overflows and `z²` becomes infinite, so `w_robust · z²`
             // is `0 · ∞ = NaN`, a separate fragility.
-            ("sigma", array![1e-100, 1e-13, 1e-8]),
-            ("nu", array![5.0, 8.0, 4.0]),
+            (Param::Sigma, array![1e-100, 1e-13, 1e-8]),
+            (Param::Nu, array![5.0, 8.0, 4.0]),
         ];
         let p = params_view(&owned);
         let natural = StudentT.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
         }
-        for name in ["mu", "sigma", "nu"] {
-            let (u, w) = &chained[name];
+        for name in [Param::Mu, Param::Sigma, Param::Nu] {
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -669,18 +671,18 @@ mod tests {
         // dropped ν from the η-scale map would silently freeze the ν block.
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0]),
-            ("sigma", array![1.0, 1.2, 0.8]),
-            ("nu", array![5.0, 8.0, 4.0]),
+            (Param::Mu, array![0.0, 0.5, 1.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.8]),
+            (Param::Nu, array![5.0, 8.0, 4.0]),
         ];
         let p = params_view(&owned);
         let natural = StudentT.theta_derivatives(&y, &p).unwrap();
-        let mut keys: Vec<&str> = natural.keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = natural.keys().map(|p| p.as_str()).collect();
         keys.sort();
         assert_eq!(keys, ["mu", "sigma"]);
 
         let chained = default_link_derivatives(&StudentT, &y, &p).unwrap();
-        let mut keys: Vec<&str> = chained.keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = chained.keys().map(|p| p.as_str()).collect();
         keys.sort();
         assert_eq!(keys, ["mu", "nu", "sigma"]);
     }
@@ -690,16 +692,16 @@ mod tests {
         // μ and σ are analytic; ν is intentionally absent (numeric fallback).
         let y = array![-2.0, 0.3, 1.4, 3.0];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0, 2.0]),
-            ("sigma", array![1.0, 1.2, 0.9, 1.4]),
-            ("nu", array![5.0, 8.0, 6.0, 12.0]),
+            (Param::Mu, array![0.0, 0.5, 1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.9, 1.4]),
+            (Param::Nu, array![5.0, 8.0, 6.0, 12.0]),
         ];
-        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, "mu", 2e-4);
-        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, "sigma", 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, Param::Mu, 2e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&StudentT, &y, &owned, Param::Sigma, 2e-4);
         // ν must not be supplied analytically.
         let p = params_view(&owned);
         let derivs = StudentT.cdf_theta_derivatives(&y, &p).unwrap();
-        assert!(!derivs.contains_key("nu"));
+        assert!(!derivs.contains_key(&Param::Nu));
     }
 
     #[test]
@@ -710,14 +712,14 @@ mod tests {
         // `z = (y−μ)/σ` overflows there and `w_robust · z²` is a `0 · ∞` NaN.
         let y = array![0.0, 1.0, 2.0, -1.0];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0, 0.0]),
-            ("sigma", array![1e-320, 1e-8, 1e13, 1.0]),
-            ("nu", array![2.0, 1e-8, 1e13, 2.0]),
+            (Param::Mu, array![0.0, 0.0, 0.0, 0.0]),
+            (Param::Sigma, array![1e-320, 1e-8, 1e13, 1.0]),
+            (Param::Nu, array![2.0, 1e-8, 1e13, 2.0]),
         ];
         let p = params_view(&owned);
         let d = StudentT.cdf_theta_derivatives(&y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (d1, d2) = (&d[&name].d1, &d[&name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -729,9 +731,9 @@ mod tests {
     fn cdf_quantile_roundtrip_studentt() {
         let y = array![-3.0, -0.5, 0.0, 1.2, 4.0];
         let owned = [
-            ("mu", array![0.0, 0.5, 1.0, 2.0, 1.5]),
-            ("sigma", array![1.0, 1.5, 0.8, 2.0, 1.2]),
-            ("nu", array![5.0, 10.0, 4.0, 8.0, 30.0]),
+            (Param::Mu, array![0.0, 0.5, 1.0, 2.0, 1.5]),
+            (Param::Sigma, array![1.0, 1.5, 0.8, 2.0, 1.2]),
+            (Param::Nu, array![5.0, 10.0, 4.0, 8.0, 30.0]),
         ];
         check_cdf_quantile_roundtrip(&StudentT, &y, &owned, 1e-6);
         check_cdf_pdf_consistency(&StudentT, &y, &owned, 1e-4, 1e-3);
@@ -741,9 +743,9 @@ mod tests {
     fn cdf_monotone_studentt_and_median_is_mu() {
         let grid = Array1::from_iter((0..60).map(|i| -8.0 + i as f64 * 0.25));
         let owned = [
-            ("mu", array![1.0]),
-            ("sigma", array![1.3]),
-            ("nu", array![6.0]),
+            (Param::Mu, array![1.0]),
+            (Param::Sigma, array![1.3]),
+            (Param::Nu, array![6.0]),
         ];
         check_cdf_monotone_in_unit(&StudentT, &grid, &owned);
         let p = params_view(&owned);

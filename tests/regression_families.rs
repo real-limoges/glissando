@@ -1,7 +1,7 @@
 // Per-family end-to-end fit snapshots.
 //
 // `tests/regression.rs` snapshots three Gaussian fits, 1 of 15 families. This
-// file picks up the rest, so a change to any family's `theta_derivatives()` shows
+// file picks up the rest, so a change to any family's `eta_derivatives()` shows
 // up as fitted-coefficient drift instead of slipping by unnoticed.
 //
 // It is the end-to-end counterpart to `tests/derivative_golden.rs`: that file
@@ -11,7 +11,6 @@
 // fixtures don't lean on any random-number implementation.
 //
 // First-time creation: `INSTA_UPDATE=auto cargo test --test regression_families`.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 use glissando::distributions::{Beta, Binomial};
@@ -19,6 +18,7 @@ use glissando::distributions::{
     CensorStatus, Censored, Distribution, Gamma, Gaussian, Hurdle, NegativeBinomial, Ocat, Poisson,
     StudentT, Truncated, Weibull, BCCG, BCPE, BCT,
 };
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Smooth, Term};
 
 mod common;
@@ -61,7 +61,7 @@ fn snapshot<D: Distribution + ?Sized>(
             .iter()
             .map(|(k, v)| {
                 (
-                    k.clone(),
+                    k.to_string(),
                     v.coefficients.0.iter().map(|&c| fmt(c)).collect(),
                 )
             })
@@ -69,7 +69,7 @@ fn snapshot<D: Distribution + ?Sized>(
         edf: model
             .models
             .iter()
-            .map(|(k, v)| (k.clone(), fmt(v.edf)))
+            .map(|(k, v)| (k.to_string(), fmt(v.edf)))
             .collect(),
         log_likelihood: fmt(diag.log_likelihood),
         aic: fmt(diag.aic),
@@ -96,7 +96,7 @@ fn jitter(i: usize) -> f64 {
 fn formula_for<D: Distribution + ?Sized>(family: &D) -> Formula {
     let mut f = Formula::new();
     f.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -105,7 +105,7 @@ fn formula_for<D: Distribution + ?Sized>(family: &D) -> Formula {
         ],
     );
     for p in family.parameters().iter().skip(1) {
-        f.add_terms((*p).to_string(), vec![Term::Intercept]);
+        f.add_terms(*p, vec![Term::Intercept]);
     }
     f
 }
@@ -340,7 +340,7 @@ fn fit_gaussian_pspline_reml() {
     let data = dataset(&x);
     let mut formula = Formula::new();
     formula.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Smooth(Smooth::PSpline1D {
@@ -352,7 +352,7 @@ fn fit_gaussian_pspline_reml() {
             }),
         ],
     );
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
 
     let family = Gaussian::new();
     let model = GamlssModel::fit_with_config(

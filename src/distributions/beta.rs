@@ -1,10 +1,11 @@
 //! Beta distribution for proportions on `(0, 1)`.
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, LogitLink,
-    MIN_POSITIVE, TRIGAMMA_FLOOR,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, LogitLink,
+    Natural, ScoreInfo, MIN_POSITIVE, TRIGAMMA_FLOOR,
 };
 use crate::math::{digamma_batch, par_zip3_map, par_zip_map, trigamma_batch};
+use crate::Param;
 use ndarray::Array1;
 use statrs::distribution::{Beta as SBeta, ContinuousCDF};
 use statrs::function::beta::beta_reg;
@@ -25,14 +26,14 @@ impl Beta {
 }
 
 impl Distribution for Beta {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "phi"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Phi]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(LogitLink)),
-            "phi" => Ok(Box::new(LogLink)),
+            Param::Mu => Ok(Box::new(LogitLink)),
+            Param::Phi => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -42,12 +43,12 @@ impl Distribution for Beta {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Beta (μ, φ) parameterization: α = μφ, β = (1−μ)φ.
         // l = log Γ(φ) − log Γ(α) − log Γ(β) + (α−1)·log(y) + (β−1)·log(1−y).
-        let mu = require(self, params, "mu")?;
-        let phi = require(self, params, "phi")?;
+        let mu = require(self, params, Param::Mu)?;
+        let phi = require(self, params, Param::Phi)?;
 
         // **The floor sits on the Gamma-function arguments, not on μ or φ.** This
         // family used to clamp `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]`. The folded
@@ -106,18 +107,18 @@ impl Distribution for Beta {
         let i_phi = &mu_sq * &psi_prime_alpha + &one_minus_mu_sq * &psi_prime_beta - &psi_prime_phi;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (dl_dmu, i_mu)),
-            ("phi".to_string(), (dl_dphi, i_phi)),
+            (Param::Mu, ScoreInfo::new(dl_dmu, i_mu)),
+            (Param::Phi, ScoreInfo::new(dl_dphi, i_phi)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let phi = require(self, params, "phi")?;
+        let mu = require(self, params, Param::Mu)?;
+        let phi = require(self, params, Param::Phi)?;
         Ok(par_zip3_map(y, mu, phi, |yi, mui, phii| {
             let alpha = mui * phii;
             let beta = (1.0 - mui) * phii;
@@ -128,9 +129,9 @@ impl Distribution for Beta {
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let phi = require(self, params, "phi")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let phi = require(self, params, Param::Phi)?;
         Ok(par_zip_map(mu, phi, |m, p| {
             let m_clamped = m.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
             m_clamped * (1.0 - m_clamped) / (1.0 + p.max(MIN_POSITIVE))
@@ -140,11 +141,11 @@ impl Distribution for Beta {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // (μ, φ) parameterization: α = μφ, β = (1−μ)φ; F(y) = I_y(α, β) = beta_reg(α, β, y).
-        let mu = require(self, params, "mu")?;
-        let phi = require(self, params, "phi")?;
+        let mu = require(self, params, Param::Mu)?;
+        let phi = require(self, params, Param::Phi)?;
         Ok(par_zip3_map(y, mu, phi, |yi, mui, phii| {
             let yc = yi.clamp(0.0, 1.0);
             if yc <= 0.0 {
@@ -162,10 +163,10 @@ impl Distribution for Beta {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let phi = require(self, params, "phi")?;
+        let mu = require(self, params, Param::Mu)?;
+        let phi = require(self, params, Param::Phi)?;
         Ok(par_zip3_map(p, mu, phi, |pi, mui, phii| {
             let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
             let ph = phii.max(MIN_POSITIVE);
@@ -200,11 +201,11 @@ mod tests {
         // score taken from a different μ, and the product stopped telescoping. Two μ
         // that far apart must not produce the same derivative.
         let y = array![0.5];
-        let clamped = [("mu", array![1e-10]), ("phi", array![10.0])];
-        let truthful = [("mu", array![7.6e-24]), ("phi", array![10.0])];
+        let clamped = [(Param::Mu, array![1e-10]), (Param::Phi, array![10.0])];
+        let truthful = [(Param::Mu, array![7.6e-24]), (Param::Phi, array![10.0])];
         let a = Beta.theta_derivatives(&y, &params_view(&clamped)).unwrap();
         let b = Beta.theta_derivatives(&y, &params_view(&truthful)).unwrap();
-        let (ua, ub) = (a["mu"].0[0], b["mu"].0[0]);
+        let (ua, ub) = (a[&Param::Mu].score[0], b[&Param::Mu].score[0]);
         assert!(
             ua.is_finite() && ub.is_finite() && (ua - ub).abs() > 1.0,
             "μ = 1e-10 and μ = 7.6e-24 gave {ua} and {ub}"
@@ -217,16 +218,16 @@ mod tests {
         let mu = array![0.2, 0.5, 0.8, 0.3];
         let phi = array![5.0, 10.0, 15.0, 8.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("phi", &phi);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Phi, &phi);
         derivative_keys_match_parameters(&Beta, p, &y);
     }
 
     #[test]
     fn loglik_beta_finite() {
         let owned = [
-            ("mu", array![0.2, 0.5, 0.8]),
-            ("phi", array![10.0, 10.0, 10.0]),
+            (Param::Mu, array![0.2, 0.5, 0.8]),
+            (Param::Phi, array![10.0, 10.0, 10.0]),
         ];
         let p = params_view(&owned);
         let ll = Beta.loglik(&array![0.1, 0.5, 0.9], &p).unwrap();
@@ -235,7 +236,7 @@ mod tests {
 
     #[test]
     fn variance_beta_uses_mu_one_minus_mu_over_one_plus_phi() {
-        let owned = [("mu", array![0.5]), ("phi", array![3.0])];
+        let owned = [(Param::Mu, array![0.5]), (Param::Phi, array![3.0])];
         let p = params_view(&owned);
         let v = Beta.variance(&p).unwrap();
         // 0.5·0.5/(1+3) = 0.0625
@@ -246,11 +247,11 @@ mod tests {
     fn score_matches_finite_diff_beta() {
         let y = array![0.2, 0.5, 0.85];
         let owned = [
-            ("mu", array![0.3, 0.5, 0.7]),
-            ("phi", array![10.0, 12.0, 8.0]),
+            (Param::Mu, array![0.3, 0.5, 0.7]),
+            (Param::Phi, array![10.0, 12.0, 8.0]),
         ];
-        check_score_via_finite_diff(&Beta, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&Beta, &y, &owned, "phi", 1e-5);
+        check_score_via_finite_diff(&Beta, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&Beta, &y, &owned, Param::Phi, 1e-5);
     }
 
     #[test]
@@ -259,12 +260,12 @@ mod tests {
         // meaningful overrides; φ is positive, so sqrt is.
         let y = array![0.2, 0.5, 0.85];
         let owned = [
-            ("mu", array![0.3, 0.5, 0.7]),
-            ("phi", array![10.0, 12.0, 8.0]),
+            (Param::Mu, array![0.3, 0.5, 0.7]),
+            (Param::Phi, array![10.0, 12.0, 8.0]),
         ];
-        check_eta_score_via_finite_diff(&Beta, &y, &owned, "mu", &ProbitLink, 1e-5);
-        check_eta_score_via_finite_diff(&Beta, &y, &owned, "mu", &CloglogLink, 1e-5);
-        check_eta_score_via_finite_diff(&Beta, &y, &owned, "phi", &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, Param::Mu, &ProbitLink, 1e-5);
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, Param::Mu, &CloglogLink, 1e-5);
+        check_eta_score_via_finite_diff(&Beta, &y, &owned, Param::Phi, &SqrtLink, 1e-5);
     }
 
     #[test]
@@ -273,16 +274,16 @@ mod tests {
         // so every family is covered uniformly.
         let y = array![0.01, 0.5, 0.99];
         let owned = [
-            ("mu", array![0.0, 1.0, 1e-12]),
-            ("phi", array![0.0, 1e-320, 1e8]),
+            (Param::Mu, array![0.0, 1.0, 1e-12]),
+            (Param::Phi, array![0.0, 1e-320, 1e8]),
         ];
         let p = params_view(&owned);
         let natural = Beta.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Beta, &y, &p).unwrap();
-        for name in ["mu", "phi"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Phi] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }
@@ -292,8 +293,8 @@ mod tests {
     fn cdf_quantile_roundtrip_beta() {
         let y = array![0.1, 0.35, 0.5, 0.7, 0.9];
         let owned = [
-            ("mu", array![0.2, 0.4, 0.5, 0.6, 0.8]),
-            ("phi", array![10.0, 12.0, 8.0, 15.0, 6.0]),
+            (Param::Mu, array![0.2, 0.4, 0.5, 0.6, 0.8]),
+            (Param::Phi, array![10.0, 12.0, 8.0, 15.0, 6.0]),
         ];
         check_cdf_quantile_roundtrip(&Beta, &y, &owned, 1e-6);
         check_cdf_pdf_consistency(&Beta, &y, &owned, 1e-4, 1e-3);
@@ -302,10 +303,13 @@ mod tests {
     #[test]
     fn cdf_monotone_beta_and_unit_endpoints() {
         let grid = Array1::from_iter((1..40).map(|i| i as f64 / 40.0));
-        let owned = [("mu", array![0.45]), ("phi", array![9.0])];
+        let owned = [(Param::Mu, array![0.45]), (Param::Phi, array![9.0])];
         check_cdf_monotone_in_unit(&Beta, &grid, &owned);
         // F(0) = 0 and F(1) = 1 at the unit-interval endpoints.
-        let endpoint_params = [("mu", array![0.45, 0.45]), ("phi", array![9.0, 9.0])];
+        let endpoint_params = [
+            (Param::Mu, array![0.45, 0.45]),
+            (Param::Phi, array![9.0, 9.0]),
+        ];
         let p = params_view(&endpoint_params);
         let at_endpoints = Beta.cdf(&array![0.0, 1.0], &p).unwrap();
         assert_eq!(at_endpoints[0], 0.0);

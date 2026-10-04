@@ -2,6 +2,7 @@
 
 use crate::distributions::{Distribution, MIN_POSITIVE};
 use crate::GamlssError;
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 pub fn pearson_residuals<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
-    params: &HashMap<&str, &Array1<f64>>,
+    params: &HashMap<Param, &Array1<f64>>,
 ) -> Result<Array1<f64>, GamlssError> {
     let e = family.expected_value(params)?;
     let v = family.variance(params)?;
@@ -49,7 +50,8 @@ mod tests {
         let y = array![1.0, 2.0, 3.0];
         let mu = array![1.5, 2.0, 2.5];
         let sigma = array![0.5, 0.5, 0.5];
-        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+        let params: HashMap<Param, &Array1<f64>> =
+            HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
         let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
         assert!((r[0] - (-1.0)).abs() < 1e-10);
         assert!((r[1] - 0.0).abs() < 1e-10);
@@ -62,7 +64,8 @@ mod tests {
         let y = array![0.0];
         let mu = array![0.0];
         let sigma = array![0.0];
-        let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+        let params: HashMap<Param, &Array1<f64>> =
+            HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
         let r = pearson_residuals(&Gaussian, &y, &params).unwrap();
         assert!(r.iter().all(|v| v.is_finite()));
     }

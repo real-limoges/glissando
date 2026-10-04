@@ -24,6 +24,7 @@ use super::{
 use crate::distributions::{Distribution, LinkContext, MIN_WEIGHT};
 use crate::error::GamlssError;
 use crate::types::{Coefficients, CovarianceMatrix};
+use crate::Param;
 use indexmap::IndexMap;
 use ndarray::{s, Array1, Zip};
 #[cfg(feature = "parallel")]
@@ -132,12 +133,12 @@ pub(super) fn step_halving<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     prior_weights: Option<&Array1<f64>>,
-    models: &IndexMap<String, FittingParameter>,
-    param: &str,
+    models: &IndexMap<Param, FittingParameter>,
+    param: Param,
     proposed: &Update,
     min_alpha: f64,
 ) -> Result<Halved, GamlssError> {
-    let model = &models[param];
+    let model = &models[&param];
     let dir = &proposed.beta.0 - &model.beta.0; // d_k
     let (x, link) = (&model.x_matrix.0, &model.link);
 
@@ -217,16 +218,16 @@ pub(super) fn step<D: Distribution + ?Sized>(
     family: &D,
     y: &Array1<f64>,
     prior_weights: Option<&Array1<f64>>,
-    models: &IndexMap<String, FittingParameter>,
-    target_param: &str,
+    models: &IndexMap<Param, FittingParameter>,
+    target_param: Param,
     criterion: SmoothingCriterion,
 ) -> Result<Update, GamlssError> {
-    // 1. Reference every parameter's cached μ; theta_derivatives() wants all of them.
+    // 1. Reference every parameter's cached μ; eta_derivatives() wants all of them.
     //    The outer loop keeps that cache current, so inv_link need not be re-run here.
-    let params_ref: HashMap<&str, &Array1<f64>> = family
+    let params_ref: HashMap<Param, &Array1<f64>> = family
         .parameters()
         .iter()
-        .map(|name| (*name, &models[*name].mu))
+        .map(|&name| (name, &models[&name].mu))
         .collect();
 
     // 2. Score and Fisher info for the target parameter, on the η scale.
@@ -235,9 +236,9 @@ pub(super) fn step<D: Distribution + ?Sized>(
     //    apply the chain rule generically rather than hardcoding its default link.
     //    Each pass is O(n) per parameter, so only the structural
     //    wrappers (the only readers of `mu_eta2`) pay for the second one.
-    let entries = family.parameters().iter().map(|name| {
-        let param = &models[*name];
-        (*name, param.link.as_ref(), &param.eta)
+    let entries = family.parameters().iter().map(|&name| {
+        let param = &models[&name];
+        (name, param.link.as_ref(), &param.eta)
     });
     let link_ctx = if family.needs_second_order_links() {
         LinkContext::new(entries)
@@ -245,11 +246,12 @@ pub(super) fn step<D: Distribution + ?Sized>(
         LinkContext::first_order(entries)
     };
     let all_derivs = family.eta_derivatives(y, &params_ref, &link_ctx)?;
-    let (deriv_u, deriv_w) = all_derivs
-        .get(target_param)
+    let target_derivs = all_derivs
+        .get(&target_param)
         .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", target_param)))?;
+    let (deriv_u, deriv_w) = (&target_derivs.score, &target_derivs.info);
 
-    let target = models.get(target_param).ok_or_else(|| {
+    let target = models.get(&target_param).ok_or_else(|| {
         GamlssError::Internal(format!("Model for parameter '{}' not found", target_param))
     })?;
 
@@ -651,10 +653,18 @@ mod tests {
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0]; // ȳ = 3
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n)); // σ = 1
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n)); // σ = 1
 
-        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            SmoothingCriterion::Gcv,
+        )
+        .unwrap();
         assert!(
             (update.beta.0[0] - 3.0).abs() < 1e-6,
             "expected β ≈ 3.0 (ȳ), got {}",
@@ -668,10 +678,18 @@ mod tests {
         let y = array![1.0, 2.0, 3.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
-        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            SmoothingCriterion::Gcv,
+        )
+        .unwrap();
         assert!(update.max_diff.is_finite() && update.max_diff > 0.0);
         assert!(update.eta_change.is_finite() && update.eta_change > 0.0);
         assert!(update.lambda_change.is_finite());
@@ -684,12 +702,20 @@ mod tests {
         let y = array![1.0, 2.0, 3.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
-        let beta_before = models["mu"].beta.0.clone();
-        let _ = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
-        let beta_after = &models["mu"].beta.0;
+        let beta_before = models[&Param::Mu].beta.0.clone();
+        let _ = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            SmoothingCriterion::Gcv,
+        )
+        .unwrap();
+        let beta_after = &models[&Param::Mu].beta.0;
         assert_eq!(beta_before, *beta_after);
     }
 
@@ -735,10 +761,18 @@ mod tests {
         let sigma = intercept_only_log(0.0, n);
 
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), mu);
-        models.insert("sigma".to_string(), sigma);
+        models.insert(Param::Mu, mu);
+        models.insert(Param::Sigma, sigma);
 
-        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Gcv).unwrap();
+        let update = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            SmoothingCriterion::Gcv,
+        )
+        .unwrap();
         assert_eq!(update.lambdas.len(), 1);
         assert!(update.lambdas[0].is_finite() && update.lambdas[0] > 0.0);
         assert!(update.edf() > 0.0 && update.edf() <= n_splines as f64);
@@ -788,10 +822,18 @@ mod tests {
         let sigma = intercept_only_log(0.0, n);
 
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), mu);
-        models.insert("sigma".to_string(), sigma);
+        models.insert(Param::Mu, mu);
+        models.insert(Param::Sigma, sigma);
 
-        let update = step(&Gaussian, &y, None, &models, "mu", SmoothingCriterion::Reml).unwrap();
+        let update = step(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            SmoothingCriterion::Reml,
+        )
+        .unwrap();
 
         assert!(
             update.term_edf[0] > 3.0,
@@ -810,20 +852,20 @@ mod tests {
         let y = array![1.0, 2.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
         let err = step(
             &Gaussian,
             &y,
             None,
             &models,
-            "zeta",
+            Param::Nu,
             SmoothingCriterion::Gcv,
         )
         .unwrap_err();
-        // family.theta_derivatives() never produces a "zeta" entry, so we hit the missing-derivative arm.
-        assert!(format!("{}", err).contains("zeta"));
+        // Gaussian.eta_derivatives() never produces a nu entry, so we hit the missing-derivative arm.
+        assert!(format!("{}", err).contains("nu"));
     }
 
     /// Minimal `Update` carrying an arbitrary proposed β; `step_halving` only reads
@@ -850,8 +892,8 @@ mod tests {
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
         let gd = global_deviance(&Gaussian, &y, None, &models).unwrap();
         let expected: f64 = y
@@ -867,12 +909,19 @@ mod tests {
         let y = array![1.0, 2.0, 3.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
         let plain = global_deviance(&Gaussian, &y, None, &models).unwrap();
-        let same =
-            global_deviance_with(&Gaussian, &y, None, &models, "mu", &models["mu"].mu).unwrap();
+        let same = global_deviance_with(
+            &Gaussian,
+            &y,
+            None,
+            &models,
+            Param::Mu,
+            &models[&Param::Mu].mu,
+        )
+        .unwrap();
         assert!((plain - same).abs() < 1e-12);
     }
 
@@ -883,8 +932,8 @@ mod tests {
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
         let proposed = proposed_update(3.0);
         let halved = step_halving(
@@ -892,7 +941,7 @@ mod tests {
             &y,
             None,
             &models,
-            "mu",
+            Param::Mu,
             &proposed,
             MIN_STEP_ALPHA,
         )
@@ -910,8 +959,8 @@ mod tests {
         let y = array![1.0, 2.0, 3.0, 4.0, 5.0];
         let n = y.len();
         let mut models = IndexMap::new();
-        models.insert("mu".to_string(), intercept_only(0.0, n));
-        models.insert("sigma".to_string(), intercept_only_log(0.0, n));
+        models.insert(Param::Mu, intercept_only(0.0, n));
+        models.insert(Param::Sigma, intercept_only_log(0.0, n));
 
         let gd0 = global_deviance(&Gaussian, &y, None, &models).unwrap();
         let proposed = proposed_update(10.0);
@@ -920,7 +969,7 @@ mod tests {
             &y,
             None,
             &models,
-            "mu",
+            Param::Mu,
             &proposed,
             MIN_STEP_ALPHA,
         )
@@ -933,7 +982,7 @@ mod tests {
             halved.beta.0[0]
         );
         let gd_accepted =
-            global_deviance_with(&Gaussian, &y, None, &models, "mu", &halved.mu).unwrap();
+            global_deviance_with(&Gaussian, &y, None, &models, Param::Mu, &halved.mu).unwrap();
         assert!(
             gd_accepted <= gd0 + 1e-8,
             "accepted deviance {gd_accepted} should not exceed start {gd0}"

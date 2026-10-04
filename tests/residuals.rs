@@ -1,11 +1,9 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Randomized normalized quantile residuals.
 
 mod common;
 
 use common::{linear_intercepts, Generator};
+use glissando::Param;
 use glissando::{
     distributions::{Distribution, Gaussian, Poisson},
     GamlssModel,
@@ -54,7 +52,7 @@ fn filliben_correlation(resid: &Array1<f64>) -> f64 {
 fn quantile_residuals_gaussian_are_standard_normal() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(500, 1.0, 3.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     // Continuous family, so the seed is ignored; residuals are u = Φ⁻¹(F(y)).
@@ -80,7 +78,7 @@ fn quantile_residuals_gaussian_are_standard_normal() {
 fn quantile_residuals_poisson_are_calibrated() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.poisson_data(500, 0.5, 0.3);
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     let resid = model
@@ -105,7 +103,7 @@ fn quantile_residuals_poisson_are_calibrated() {
 fn quantile_residuals_continuous_ignore_seed() {
     let mut rng = Generator::new(1);
     let (y, data) = rng.linear_gaussian(100, 1.0, 2.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let a = model
@@ -128,7 +126,7 @@ fn quantile_residuals_continuous_ignore_seed() {
 fn quantile_residuals_discrete_seed_controls_randomization() {
     let mut rng = Generator::new(3);
     let (y, data) = rng.poisson_data(200, 0.5, 0.3);
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
 
     let same_a = model
@@ -156,7 +154,7 @@ fn quantile_residuals_discrete_respect_cdf_bracket() {
     use statrs::function::erf::erf;
     let mut rng = Generator::new(5);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
-    let formula = linear_intercepts("x", &["mu"]);
+    let formula = linear_intercepts("x", &[Param::Mu]);
     let family = Poisson::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 
@@ -164,8 +162,8 @@ fn quantile_residuals_discrete_respect_cdf_bracket() {
 
     // Reconstruct the fitted params and the jump interval [F(y−1), F(y)].
     let params_owned = model.predict(&data, &family).unwrap();
-    let params: std::collections::HashMap<&str, &Array1<f64>> =
-        params_owned.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    let params: std::collections::HashMap<Param, &Array1<f64>> =
+        params_owned.iter().map(|(&k, v)| (k, v)).collect();
     let upper = family.cdf(&y, &params).unwrap();
     let lower = family.cdf(&(&y - 1.0), &params).unwrap();
 

@@ -17,6 +17,7 @@
 //! is the mode used for the log-likelihood cross-check against mgcv.
 
 use glissando::distributions::Ocat;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
@@ -63,7 +64,7 @@ fn extract_column(df: &DataFrame, name: &str) -> Array1<f64> {
 fn make_formula(intercept_only: bool) -> Formula {
     let mut formula = Formula::new();
     if intercept_only {
-        formula.add_terms("mu".to_string(), vec![Term::Intercept]);
+        formula.add_terms(Param::Mu, vec![Term::Intercept]);
     } else {
         let mk_smooth = |col: &str| {
             Term::Smooth(Smooth::PSpline1D {
@@ -75,18 +76,12 @@ fn make_formula(intercept_only: bool) -> Formula {
             })
         };
         formula.add_terms(
-            "mu".to_string(),
+            Param::Mu,
             vec![Term::Intercept, mk_smooth("x1"), mk_smooth("x2")],
         );
     }
-    for k in 1..=3 {
-        let name = match k {
-            1 => "delta_1",
-            2 => "delta_2",
-            3 => "delta_3",
-            _ => unreachable!(),
-        };
-        formula.add_terms(name.to_string(), vec![Term::Intercept]);
+    for param in [Param::Delta1, Param::Delta2, Param::Delta3] {
+        formula.add_terms(param, vec![Term::Intercept]);
     }
     formula
 }

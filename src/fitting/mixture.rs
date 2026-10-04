@@ -117,7 +117,7 @@ impl MixtureModel {
         let mut out = Array1::<f64>::zeros(n);
         for (comp, &w) in self.components.iter().zip(self.weights.iter()) {
             let params = comp.predict(new_data, family)?;
-            let view = params.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            let view = params.iter().map(|(&k, v)| (k, v)).collect();
             let ek = family.expected_value(&view)?;
             out = out + w * &ek;
         }

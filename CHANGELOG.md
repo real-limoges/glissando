@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed (breaking): distribution parameters are a `Param` enum, not strings
+
+Parameter names (`"mu"`, `"sigma"`, `"nu"`, `"tau"`, `"phi"`, `"xi"`, `"delta_1"`..`"delta_4"`) were strings everywhere, so a typo or a parameter from the wrong family was only noticed when something looked it up, and sometimes never.
+They are now the closed enum `glissando::Param` (`Mu`, `Sigma`, `Nu`, `Tau`, `Phi`, `Xi`, `Delta1`..`Delta4`), and a string is parsed into one exactly once, where it enters the crate.
+
+- Rust API: `Formula::with_terms` / `add_terms` / `parse` take a `Param`; `GamlssModel.models`, `FitDiagnostics.param_diagnostics` and `FitConfig.links` are keyed by `Param`; `design_matrix`, `covariance_matrix`, `term_index_map` and `posterior_samples` take a `Param`; `predict`, `predict_with_se` and `predict_samples` return `Param`-keyed maps; `StepScope.param` is a `Param`.
+- `Distribution` trait: `parameters()` returns `&[Param]`, the per-parameter methods take `param: Param`, the params map is `HashMap<Param, &Array1<f64>>`, `DerivativeMap` / `CdfMap` are keyed by `Param`, and `LinkContext` is built from `(Param, &dyn Link, &Array1<f64>)` entries.
+- `Formula::from_strings` still takes string pairs and parses the names.
+- New error `GamlssError::InvalidParamName { name }` for a string that is no parameter at all; `UnknownParameter` remains for a real parameter the family lacks.
+- **New validation**: a formula that gives terms to a parameter the family does not have now fails with `UnknownParameter` instead of being silently ignored, and so does a `StepScope` for such a parameter.
+- JSON, WASM and Python keep their string names, and every wire format is byte-identical: `Param` serializes as its name. An invalid name in a JSON formula or config, or in a Python formula, scope, or `links` dict, now fails up front (Python raises `ValueError`).
+- **No numerical change**: every derivative and regression snapshot is byte-identical.
+
+### Changed (breaking): derivative maps carry their scale in the type
+
+`Distribution::theta_derivatives`, `eta_derivatives` and `cdf_theta_derivatives` used to return the same untyped `HashMap<String, (Array1<f64>, Array1<f64>)>` whether the numbers were on the natural scale θ or the linear-predictor scale η.
+Reading one as the other, or chaining twice, compiled and ran and only moved the estimates.
+They now return scale-tagged types, so that mix-up is a compile error.
+
+- New in `glissando::distributions`: the markers `Natural` and `Eta`, `ScoreInfo<S>` (fields `score`, `info`), `CdfGrad<S>` (fields `d1`, `d2`), and the maps `DerivativeMap<S>` and `CdfMap<S>`.
+- `theta_derivatives` returns `DerivativeMap<Natural>`, `eta_derivatives` returns `DerivativeMap<Eta>`, and `cdf_theta_derivatives` returns `CdfMap<Natural>`.
+- `chain_to_eta` takes a `DerivativeMap<Natural>` and returns a `DerivativeMap<Eta>`; it is the generic way from one scale to the other.
+- Natural-scale values are built with `ScoreInfo::new` / `CdfGrad::new`.
+  A hand-written `eta_derivatives` builds η-scale values with `ScoreInfo::computed_on_eta`, a deliberately explicit name.
+- Removed the aliases `DerivativesResult`, `CdfEtaMap`, `CdfEtaResult`, `CdfThetaMap` and `CdfThetaResult`.
+- **No numerical change**: every derivative and regression snapshot is byte-identical.
+
+
 ### Changed: replaced the `argmin` L-BFGS with an in-house optimizer
 
 **No public API change, and single-smooth fits are unchanged.**

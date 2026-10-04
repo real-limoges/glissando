@@ -47,9 +47,9 @@ It has three parameters, so the formula must name `nu`:
 
 ```rust
 let formula = Formula::new()
-    .with_terms("mu", vec![Term::Intercept, Term::linear("x")])
-    .with_terms("sigma", vec![Term::Intercept])
-    .with_terms("nu", vec![Term::Intercept]);   // required, or the fit errors
+    .with_terms(Param::Mu, vec![Term::Intercept, Term::linear("x")])
+    .with_terms(Param::Sigma, vec![Term::Intercept])
+    .with_terms(Param::Nu, vec![Term::Intercept]);   // required, or the fit errors
 let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 ```
 
@@ -97,10 +97,10 @@ It has an extra prediction method, `predict_class_probabilities`, returning an `
 ```rust
 let family = Ocat::new(4);
 let formula = Formula::new()
-    .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
-    .with_terms("delta_1", vec![Term::Intercept])
-    .with_terms("delta_2", vec![Term::Intercept])
-    .with_terms("delta_3", vec![Term::Intercept]);
+    .with_terms(Param::Mu, vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
+    .with_terms(Param::Delta1, vec![Term::Intercept])
+    .with_terms(Param::Delta2, vec![Term::Intercept])
+    .with_terms(Param::Delta3, vec![Term::Intercept]);
 let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 let probs = model.predict_class_probabilities(&data, &family).unwrap();  // n x 4
 ```
@@ -115,9 +115,9 @@ BCCG has three parameters, so the formula names `nu` (BCT and BCPE add a `tau` e
 ```rust
 let family = BCCG::new();
 let formula = Formula::new()
-    .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
-    .with_terms("sigma", vec![Term::Intercept])
-    .with_terms("nu", vec![Term::Intercept]);
+    .with_terms(Param::Mu, vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
+    .with_terms(Param::Sigma, vec![Term::Intercept])
+    .with_terms(Param::Nu, vec![Term::Intercept]);
 let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 // centile curves at the standard growth-chart percentiles
 let curves = model.centiles(&grid, &family, &[3.0, 15.0, 50.0, 85.0, 97.0]).unwrap();

@@ -4,6 +4,7 @@
 
 use crate::error::GamlssError;
 use crate::math::{std_normal_cdf, std_normal_pdf, std_normal_quantile};
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -395,13 +396,13 @@ impl Link for CauchitLink {
 /// [`Distribution::needs_second_order_links`](crate::distributions::Distribution::needs_second_order_links).
 ///
 /// Raw `η` is deliberately absent from the public surface.
-/// [`Ocat`](crate::distributions::Ocat) already carries η in its `params["mu"]`
+/// [`Ocat`](crate::distributions::Ocat) already carries η in its `params[&Param::Mu]`
 /// slot and that pattern should not spread;
 /// the crate-internal `LinkContext::link_and_eta` exists only for the structural
 /// wrappers' numeric CDF fallback, which must perturb the actual linear predictor.
 #[derive(Debug)]
 pub struct LinkContext<'a> {
-    entries: HashMap<&'a str, LinkEntry<'a>>,
+    entries: HashMap<Param, LinkEntry<'a>>,
 }
 
 #[derive(Debug)]
@@ -422,7 +423,7 @@ impl<'a> LinkContext<'a> {
     /// module stays below `fitting/` in the dependency order.
     pub fn new<I>(entries: I) -> Self
     where
-        I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
+        I: IntoIterator<Item = (Param, &'a dyn Link, &'a Array1<f64>)>,
     {
         Self::build(entries, true)
     }
@@ -434,14 +435,14 @@ impl<'a> LinkContext<'a> {
     /// type-level docs for why skipping it is worth a second constructor.
     pub fn first_order<I>(entries: I) -> Self
     where
-        I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
+        I: IntoIterator<Item = (Param, &'a dyn Link, &'a Array1<f64>)>,
     {
         Self::build(entries, false)
     }
 
     fn build<I>(entries: I, second_order: bool) -> Self
     where
-        I: IntoIterator<Item = (&'a str, &'a dyn Link, &'a Array1<f64>)>,
+        I: IntoIterator<Item = (Param, &'a dyn Link, &'a Array1<f64>)>,
     {
         let entries = entries
             .into_iter()
@@ -463,7 +464,7 @@ impl<'a> LinkContext<'a> {
     /// # Errors
     ///
     /// Returns [`GamlssError::Internal`] if the context holds no entry for `param`.
-    pub fn mu_eta(&self, param: &str) -> Result<&Array1<f64>, GamlssError> {
+    pub fn mu_eta(&self, param: Param) -> Result<&Array1<f64>, GamlssError> {
         Ok(&self.entry(param)?.mu_eta)
     }
 
@@ -474,7 +475,7 @@ impl<'a> LinkContext<'a> {
     /// Returns [`GamlssError::Internal`] if the context holds no entry for `param`,
     /// or if it was built by [`Self::first_order`] and so never computed the second
     /// derivative.
-    pub fn mu_eta2(&self, param: &str) -> Result<&Array1<f64>, GamlssError> {
+    pub fn mu_eta2(&self, param: Param) -> Result<&Array1<f64>, GamlssError> {
         self.entry(param)?.mu_eta2.as_ref().ok_or_else(|| {
             GamlssError::Internal(format!(
                 "LinkContext for '{}' is first-order only; a family that reads mu_eta2 \
@@ -491,12 +492,12 @@ impl<'a> LinkContext<'a> {
     /// finite-differences `base.cdf` on η itself rather than on θ, and so needs the
     /// actual linear predictor instead of `link.link(θ)`, a round trip that is not
     /// the identity under `sqrt` for η < 0, or `inverse_square` at all.
-    pub(crate) fn link_and_eta(&self, param: &str) -> Option<(&dyn Link, &Array1<f64>)> {
-        self.entries.get(param).map(|e| (e.link, e.eta))
+    pub(crate) fn link_and_eta(&self, param: Param) -> Option<(&dyn Link, &Array1<f64>)> {
+        self.entries.get(&param).map(|e| (e.link, e.eta))
     }
 
-    fn entry(&self, param: &str) -> Result<&LinkEntry<'a>, GamlssError> {
-        self.entries.get(param).ok_or_else(|| {
+    fn entry(&self, param: Param) -> Result<&LinkEntry<'a>, GamlssError> {
+        self.entries.get(&param).ok_or_else(|| {
             GamlssError::Internal(format!(
                 "LinkContext has no entry for parameter '{}'",
                 param
@@ -869,19 +870,29 @@ mod tests {
         let eta_sigma = Array1::from(vec![0.5, 0.5, 0.5]);
         let (id, log) = (IdentityLink, LogLink);
         let ctx = LinkContext::new([
-            ("mu", &id as &dyn Link, &eta_mu),
-            ("sigma", &log as &dyn Link, &eta_sigma),
+            (Param::Mu, &id as &dyn Link, &eta_mu),
+            (Param::Sigma, &log as &dyn Link, &eta_sigma),
         ]);
 
         // Identity: dμ/dη ≡ 1, d²μ/dη² ≡ 0.
-        assert_eq!(ctx.mu_eta("mu").unwrap(), &Array1::from(vec![1.0; 3]));
-        assert_eq!(ctx.mu_eta2("mu").unwrap(), &Array1::from(vec![0.0; 3]));
+        assert_eq!(ctx.mu_eta(Param::Mu).unwrap(), &Array1::from(vec![1.0; 3]));
+        assert_eq!(ctx.mu_eta2(Param::Mu).unwrap(), &Array1::from(vec![0.0; 3]));
 
         // Log: both derivatives equal μ = e^η.
-        for (&got, &eta) in ctx.mu_eta("sigma").unwrap().iter().zip(eta_sigma.iter()) {
+        for (&got, &eta) in ctx
+            .mu_eta(Param::Sigma)
+            .unwrap()
+            .iter()
+            .zip(eta_sigma.iter())
+        {
             assert!((got - eta.exp()).abs() < 1e-12);
         }
-        for (&got, &eta) in ctx.mu_eta2("sigma").unwrap().iter().zip(eta_sigma.iter()) {
+        for (&got, &eta) in ctx
+            .mu_eta2(Param::Sigma)
+            .unwrap()
+            .iter()
+            .zip(eta_sigma.iter())
+        {
             assert!((got - eta.exp()).abs() < 1e-12);
         }
     }
@@ -890,14 +901,14 @@ mod tests {
     fn link_context_reports_a_missing_parameter() {
         let eta = Array1::from(vec![0.0]);
         let id = IdentityLink;
-        let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
+        let ctx = LinkContext::new([(Param::Mu, &id as &dyn Link, &eta)]);
 
-        let err = ctx.mu_eta("nu").unwrap_err().to_string();
+        let err = ctx.mu_eta(Param::Nu).unwrap_err().to_string();
         assert!(err.contains("nu"), "unexpected message: {err}");
-        assert!(ctx.mu_eta2("nu").is_err());
-        assert!(ctx.link_and_eta("nu").is_none());
+        assert!(ctx.mu_eta2(Param::Nu).is_err());
+        assert!(ctx.link_and_eta(Param::Nu).is_none());
 
-        let (link, got_eta) = ctx.link_and_eta("mu").expect("present");
+        let (link, got_eta) = ctx.link_and_eta(Param::Mu).expect("present");
         assert_eq!(link.name(), "identity");
         assert_eq!(got_eta, &eta);
     }

@@ -1,6 +1,3 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! DIAGNOSTIC harness (`#[ignore]`d) for the smoothing-parameter bistability:
 //! a P-spline smooth on the control case (`mu_smooth_recovers_nonlinear_mean_control`)
 //! sometimes collapses onto its penalty null space (edf → ~2, a straight line)
@@ -27,6 +24,7 @@
 //!
 //! Run with: `cargo test --test lambda_bistability -- --ignored --nocapture`
 
+use glissando::Param;
 use glissando::{
     distributions::Gaussian, DataSet, FitConfig, Formula, GamlssModel, Smooth, SmoothingCriterion,
     Term,
@@ -79,8 +77,8 @@ fn smooth_term() -> Term {
 
 fn control_formula() -> Formula {
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept, smooth_term()]);
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept, smooth_term()]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept]);
     formula
 }
 
@@ -105,8 +103,8 @@ fn sigma_data() -> (DataSet, Array1<f64>, Vec<f64>) {
 
 fn sigma_formula() -> Formula {
     let mut formula = Formula::new();
-    formula.add_terms("mu".to_string(), vec![Term::Intercept]);
-    formula.add_terms("sigma".to_string(), vec![Term::Intercept, smooth_term()]);
+    formula.add_terms(Param::Mu, vec![Term::Intercept]);
+    formula.add_terms(Param::Sigma, vec![Term::Intercept, smooth_term()]);
     formula
 }
 
@@ -120,10 +118,10 @@ fn fit_sigma_once(criterion: SmoothingCriterion) -> (f64, f64, f64, usize) {
     };
     let model = GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), cfg)
         .expect("fit failed");
-    let sigma = &model.models["sigma"];
+    let sigma = &model.models[&Param::Sigma];
     let smooth_edf = *sigma.term_edf.last().unwrap();
     let preds = model.predict(&data, &Gaussian::new()).unwrap();
-    let fitted: Vec<f64> = preds["sigma"].iter().map(|s| s.ln()).collect();
+    let fitted: Vec<f64> = preds[&Param::Sigma].iter().map(|s| s.ln()).collect();
     let truth: Vec<f64> = x_vals.iter().map(|&x| true_curve(x)).collect();
     (
         sigma.edf,
@@ -143,10 +141,10 @@ fn fit_once(criterion: SmoothingCriterion) -> (f64, f64, f64, usize) {
     };
     let model = GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), cfg)
         .expect("fit failed");
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     let smooth_edf = *mu.term_edf.last().unwrap();
     let preds = model.predict(&data, &Gaussian::new()).unwrap();
-    let fitted: Vec<f64> = preds["mu"].to_vec();
+    let fitted: Vec<f64> = preds[&Param::Mu].to_vec();
     let truth: Vec<f64> = x_vals.iter().map(|&x| true_curve(x)).collect();
     (
         mu.edf,

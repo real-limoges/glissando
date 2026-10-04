@@ -5,13 +5,11 @@
 //! proptest checks that rendering a parsed formula and reparsing it is a fixed
 //! point, so nothing drifts across the parse ⇄ Display boundary.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::Generator;
 use glissando::distributions::Gaussian;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 
@@ -22,16 +20,16 @@ fn parsed_formula_fits_identically_to_builder() {
     let (y, data) = rng.heteroskedastic_gaussian(300);
 
     let built = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::linear("x")])
-        .with_terms("sigma", vec![Term::Intercept, Term::linear("x")]);
+        .with_terms(Param::Mu, vec![Term::Intercept, Term::linear("x")])
+        .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
     let parsed = Formula::from_strings([("mu", "y ~ x"), ("sigma", "~ x")]).unwrap();
 
     let m_built = GamlssModel::fit(&data, &y, &built, &Gaussian).unwrap();
     let m_parsed = GamlssModel::fit(&data, &y, &parsed, &Gaussian).unwrap();
 
-    for param in ["mu", "sigma"] {
-        let a = &m_built.models[param].coefficients.0;
-        let b = &m_parsed.models[param].coefficients.0;
+    for param in [Param::Mu, Param::Sigma] {
+        let a = &m_built.models[&param].coefficients.0;
+        let b = &m_parsed.models[&param].coefficients.0;
         assert_eq!(a.len(), b.len(), "{param} coefficient count");
         for (x, z) in a.iter().zip(b.iter()) {
             assert!((x - z).abs() < 1e-12, "{param}: {x} vs {z}");
@@ -47,8 +45,11 @@ fn parsed_smooth_matches_builder_smooth() {
     let (y, data) = rng.heteroskedastic_gaussian(250);
 
     let built = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::smooth(Smooth::ps("x"))],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
     let parsed = Formula::from_strings([("mu", "y ~ s(x)"), ("sigma", "~ 1")]).unwrap();
 
     let m_built = GamlssModel::fit(&data, &y, &built, &Gaussian).unwrap();
@@ -56,7 +57,7 @@ fn parsed_smooth_matches_builder_smooth() {
 
     let p_built = m_built.predict(&data, &Gaussian).unwrap();
     let p_parsed = m_parsed.predict(&data, &Gaussian).unwrap();
-    for (a, b) in p_built["mu"].iter().zip(p_parsed["mu"].iter()) {
+    for (a, b) in p_built[&Param::Mu].iter().zip(p_parsed[&Param::Mu].iter()) {
         assert!((a - b).abs() < 1e-10, "smooth fit drifted: {a} vs {b}");
     }
 }
@@ -84,7 +85,7 @@ fn rich_string_formula_fits_end_to_end() {
             .unwrap();
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap();
     let pred = model.predict(&data, &Gaussian).unwrap();
-    for (p, yi) in pred["mu"].iter().zip(y.iter()) {
+    for (p, yi) in pred[&Param::Mu].iter().zip(y.iter()) {
         assert!((p - yi).abs() < 0.05, "string-formula fit off: {p} vs {yi}");
     }
 }

@@ -1,10 +1,8 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 //! Closed-form anchors: the iterative fitter must recover the exact analytic
 //! solution on problems where one exists, independent of any snapshot or
 //! regression comparison against past runs.
 
+use glissando::Param;
 use glissando::{distributions::Gaussian, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -32,7 +30,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
 
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![
                 Term::Intercept,
                 Term::Linear {
@@ -40,7 +38,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
                 },
             ],
         )
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
@@ -58,7 +56,7 @@ fn gaussian_linear_recovers_ols_to_floating_point() {
     let beta_ols = sxy / sxx;
     let alpha_ols = y_bar - beta_ols * x_bar;
 
-    let mu_coefs = &model.models["mu"].coefficients;
+    let mu_coefs = &model.models[&Param::Mu].coefficients;
     assert!(
         (mu_coefs[0] - alpha_ols).abs() < 1e-6,
         "intercept: OLS {:.8}, fit {:.8}",
@@ -81,8 +79,8 @@ fn gaussian_intercept_only_recovers_sample_mean() {
 
     let data = DataSet::new();
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     // intercept-only models fit fine with no data columns. The dummy column is
     // only here so n_obs detection has something to count.
@@ -90,7 +88,7 @@ fn gaussian_intercept_only_recovers_sample_mean() {
     data.insert_column("_unused", Array1::ones(y.len()));
 
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
-    let mu_intercept = model.models["mu"].coefficients[0];
+    let mu_intercept = model.models[&Param::Mu].coefficients[0];
     assert!(
         (mu_intercept - y_bar).abs() < 1e-6,
         "intercept should equal ȳ = {:.6}, got {:.6}",

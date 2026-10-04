@@ -5,10 +5,8 @@
 //! for a Gaussian identity-link model `μ = X·β + o`, fitting `y` with offset `o`
 //! is exactly fitting `(y − o)` with no offset.
 
-// Can't run under the `python` feature (PyO3 linking).
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{Gaussian, Poisson};
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -18,8 +16,8 @@ fn gaussian_two_param(with_offset: bool) -> Formula {
         mu.push(Term::offset("o"));
     }
     Formula::new()
-        .with_terms("mu", mu)
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, mu)
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 /// Gaussian identity link: fitting with an offset equals fitting on the
@@ -66,8 +64,8 @@ fn gaussian_offset_equals_folding_into_response() {
     .unwrap();
 
     // μ coefficients (intercept, slope) coincide.
-    let beta_a = &model_a.models["mu"].coefficients.0;
-    let beta_b = &model_b.models["mu"].coefficients.0;
+    let beta_a = &model_a.models[&Param::Mu].coefficients.0;
+    let beta_b = &model_b.models[&Param::Mu].coefficients.0;
     for (a, b) in beta_a.iter().zip(beta_b.iter()) {
         assert!(
             (a - b).abs() < 1e-6,
@@ -78,7 +76,11 @@ fn gaussian_offset_equals_folding_into_response() {
     // Fitted μ from A equals fitted-from-B plus the offset, row by row.
     let pred_a = model_a.predict(&data, &Gaussian).unwrap();
     let pred_b = model_b.predict(&data, &Gaussian).unwrap();
-    for ((a, b), oi) in pred_a["mu"].iter().zip(pred_b["mu"].iter()).zip(&o) {
+    for ((a, b), oi) in pred_a[&Param::Mu]
+        .iter()
+        .zip(pred_b[&Param::Mu].iter())
+        .zip(&o)
+    {
         assert!(
             (a - (b + oi)).abs() < 1e-6,
             "fitted μ mismatch: {a} vs {b} + {oi}"
@@ -106,8 +108,8 @@ fn offset_changes_the_fit() {
     let with = GamlssModel::fit(&data, &y, &gaussian_two_param(true), &Gaussian).unwrap();
     let without = GamlssModel::fit(&data, &y, &gaussian_two_param(false), &Gaussian).unwrap();
 
-    let int_with = with.models["mu"].coefficients.0[0];
-    let int_without = without.models["mu"].coefficients.0[0];
+    let int_with = with.models[&Param::Mu].coefficients.0[0];
+    let int_without = without.models[&Param::Mu].coefficients.0[0];
     assert!(
         (int_with - int_without).abs() > 0.5,
         "offset should shift the intercept materially: {int_with} vs {int_without}"
@@ -135,9 +137,10 @@ fn poisson_offset_recovers_rate_intercept() {
     data.insert_column("log_e", Array1::from_vec(log_e));
     let y = Array1::from_vec(y);
 
-    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, Term::offset("log_e")]);
+    let formula =
+        Formula::new().with_terms(Param::Mu, vec![Term::Intercept, Term::offset("log_e")]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson).unwrap();
-    let intercept = model.models["mu"].coefficients.0[0];
+    let intercept = model.models[&Param::Mu].coefficients.0[0];
     assert!(
         (intercept - log_rate).abs() < 0.2,
         "Poisson offset model should recover log-rate intercept ≈ {log_rate}, got {intercept}"

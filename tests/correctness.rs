@@ -1,9 +1,7 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
 mod common;
 
 use common::{linear_intercepts, smooth_intercepts, Generator};
+use glissando::Param;
 use glissando::{
     distributions::Gaussian, Coefficients, CovarianceMatrix, GamlssError, GamlssModel,
 };
@@ -33,12 +31,10 @@ fn posterior_samples_propagates_non_pd_error() {
     // Confirms the second error branch (UnknownParameter) fires too.
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(50, 1.0, 2.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
-    let err = model
-        .posterior_samples("does_not_exist", 5, None)
-        .unwrap_err();
+    let err = model.posterior_samples(Param::Tau, 5, None).unwrap_err();
     assert!(
         matches!(err, GamlssError::UnknownParameter { .. }),
         "expected UnknownParameter, got {:?}",
@@ -64,10 +60,10 @@ fn smooth_only_fit_converges_without_intercept_seed() {
     let mut data = glissando::DataSet::new();
     data.insert_column("x", x);
 
-    let formula = smooth_intercepts("x", 10, &["mu", "sigma"]);
+    let formula = smooth_intercepts("x", 10, &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     assert!(model.converged(), "smooth-only mu formula should converge");
-    assert!(model.models["mu"]
+    assert!(model.models[&Param::Mu]
         .coefficients
         .0
         .iter()
@@ -86,7 +82,7 @@ fn smooth_only_fit_converges_without_intercept_seed() {
 fn display_summary_includes_convergence_and_per_param_block() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.linear_gaussian(50, 1.0, 2.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let s = format!("{}", model);
@@ -111,7 +107,7 @@ fn param_diagnostic_exposes_clamp_counters() {
     // surface so callers can spot a degenerate fit.
     let mut rng = Generator::new(99);
     let (y, data) = rng.linear_gaussian(50, 1.0, 2.0, 0.5);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     for (param, diag) in &model.diagnostics.param_diagnostics {

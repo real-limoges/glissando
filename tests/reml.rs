@@ -13,12 +13,12 @@
 // existing benchmark harness (`benchmark/run_comparison.sh` + the ignored
 // `tests/mgcv_reference.rs`); duplicating that here would re-implement the same
 // workflow.
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;
 
 use common::{pspline, Generator};
+use glissando::Param;
 use glissando::{
     distributions::{Gaussian, Poisson},
     DataSet, FitConfig, Formula, GamlssModel, SmoothingCriterion, Term,
@@ -64,8 +64,8 @@ fn reml_fits_gaussian_pspline_end_to_end() {
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 10)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 10)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let cfg = FitConfig {
         criterion: SmoothingCriterion::Reml,
@@ -76,7 +76,7 @@ fn reml_fits_gaussian_pspline_end_to_end() {
 
     assert!(model.converged(), "REML fit failed to converge");
 
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
     assert!(mu.edf > 1.0, "EDF too small (over-smoothed): {}", mu.edf);
     // mu has 1 intercept + (n_splines - 1) sum-to-zero spline columns ≈ 10 cols total.
@@ -93,7 +93,7 @@ fn reml_fits_poisson_pspline_end_to_end() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
 
-    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
+    let formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)]);
     let cfg = FitConfig {
         criterion: SmoothingCriterion::Reml,
         ..FitConfig::default()
@@ -102,7 +102,7 @@ fn reml_fits_poisson_pspline_end_to_end() {
         GamlssModel::fit_with_config(&data, &y, None, &formula, &Poisson::new(), cfg).unwrap();
 
     assert!(model.converged(), "REML Poisson fit failed to converge");
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
     assert!(
         mu.edf > 1.0 && mu.edf < 8.0,
@@ -123,8 +123,8 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
     let (y, data) = rng.linear_gaussian(150, 1.0, 5.0, 1.0);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 10)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 10)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let reml = GamlssModel::fit_with_config(
         &data,
@@ -139,7 +139,7 @@ fn reml_correctly_smooths_linear_trend_to_null_space() {
     )
     .unwrap();
 
-    let edf = reml.models["mu"].edf;
+    let edf = reml.models[&Param::Mu].edf;
     assert!(
         edf < 3.0,
         "REML should collapse to penalty null space on linear data (EDF ≈ 2), got {}",
@@ -154,8 +154,8 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 15)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 15)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let reml = GamlssModel::fit_with_config(
         &data,
@@ -182,19 +182,19 @@ fn reml_and_gcv_agree_on_wiggly_truth() {
     )
     .unwrap();
 
-    let edf_diff = (reml.models["mu"].edf - gcv.models["mu"].edf).abs();
+    let edf_diff = (reml.models[&Param::Mu].edf - gcv.models[&Param::Mu].edf).abs();
     assert!(
         edf_diff < 3.0,
         "REML EDF ({}) and GCV EDF ({}) disagree by more than 3.0 on wiggly truth",
-        reml.models["mu"].edf,
-        gcv.models["mu"].edf
+        reml.models[&Param::Mu].edf,
+        gcv.models[&Param::Mu].edf
     );
 
     let pred_reml = reml.predict(&data, &Gaussian::new()).unwrap();
     let pred_gcv = gcv.predict(&data, &Gaussian::new()).unwrap();
-    let max_abs: f64 = pred_reml["mu"]
+    let max_abs: f64 = pred_reml[&Param::Mu]
         .iter()
-        .zip(pred_gcv["mu"].iter())
+        .zip(pred_gcv[&Param::Mu].iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0_f64, f64::max);
     assert!(
@@ -213,8 +213,8 @@ fn fellner_schall_fits_gaussian_pspline_end_to_end() {
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 15)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 15)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let cfg = FitConfig {
         criterion: SmoothingCriterion::FellnerSchall,
@@ -224,7 +224,7 @@ fn fellner_schall_fits_gaussian_pspline_end_to_end() {
         GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), cfg).unwrap();
 
     assert!(model.converged(), "F-S fit failed to converge");
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
     assert!(
         mu.edf > 2.0 && mu.edf < 15.0,
@@ -239,7 +239,7 @@ fn fellner_schall_fits_poisson_pspline_end_to_end() {
     let mut rng = Generator::new(7);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
 
-    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
+    let formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)]);
     let cfg = FitConfig {
         criterion: SmoothingCriterion::FellnerSchall,
         ..FitConfig::default()
@@ -248,7 +248,7 @@ fn fellner_schall_fits_poisson_pspline_end_to_end() {
         GamlssModel::fit_with_config(&data, &y, None, &formula, &Poisson::new(), cfg).unwrap();
 
     assert!(model.converged(), "F-S Poisson fit failed to converge");
-    let mu = &model.models["mu"];
+    let mu = &model.models[&Param::Mu];
     assert!(mu.coefficients.0.iter().all(|c| c.is_finite()));
     assert!(
         mu.edf > 1.0 && mu.edf < 8.0,
@@ -267,8 +267,8 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
     let (y, data) = sinusoidal_gaussian(200, 0.2, 42);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 15)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 15)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let reml = GamlssModel::fit_with_config(
         &data,
@@ -295,21 +295,22 @@ fn fellner_schall_and_reml_converge_to_similar_lambda() {
     )
     .unwrap();
 
-    let edf_diff = (reml.models["mu"].edf - fs.models["mu"].edf).abs();
+    let edf_diff = (reml.models[&Param::Mu].edf - fs.models[&Param::Mu].edf).abs();
     assert!(
         edf_diff < 1.5,
         "F-S EDF ({}) and REML EDF ({}) disagree by more than 1.5",
-        fs.models["mu"].edf,
-        reml.models["mu"].edf
+        fs.models[&Param::Mu].edf,
+        reml.models[&Param::Mu].edf
     );
 
     let log_ratio =
-        (fs.models["mu"].lambdas[0].ln() - reml.models["mu"].lambdas[0].ln()).abs() / 10f64.ln();
+        (fs.models[&Param::Mu].lambdas[0].ln() - reml.models[&Param::Mu].lambdas[0].ln()).abs()
+            / 10f64.ln();
     assert!(
         log_ratio < 1.0,
         "F-S λ ({}) and REML λ ({}) disagree by more than 1 order of magnitude",
-        fs.models["mu"].lambdas[0],
-        reml.models["mu"].lambdas[0]
+        fs.models[&Param::Mu].lambdas[0],
+        reml.models[&Param::Mu].lambdas[0]
     );
 }
 
@@ -319,8 +320,8 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
     let mut rng = Generator::new(123);
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 8)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let fs = GamlssModel::fit_with_config(
         &data,
@@ -348,7 +349,7 @@ fn fellner_schall_dispatch_is_distinct_from_gcv() {
     .unwrap();
 
     assert!(
-        (fs.models["mu"].lambdas[0] - gcv.models["mu"].lambdas[0]).abs() > 1e-12,
+        (fs.models[&Param::Mu].lambdas[0] - gcv.models[&Param::Mu].lambdas[0]).abs() > 1e-12,
         "F-S and GCV produced identical λ; dispatch may not be wired"
     );
 }
@@ -361,8 +362,8 @@ fn criterion_dispatch_is_observable() {
     let (y, data) = rng.linear_gaussian(80, 1.0, 5.0, 1.0);
 
     let formula = Formula::new()
-        .with_terms("mu", vec![Term::Intercept, pspline("x", 8)])
-        .with_terms("sigma", vec![Term::Intercept]);
+        .with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
 
     let reml = GamlssModel::fit_with_config(
         &data,
@@ -389,7 +390,8 @@ fn criterion_dispatch_is_observable() {
     )
     .unwrap();
 
-    let lambdas_differ = (reml.models["mu"].lambdas[0] - gcv.models["mu"].lambdas[0]).abs() > 1e-12;
+    let lambdas_differ =
+        (reml.models[&Param::Mu].lambdas[0] - gcv.models[&Param::Mu].lambdas[0]).abs() > 1e-12;
     let iters_differ = reml.diagnostics.iterations != gcv.diagnostics.iterations;
     assert!(
         lambdas_differ || iters_differ,

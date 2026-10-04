@@ -7,13 +7,13 @@
 // First-time creation / deliberate refresh:
 //   INSTA_UPDATE=auto cargo test --features serialization --test snapshot_diagnostics
 // then promote the `.snap.new` files by hand (cargo-insta is not installed).
-#![cfg(not(feature = "python"))]
 #![cfg(not(target_arch = "wasm32"))]
 
 mod common;
 
 use common::{linear_intercepts, pspline, Generator};
 use glissando::distributions::{Distribution, Gaussian, Poisson};
+use glissando::Param;
 use glissando::{Formula, GamlssModel, Term};
 use ndarray::Array1;
 use serde::Serialize;
@@ -94,7 +94,7 @@ impl DiagnosticsSnapshot {
 fn diagnostics_gaussian_linear() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
     let snap = DiagnosticsSnapshot::from_fit(&model, &Gaussian::new(), &y);
     insta::assert_yaml_snapshot!(snap);
@@ -104,7 +104,7 @@ fn diagnostics_gaussian_linear() {
 fn diagnostics_poisson_pspline() {
     let mut rng = Generator::new(42);
     let (y, data) = rng.poisson_data(150, 0.5, 0.3);
-    let formula = Formula::new().with_terms("mu", vec![Term::Intercept, pspline("x", 8)]);
+    let formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept, pspline("x", 8)]);
     let model = GamlssModel::fit(&data, &y, &formula, &Poisson::new()).unwrap();
     let snap = DiagnosticsSnapshot::from_fit(&model, &Poisson::new(), &y);
     insta::assert_yaml_snapshot!(snap);
@@ -117,7 +117,7 @@ fn centiles_gaussian_linear() {
     use glissando::DataSet;
     let mut rng = Generator::new(42);
     let (y, data) = rng.linear_gaussian(100, 1.0, 5.0, 1.0);
-    let formula = linear_intercepts("x", &["mu", "sigma"]);
+    let formula = linear_intercepts("x", &[Param::Mu, Param::Sigma]);
     let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
     let mut grid = DataSet::new();

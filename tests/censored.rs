@@ -2,9 +2,8 @@
 //! standard RS loop, recovers known parameters under right-censoring, and collapses
 //! back to the base family when every row is an event.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::{CensorStatus, Censored, Distribution, Gaussian};
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -13,8 +12,8 @@ use ndarray::Array1;
 fn latent_gaussian(mu: f64, sigma: f64, n: usize) -> Array1<f64> {
     let p = Array1::from_iter((0..n).map(|i| (i as f64 + 0.5) / n as f64));
     let owned = [
-        ("mu", Array1::from_elem(n, mu)),
-        ("sigma", Array1::from_elem(n, sigma)),
+        (Param::Mu, Array1::from_elem(n, mu)),
+        (Param::Sigma, Array1::from_elem(n, sigma)),
     ];
     let view = owned.iter().map(|(k, v)| (*k, v)).collect();
     Gaussian.quantile(&p, &view).unwrap()
@@ -22,8 +21,8 @@ fn latent_gaussian(mu: f64, sigma: f64, n: usize) -> Array1<f64> {
 
 fn intercept_only() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 fn dummy_data(n: usize) -> DataSet {
@@ -46,8 +45,8 @@ fn all_event_matches_plain_gaussian_fit() {
     let censored_fit = GamlssModel::fit(&data, &y, &formula, &cens).unwrap();
 
     // All-event censoring is exactly the base likelihood, so the coefficients have to come out identical.
-    let plain_mu = plain.models["mu"].coefficients.0[0];
-    let cens_mu = censored_fit.models["mu"].coefficients.0[0];
+    let plain_mu = plain.models[&Param::Mu].coefficients.0[0];
+    let cens_mu = censored_fit.models[&Param::Mu].coefficients.0[0];
     assert!(
         (plain_mu - cens_mu).abs() < 1e-6,
         "all-event mu {cens_mu} should match plain {plain_mu}"
@@ -83,7 +82,7 @@ fn right_censored_recovers_mean() {
     let cens = Censored::new(Box::new(Gaussian::new()), status);
     let fit = GamlssModel::fit(&data, &y, &formula, &cens).unwrap();
 
-    let mu_hat = fit.models["mu"].coefficients.0[0];
+    let mu_hat = fit.models[&Param::Mu].coefficients.0[0];
     // A naive fit treating censored values as observed comes out biased low (≈ the
     // censored sample mean, well under 5). The censored MLE is what recovers ≈ 5.
     assert!(

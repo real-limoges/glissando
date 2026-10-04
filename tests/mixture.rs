@@ -1,10 +1,9 @@
 //! Mixture integration tests. Finite mixtures fit by EM should recover a known
 //! two-component structure and beat a single-component fit.
 
-#![cfg(not(feature = "python"))]
-
 use glissando::distributions::Gaussian;
 use glissando::fitting::mixture::fit_mixture;
+use glissando::Param;
 use glissando::{DataSet, FitConfig, Formula, GamlssModel, Term};
 use ndarray::Array1;
 
@@ -29,8 +28,8 @@ fn two_cluster_data() -> (DataSet, Array1<f64>) {
 
 fn intercept_only() -> Formula {
     Formula::new()
-        .with_terms("mu", vec![Term::Intercept])
-        .with_terms("sigma", vec![Term::Intercept])
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
 }
 
 #[test]
@@ -52,7 +51,7 @@ fn mixture_recovers_two_components() {
     let mut means: Vec<f64> = mix
         .components
         .iter()
-        .map(|c| c.models["mu"].coefficients.0[0])
+        .map(|c| c.models[&Param::Mu].coefficients.0[0])
         .collect();
     means.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert!(

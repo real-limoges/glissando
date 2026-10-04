@@ -1,10 +1,11 @@
 //! Weibull distribution for positive continuous data
 
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, Link, LogLink, DENOM_FLOOR,
-    MIN_POSITIVE,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, Link, LogLink, Natural,
+    ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, par_zip_map};
+use crate::Param;
 use ndarray::Array1;
 use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
@@ -24,23 +25,23 @@ impl Weibull {
 }
 
 impl Distribution for Weibull {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" | "sigma" => Ok(Box::new(LogLink)),
+            Param::Mu | Param::Sigma => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
 
     /// σ is the Weibull shape, and the default `y.std()` seed is meaningless for it.
     /// σ starts at 1 (Exponential), where the scale μ ≈ mean(y), and RS refines both.
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         match param {
-            "mu" => y.mean().expect("validate_inputs rejects empty y"),
-            "sigma" => 1.0,
+            Param::Mu => y.mean().expect("validate_inputs rejects empty y"),
+            Param::Sigma => 1.0,
             _ => 0.1,
         }
     }
@@ -50,16 +51,16 @@ impl Distribution for Weibull {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // z = (y/μ)^σ ~ Exp(1) at the truth. Natural scale:
         //   μ: ∂l/∂μ = σ(z−1)/μ,                    i_μ = σ²/μ².
         //   σ: ∂l/∂σ = [1 + σ·ln(y/μ)·(1−z)]/σ,     i_σ = (π²/6 + (1−γ)²)/σ².
         // Both default links are log, so `chain_to_eta` (mu_eta = μ, σ) recovers
         // the previous `u_μ = σ(z−1)`, `w_μ = σ²`, `u_σ = 1 + σ·ln(y/μ)(1−z)` and
         // the constant `w_σ`. Weights are returned unfloored.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
 
         let i_sigma_numer =
             std::f64::consts::PI.powi(2) / 6.0 + (1.0 - std::f64::consts::EULER_GAMMA).powi(2);
@@ -101,18 +102,18 @@ impl Distribution for Weibull {
         let i_sigma = inv_sigma_sq.mapv(|iss| i_sigma_numer * iss);
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let yv = yi.max(MIN_POSITIVE);
             let m = mui.max(MIN_POSITIVE);
@@ -123,19 +124,19 @@ impl Distribution for Weibull {
 
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         // E[Y] = μ·Γ(1 + 1/σ)
         Ok(par_zip_map(mu, sigma, |m, s| {
             m * ln_gamma(1.0 + 1.0 / s.max(MIN_POSITIVE)).exp()
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         // V[Y] = μ²·[Γ(1+2/σ) − Γ(1+1/σ)²]
         Ok(par_zip_map(mu, sigma, |m, s| {
             let s = s.max(MIN_POSITIVE);
@@ -148,11 +149,11 @@ impl Distribution for Weibull {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // F(y) = 1 − exp(−(y/μ)^σ)
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             if yi <= 0.0 {
                 return 0.0; // support is y > 0
@@ -165,11 +166,11 @@ impl Distribution for Weibull {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Q(p) = μ·(−ln(1 − p))^(1/σ)
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
             let pc = clamp_prob(pi);
             mui.max(MIN_POSITIVE) * (-(-pc).ln_1p()).powf(1.0 / si.max(MIN_POSITIVE))
@@ -201,21 +202,21 @@ mod tests {
         // tests are both false for NaN, so it reaches the PWLS solve and poisons it.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![0.0, 0.0, 1.0]),
-            ("sigma", array![5.0, 5.0, 5.0]),
+            (Param::Mu, array![0.0, 0.0, 1.0]),
+            (Param::Sigma, array![5.0, 5.0, 5.0]),
         ];
         let p = params_view(&owned);
-        let links = ParamLinks::overriding(&Weibull, &p, "mu", &SqrtLink);
+        let links = ParamLinks::overriding(&Weibull, &p, Param::Mu, &SqrtLink);
         let d = Weibull.eta_derivatives(&y, &p, &links.context()).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u, w) = &d[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u, w) = (&d[&name].score, &d[&name].info);
             assert!(
                 finite_array(u) && finite_array(w),
                 "{name}: u={u:?} w={w:?}"
             );
         }
         // A frozen row contributes nothing, not a saturated something.
-        assert_eq!((d["mu"].0[0], d["mu"].1[0]), (0.0, 0.0));
+        assert_eq!((d[&Param::Mu].score[0], d[&Param::Mu].info[0]), (0.0, 0.0));
     }
 
     #[test]
@@ -224,16 +225,16 @@ mod tests {
         let mu = array![1.0, 2.0, 4.0, 6.0];
         let sigma = array![0.8, 1.0, 1.5, 2.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         derivative_keys_match_parameters(&Weibull, p, &y);
     }
 
     #[test]
     fn loglik_weibull_finite_on_typical_inputs() {
         let owned = [
-            ("mu", array![2.0, 2.0, 4.0]),
-            ("sigma", array![0.8, 1.0, 1.5]),
+            (Param::Mu, array![2.0, 2.0, 4.0]),
+            (Param::Sigma, array![0.8, 1.0, 1.5]),
         ];
         let p = params_view(&owned);
         let ll = Weibull.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn mean_and_variance_match_gamma_function_moments() {
         // σ = 1 is Exponential(μ): E[Y] = μ, V[Y] = μ².
-        let owned = [("mu", array![3.0]), ("sigma", array![1.0])];
+        let owned = [(Param::Mu, array![3.0]), (Param::Sigma, array![1.0])];
         let p = params_view(&owned);
         let m = Weibull.expected_value(&p).unwrap();
         let v = Weibull.variance(&p).unwrap();
@@ -255,11 +256,11 @@ mod tests {
     fn score_matches_finite_diff_weibull() {
         let y = array![1.0, 2.5, 5.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0]),
-            ("sigma", array![0.8, 1.0, 1.5]),
+            (Param::Mu, array![1.5, 2.0, 4.0]),
+            (Param::Sigma, array![0.8, 1.0, 1.5]),
         ];
-        check_score_via_finite_diff(&Weibull, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&Weibull, &y, &owned, "sigma", 1e-5);
+        check_score_via_finite_diff(&Weibull, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&Weibull, &y, &owned, Param::Sigma, 1e-5);
     }
 
     #[test]
@@ -269,13 +270,13 @@ mod tests {
         // want a different `dμ/dη`, which this family no longer hardcodes.
         let y = array![1.0, 2.5, 5.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0]),
-            ("sigma", array![0.8, 1.0, 1.5]),
+            (Param::Mu, array![1.5, 2.0, 4.0]),
+            (Param::Sigma, array![0.8, 1.0, 1.5]),
         ];
-        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "mu", &InverseLink, 1e-5);
-        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Weibull, &y, &owned, "sigma", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, Param::Mu, &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Weibull, &y, &owned, Param::Sigma, &InverseLink, 1e-5);
     }
 
     #[test]
@@ -283,16 +284,16 @@ mod tests {
         // Un-folding introduces `1/μ` and `1/σ` the old η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8]),
-            ("sigma", array![1e-8, 0.0, 1e-320]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8]),
+            (Param::Sigma, array![1e-8, 0.0, 1e-320]),
         ];
         let p = params_view(&owned);
         let natural = Weibull.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Weibull, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }
@@ -302,8 +303,8 @@ mod tests {
     fn cdf_quantile_roundtrip_weibull() {
         let y = array![0.5, 1.5, 3.0, 7.0];
         let owned = [
-            ("mu", array![1.0, 2.0, 4.0, 6.0]),
-            ("sigma", array![0.8, 1.0, 1.5, 2.0]),
+            (Param::Mu, array![1.0, 2.0, 4.0, 6.0]),
+            (Param::Sigma, array![0.8, 1.0, 1.5, 2.0]),
         ];
         check_cdf_quantile_roundtrip(&Weibull, &y, &owned, 1e-6);
         check_cdf_pdf_consistency(&Weibull, &y, &owned, 1e-4, 1e-3);
@@ -312,10 +313,13 @@ mod tests {
     #[test]
     fn cdf_monotone_weibull_and_zero_below_support() {
         let grid = Array1::from_iter((0..60).map(|i| i as f64 * 0.2));
-        let owned = [("mu", array![3.0]), ("sigma", array![1.5])];
+        let owned = [(Param::Mu, array![3.0]), (Param::Sigma, array![1.5])];
         check_cdf_monotone_in_unit(&Weibull, &grid, &owned);
         // Both boundary points (y = 0 and y < 0) sit outside the y > 0 support.
-        let boundary_params = [("mu", array![3.0, 3.0]), ("sigma", array![1.5, 1.5])];
+        let boundary_params = [
+            (Param::Mu, array![3.0, 3.0]),
+            (Param::Sigma, array![1.5, 1.5]),
+        ];
         let p = params_view(&boundary_params);
         let at_boundary = Weibull.cdf(&array![0.0, -1.0], &p).unwrap();
         assert_eq!(at_boundary[0], 0.0);
@@ -325,15 +329,15 @@ mod tests {
     #[test]
     fn initial_values_are_sensible() {
         let y = array![1.0, 2.0, 3.0, 4.0];
-        assert!((Weibull.initial_value("mu", &y) - 2.5).abs() < 1e-12);
-        assert_eq!(Weibull.initial_value("sigma", &y), 1.0);
-        assert_eq!(Weibull.initial_value("other", &y), 0.1);
+        assert!((Weibull.initial_value(Param::Mu, &y) - 2.5).abs() < 1e-12);
+        assert_eq!(Weibull.initial_value(Param::Sigma, &y), 1.0);
+        assert_eq!(Weibull.initial_value(Param::Nu, &y), 0.1);
     }
 
     #[test]
     fn default_link_is_log_for_both_and_errs_on_unknown() {
-        assert!(Weibull.default_link("mu").is_ok());
-        assert!(Weibull.default_link("sigma").is_ok());
-        assert!(Weibull.default_link("nu").is_err());
+        assert!(Weibull.default_link(Param::Mu).is_ok());
+        assert!(Weibull.default_link(Param::Sigma).is_ok());
+        assert!(Weibull.default_link(Param::Nu).is_err());
     }
 }

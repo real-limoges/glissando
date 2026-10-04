@@ -1,10 +1,11 @@
 //! Gaussian (Normal) distribution.
 
 use super::{
-    require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    require, CdfGrad, DerivativeMap, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{par_zip3_map, std_normal_cdf, std_normal_pdf, std_normal_quantile};
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -21,14 +22,14 @@ impl Gaussian {
 }
 
 impl Distribution for Gaussian {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(IdentityLink)),
-            "sigma" => Ok(Box::new(LogLink)),
+            Param::Mu => Ok(Box::new(IdentityLink)),
+            Param::Sigma => Ok(Box::new(LogLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -38,8 +39,8 @@ impl Distribution for Gaussian {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Gaussian log-likelihood:  l = −0.5·log(2π) − log(σ) − (y−μ)²/(2σ²).
         // Natural scale (no link folded in):
         //   μ:  ∂l/∂μ = (y−μ)/σ²,               i_μ = 1/σ².
@@ -49,8 +50,8 @@ impl Distribution for Gaussian {
         // links. μ is identity (`mu_eta = 1`, so its entries pass through
         // untouched), and σ is log (`mu_eta = σ`), giving `u_η = ((y−μ)²−σ²)/σ²`
         // and `w_η = σ²·(2/σ²) = 2`. Weights come back unfloored.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
 
         let sigma_sq = sigma.mapv(|s| s * s);
         // Guard each reciprocal at its own power of σ rather than clamping σ, so the
@@ -69,18 +70,18 @@ impl Distribution for Gaussian {
         let i_sigma = 2.0 * &inv_sigma_sq;
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         let log_2pi = (2.0 * std::f64::consts::PI).ln();
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let s = si.max(MIN_POSITIVE);
@@ -89,18 +90,18 @@ impl Distribution for Gaussian {
         }))
     }
 
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(sigma.mapv(|s| s * s))
     }
 
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(par_zip3_map(y, mu, sigma, |yi, mui, si| {
             let z = (yi - mui) / si.max(MIN_POSITIVE);
             std_normal_cdf(z)
@@ -110,8 +111,8 @@ impl Distribution for Gaussian {
     fn cdf_theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> super::CdfThetaResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<super::CdfMap<Natural>, GamlssError> {
         // Natural-scale location-scale derivatives of F = Φ(z),
         // z = (y−μ)/σ, std-normal pdf φ, φ'(z) = −z·φ(z). ∂z/∂μ = −1/σ and
         // ∂z/∂σ = −z/σ, so:
@@ -121,8 +122,8 @@ impl Distribution for Gaussian {
         // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
         // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
         // σ·(−zφ/σ) = −zφ and σ²·zφ(2−z²)/σ² + σ·(−zφ/σ) = zφ(1 − z²).
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
 
         let mut d1_mu = Array1::<f64>::zeros(y.len());
         let mut d2_mu = Array1::<f64>::zeros(y.len());
@@ -159,18 +160,18 @@ impl Distribution for Gaussian {
             };
         }
         Ok(HashMap::from([
-            ("mu".to_string(), (d1_mu, d2_mu)),
-            ("sigma".to_string(), (d1_sigma, d2_sigma)),
+            (Param::Mu, CdfGrad::new(d1_mu, d2_mu)),
+            (Param::Sigma, CdfGrad::new(d1_sigma, d2_sigma)),
         ]))
     }
 
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         // Q(p) = μ + σ·Φ⁻¹(p); Φ⁻¹ is shared with the quantile residuals.
         Ok(par_zip3_map(p, mu, sigma, |pi, mui, si| {
             mui + si * std_normal_quantile(pi)
@@ -205,13 +206,13 @@ mod tests {
         // Row 2 is the milder case: z is finite but z² is not.
         let bounds = array![1e300, -1e300, 1e200];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0]),
-            ("sigma", array![1e-10, 1e-10, 1.0]),
+            (Param::Mu, array![0.0, 0.0, 0.0]),
+            (Param::Sigma, array![1e-10, 1e-10, 1.0]),
         ];
         let p = params_view(&owned);
         let d = Gaussian.cdf_theta_derivatives(&bounds, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (d1, d2) = (&d[&name].d1, &d[&name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -228,8 +229,8 @@ mod tests {
         let mu = array![0.0, 0.5, -0.5, 2.0];
         let sigma = array![1.0, 1.0, 2.0, 0.5];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         derivative_keys_match_parameters(&Gaussian, p, &y);
     }
 
@@ -239,10 +240,10 @@ mod tests {
         let mu = y.clone();
         let sigma = array![1.0, 1.0, 1.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
-        let (u_mu, w_mu) = &derivs["mu"];
+        let (u_mu, w_mu) = (&derivs[&Param::Mu].score, &derivs[&Param::Mu].info);
         assert!(u_mu.iter().all(|&v| v.abs() < 1e-12));
         // w_mu = 1/sigma^2 = 1.0
         assert!(w_mu.iter().all(|&v| (v - 1.0).abs() < 1e-12));
@@ -258,13 +259,13 @@ mod tests {
         // well defined on it.
         let y = array![0.5, 1.0, 2.0, 3.5, 5.0];
         let owned = [
-            ("mu", array![1.0, 1.5, 2.5, 3.0, 4.0]),
-            ("sigma", array![1.0, 1.2, 0.8, 1.5, 1.0]),
+            (Param::Mu, array![1.0, 1.5, 2.5, 3.0, 4.0]),
+            (Param::Sigma, array![1.0, 1.2, 0.8, 1.5, 1.0]),
         ];
-        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &LogLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", &InverseLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, Param::Mu, &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&Gaussian, &y, &owned, Param::Sigma, &InverseLink, 1e-5);
     }
 
     #[test]
@@ -274,16 +275,16 @@ mod tests {
         // σ underflowed to exactly zero included.
         let y = array![0.0, 1.0, 2.0];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0]),
-            ("sigma", array![0.0, 1e-320, 1e-8]),
+            (Param::Mu, array![0.0, 0.0, 0.0]),
+            (Param::Sigma, array![0.0, 1e-320, 1e-8]),
         ];
         let p = params_view(&owned);
         let natural = Gaussian.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&Gaussian, &y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
             assert!(w.iter().all(|&v| v >= 0.0));
         }
@@ -295,16 +296,16 @@ mod tests {
         let mu = array![0.0, 0.0, 0.0];
         let sigma = array![1.0, 2.0, 3.0];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
         let derivs = default_link_derivatives(&Gaussian, &y, &p).unwrap();
-        let (_, w_sigma) = &derivs["sigma"];
+        let (_, w_sigma) = (&derivs[&Param::Sigma].score, &derivs[&Param::Sigma].info);
         assert!(w_sigma.iter().all(|&v| (v - 2.0).abs() < 1e-12));
     }
 
     #[test]
     fn loglik_gaussian_matches_manual_formula() {
-        let owned = [("mu", array![0.0]), ("sigma", array![1.0])];
+        let owned = [(Param::Mu, array![0.0]), (Param::Sigma, array![1.0])];
         let p = params_view(&owned);
         let ll = Gaussian.loglik(&array![0.0], &p).unwrap();
         let expected = -0.5 * (2.0 * std::f64::consts::PI).ln();
@@ -313,7 +314,10 @@ mod tests {
 
     #[test]
     fn variance_gaussian_is_sigma_squared() {
-        let owned = [("mu", array![0.0, 0.0]), ("sigma", array![2.0, 3.0])];
+        let owned = [
+            (Param::Mu, array![0.0, 0.0]),
+            (Param::Sigma, array![2.0, 3.0]),
+        ];
         let p = params_view(&owned);
         let v = Gaussian.variance(&p).unwrap();
         assert!((v[0] - 4.0).abs() < 1e-12);
@@ -322,7 +326,10 @@ mod tests {
 
     #[test]
     fn expected_value_default_is_mu() {
-        let owned = [("mu", array![1.0, 2.0]), ("sigma", array![1.0, 1.0])];
+        let owned = [
+            (Param::Mu, array![1.0, 2.0]),
+            (Param::Sigma, array![1.0, 1.0]),
+        ];
         let p = params_view(&owned);
         let e = Gaussian.expected_value(&p).unwrap();
         assert_eq!(e, array![1.0, 2.0]);
@@ -332,22 +339,22 @@ mod tests {
     fn score_matches_finite_diff_gaussian() {
         let y = array![-1.0, 0.0, 1.0, 2.0];
         let owned = [
-            ("mu", array![-0.5, 0.5, 0.5, 1.5]),
-            ("sigma", array![1.0, 1.5, 0.8, 1.2]),
+            (Param::Mu, array![-0.5, 0.5, 0.5, 1.5]),
+            (Param::Sigma, array![1.0, 1.5, 0.8, 1.2]),
         ];
-        check_score_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-5);
+        check_score_via_finite_diff(&Gaussian, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&Gaussian, &y, &owned, Param::Sigma, 1e-5);
     }
 
     #[test]
     fn cdf_theta_derivatives_match_finite_diff_gaussian() {
         let y = array![-1.5, 0.0, 0.7, 2.3];
         let owned = [
-            ("mu", array![-0.5, 0.2, 1.0, 1.5]),
-            ("sigma", array![1.0, 1.3, 0.8, 1.1]),
+            (Param::Mu, array![-0.5, 0.2, 1.0, 1.5]),
+            (Param::Sigma, array![1.0, 1.3, 0.8, 1.1]),
         ];
-        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "mu", 1e-4);
-        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, "sigma", 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, Param::Mu, 1e-4);
+        check_cdf_theta_derivatives_via_finite_diff(&Gaussian, &y, &owned, Param::Sigma, 1e-4);
     }
 
     #[test]
@@ -358,13 +365,13 @@ mod tests {
         // own η clamp, plus σ underflowed to exactly zero.
         let y = array![0.0, 1.0, 2.0, -1.0];
         let owned = [
-            ("mu", array![0.0, 0.0, 0.0, 0.0]),
-            ("sigma", array![0.0, 1e-320, 1e-8, 1e13]),
+            (Param::Mu, array![0.0, 0.0, 0.0, 0.0]),
+            (Param::Sigma, array![0.0, 1e-320, 1e-8, 1e13]),
         ];
         let p = params_view(&owned);
         let d = Gaussian.cdf_theta_derivatives(&y, &p).unwrap();
-        for name in ["mu", "sigma"] {
-            let (d1, d2) = &d[name];
+        for name in [Param::Mu, Param::Sigma] {
+            let (d1, d2) = (&d[&name].d1, &d[&name].d2);
             assert!(
                 finite_array(d1) && finite_array(d2),
                 "{name}: {d1:?} {d2:?}"
@@ -376,8 +383,8 @@ mod tests {
     fn cdf_quantile_roundtrip_gaussian() {
         let y = array![-2.0, -0.3, 0.0, 1.7, 4.0];
         let owned = [
-            ("mu", array![0.0, 0.5, -1.0, 2.0, 3.0]),
-            ("sigma", array![1.0, 1.5, 0.8, 2.0, 1.2]),
+            (Param::Mu, array![0.0, 0.5, -1.0, 2.0, 3.0]),
+            (Param::Sigma, array![1.0, 1.5, 0.8, 2.0, 1.2]),
         ];
         check_cdf_quantile_roundtrip(&Gaussian, &y, &owned, 1e-7);
         check_cdf_pdf_consistency(&Gaussian, &y, &owned, 1e-4, 1e-4);
@@ -386,7 +393,7 @@ mod tests {
     #[test]
     fn cdf_monotone_and_median_is_mu_gaussian() {
         let grid = Array1::from_iter((0..50).map(|i| -5.0 + i as f64 * 0.2));
-        let owned = [("mu", array![0.7]), ("sigma", array![1.3])];
+        let owned = [(Param::Mu, array![0.7]), (Param::Sigma, array![1.3])];
         check_cdf_monotone_in_unit(&Gaussian, &grid, &owned);
         // 50th percentile of a symmetric family is the mean.
         let p = params_view(&owned);
@@ -405,7 +412,7 @@ mod tests {
             z in -6.0f64..6.0,
         ) {
             let y_val = mu_val + z * sigma_val;
-            let owned = [("mu", array![mu_val]), ("sigma", array![sigma_val])];
+            let owned = [(Param::Mu, array![mu_val]), (Param::Sigma, array![sigma_val])];
             let p = params_view(&owned);
             let u = Gaussian.cdf(&array![y_val], &p).unwrap();
             prop_assert!(u[0] >= 0.0 && u[0] <= 1.0);
@@ -422,7 +429,7 @@ mod tests {
             let y = Array1::from_iter((0..n).map(|i| i as f64 * 0.1));
             let mu = Array1::from_elem(n, mu_val);
             let sigma = Array1::from_elem(n, sigma_val);
-            let owned = [("mu", mu), ("sigma", sigma)];
+            let owned = [(Param::Mu, mu), (Param::Sigma, sigma)];
             let p = params_view(&owned);
             let actual = Gaussian.loglik(&y, &p).unwrap();
             let log_2pi = (2.0 * std::f64::consts::PI).ln();

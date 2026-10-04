@@ -25,6 +25,28 @@ pub struct WasmGamlssModel {
     family: Box<dyn Distribution>,
 }
 
+impl WasmGamlssModel {
+    /// The fitted block for `param`, or an error naming the available ones. A
+    /// string that is no parameter name at all gets the same error.
+    fn fitted_param(&self, param: &str) -> Result<&crate::fitting::FittedParameter, JsError> {
+        param
+            .parse::<crate::Param>()
+            .ok()
+            .and_then(|p| self.model.models.get(&p))
+            .ok_or_else(|| {
+                JsError::new(&format!(
+                    "Parameter '{}' not found. Available: {:?}",
+                    param,
+                    self.model
+                        .models
+                        .keys()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                ))
+            })
+    }
+}
+
 #[wasm_bindgen]
 impl WasmGamlssModel {
     /// Fit a GAMLSS model. The wire formats live on [`crate::json`].
@@ -102,25 +124,11 @@ impl WasmGamlssModel {
 
     #[wasm_bindgen(js_name = "fittedValues")]
     pub fn fitted_values(&self, param: &str) -> Result<Vec<f64>, JsError> {
-        let fitted_param = self.model.models.get(param).ok_or_else(|| {
-            JsError::new(&format!(
-                "Parameter '{}' not found. Available: {:?}",
-                param,
-                self.model.models.keys().collect::<Vec<_>>()
-            ))
-        })?;
-        Ok(fitted_param.fitted_values.to_vec())
+        Ok(self.fitted_param(param)?.fitted_values.to_vec())
     }
 
     pub fn coefficients(&self, param: &str) -> Result<Vec<f64>, JsError> {
-        let fitted_param = self.model.models.get(param).ok_or_else(|| {
-            JsError::new(&format!(
-                "Parameter '{}' not found. Available: {:?}",
-                param,
-                self.model.models.keys().collect::<Vec<_>>()
-            ))
-        })?;
-        Ok(fitted_param.coefficients.to_vec())
+        Ok(self.fitted_param(param)?.coefficients.to_vec())
     }
 
     /// Generate prediction samples by sampling from the posterior distribution of coefficients.

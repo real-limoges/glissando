@@ -13,10 +13,11 @@ use super::boxcox::{
     boxcox_cv_variance, boxcox_expected_value, boxcox_inv, boxcox_seed, boxcox_z, boxcox_z_dz_dnu,
 };
 use super::{
-    clamp_prob, require, DerivativesResult, Distribution, GamlssError, IdentityLink, Link, LogLink,
-    DENOM_FLOOR, MIN_POSITIVE,
+    clamp_prob, require, DerivativeMap, Distribution, GamlssError, IdentityLink, Link, LogLink,
+    Natural, ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
 };
 use crate::math::{std_normal_cdf, std_normal_quantile};
+use crate::Param;
 use ndarray::Array1;
 use std::collections::HashMap;
 
@@ -39,15 +40,15 @@ impl BCCG {
 }
 
 impl Distribution for BCCG {
-    fn parameters(&self) -> &[&'static str] {
-        &["mu", "sigma", "nu"]
+    fn parameters(&self) -> &[Param] {
+        &[Param::Mu, Param::Sigma, Param::Nu]
     }
 
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError> {
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError> {
         match param {
-            "mu" => Ok(Box::new(LogLink)),
-            "sigma" => Ok(Box::new(LogLink)),
-            "nu" => Ok(Box::new(IdentityLink)),
+            Param::Mu => Ok(Box::new(LogLink)),
+            Param::Sigma => Ok(Box::new(LogLink)),
+            Param::Nu => Ok(Box::new(IdentityLink)),
             other => Err(self.unknown_param(other)),
         }
     }
@@ -56,7 +57,7 @@ impl Distribution for BCCG {
     /// of variation `1.4826·MAD(y)/median(y)`, and `ν₀ = 1` (start symmetric, the
     /// identity of the Box-Cox power). This mirrors `StudentT`'s median/MAD seeding so
     /// skew and outliers do not distort the first RS iteration.
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         boxcox_seed(param, y).unwrap_or_else(|| {
             debug_assert!(false, "BCCG has no parameter '{param}'");
             1.0
@@ -68,8 +69,8 @@ impl Distribution for BCCG {
     fn theta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         // Box-Cox z-score plus the natural-scale score/Fisher pairs. By the definition
         // of z, T = (y/μ)^ν = 1+νσz,
         // so the bracketed numerators simplify to the forms below.
@@ -80,9 +81,9 @@ impl Distribution for BCCG {
         //   I_μμ = (1/σ² + 2ν²)/μ²,   I_σσ = 2/σ²,   I_νν = 7σ²/4.
         // Default links are log, log, identity. chain_to_eta reproduces the old η-scale
         // pairs exactly off these. Weights come back unfloored.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = y.len();
 
         let mut u_mu = Array1::<f64>::zeros(n);
@@ -116,20 +117,20 @@ impl Distribution for BCCG {
         }
 
         Ok(HashMap::from([
-            ("mu".to_string(), (u_mu, i_mu)),
-            ("sigma".to_string(), (u_sigma, i_sigma)),
-            ("nu".to_string(), (u_nu, i_nu)),
+            (Param::Mu, ScoreInfo::new(u_mu, i_mu)),
+            (Param::Sigma, ScoreInfo::new(u_sigma, i_sigma)),
+            (Param::Nu, ScoreInfo::new(u_nu, i_nu)),
         ]))
     }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = y.len();
         let half_ln_2pi = 0.5 * (2.0 * std::f64::consts::PI).ln();
         let mut out = Array1::<f64>::zeros(n);
@@ -148,9 +149,9 @@ impl Distribution for BCCG {
     /// First-order coefficient-of-variation approximation `Var(Y) ≈ (σ·μ)²`; `σ` is
     /// (approximately) the CV in the BCCG parameterization. Used only for Pearson
     /// residuals; the preferred randomized-quantile residuals go through `cdf`.
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
         Ok(boxcox_cv_variance(mu, sigma))
     }
 
@@ -159,23 +160,23 @@ impl Distribution for BCCG {
     /// (symmetric, mean = μ) and at `ν = 0` (log-normal, `μ·e^{σ²/2}` to O(σ²)).
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         Ok(boxcox_expected_value(mu, sigma, nu))
     }
 
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // F(y) = Φ(z); z is monotone increasing in y on y > 0, so this is a valid CDF.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = y.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -192,12 +193,12 @@ impl Distribution for BCCG {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         // Invert F = Φ(z): z_p = Φ⁻¹(p), then back out y from the Box-Cox transform.
-        let mu = require(self, params, "mu")?;
-        let sigma = require(self, params, "sigma")?;
-        let nu = require(self, params, "nu")?;
+        let mu = require(self, params, Param::Mu)?;
+        let sigma = require(self, params, Param::Sigma)?;
+        let nu = require(self, params, Param::Nu)?;
         let n = p.len();
         let mut out = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -233,18 +234,18 @@ mod tests {
         let sigma = array![0.3, 0.25, 0.2, 0.35];
         let nu = array![1.0, 0.5, -0.5, 1.5];
         let mut p = HashMap::new();
-        p.insert("mu", &mu);
-        p.insert("sigma", &sigma);
-        p.insert("nu", &nu);
+        p.insert(Param::Mu, &mu);
+        p.insert(Param::Sigma, &sigma);
+        p.insert(Param::Nu, &nu);
         derivative_keys_match_parameters(&BCCG, p, &y);
     }
 
     #[test]
     fn loglik_bccg_finite_on_typical_inputs() {
         let owned = [
-            ("mu", array![2.0, 2.0, 4.0]),
-            ("sigma", array![0.3, 0.25, 0.2]),
-            ("nu", array![1.0, 0.0, -0.5]),
+            (Param::Mu, array![2.0, 2.0, 4.0]),
+            (Param::Sigma, array![0.3, 0.25, 0.2]),
+            (Param::Nu, array![1.0, 0.0, -0.5]),
         ];
         let p = params_view(&owned);
         let ll = BCCG.loglik(&array![1.0, 2.0, 5.0], &p).unwrap();
@@ -256,9 +257,9 @@ mod tests {
         // At ν = 0, z = log(y/μ)/σ, so log f(y) = log-normal density.
         // Standard log-normal log-density: −log(y) − log(σ) − ½log(2π) − ½(log(y/μ)/σ)².
         let owned = [
-            ("mu", array![2.0]),
-            ("sigma", array![0.4]),
-            ("nu", array![0.0]),
+            (Param::Mu, array![2.0]),
+            (Param::Sigma, array![0.4]),
+            (Param::Nu, array![0.0]),
         ];
         let p = params_view(&owned);
         let y = array![3.0];
@@ -275,13 +276,13 @@ mod tests {
         // ν≈0 log-normal limit so every derivative branch is exercised.
         let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
-            ("nu", array![1.0, 0.5, 1.5, -0.5, 1e-8]),
+            (Param::Mu, array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            (Param::Nu, array![1.0, 0.5, 1.5, -0.5, 1e-8]),
         ];
-        check_score_via_finite_diff(&BCCG, &y, &owned, "mu", 1e-5);
-        check_score_via_finite_diff(&BCCG, &y, &owned, "sigma", 1e-5);
-        check_score_via_finite_diff(&BCCG, &y, &owned, "nu", 1e-5);
+        check_score_via_finite_diff(&BCCG, &y, &owned, Param::Mu, 1e-5);
+        check_score_via_finite_diff(&BCCG, &y, &owned, Param::Sigma, 1e-5);
+        check_score_via_finite_diff(&BCCG, &y, &owned, Param::Nu, 1e-5);
     }
 
     #[test]
@@ -292,13 +293,13 @@ mod tests {
         // default-link test above covers the negative and near-zero branches.
         let y = array![1.0, 2.5, 5.0, 0.8, 3.0];
         let owned = [
-            ("mu", array![1.5, 2.0, 4.0, 1.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.4, 0.3]),
-            ("nu", array![1.0, 0.5, 1.5, 0.75, 2.0]),
+            (Param::Mu, array![1.5, 2.0, 4.0, 1.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.4, 0.3]),
+            (Param::Nu, array![1.0, 0.5, 1.5, 0.75, 2.0]),
         ];
-        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "mu", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "sigma", &SqrtLink, 1e-5);
-        check_eta_score_via_finite_diff(&BCCG, &y, &owned, "nu", &LogLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, Param::Sigma, &SqrtLink, 1e-5);
+        check_eta_score_via_finite_diff(&BCCG, &y, &owned, Param::Nu, &LogLink, 1e-5);
     }
 
     #[test]
@@ -307,17 +308,17 @@ mod tests {
         // η-scale forms canceled.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
-            ("mu", array![0.0, 1e-320, 1e-8]),
-            ("sigma", array![1e-8, 0.0, 1e-320]),
-            ("nu", array![1.0, 0.5, -0.5]),
+            (Param::Mu, array![0.0, 1e-320, 1e-8]),
+            (Param::Sigma, array![1e-8, 0.0, 1e-320]),
+            (Param::Nu, array![1.0, 0.5, -0.5]),
         ];
         let p = params_view(&owned);
         let natural = BCCG.theta_derivatives(&y, &p).unwrap();
         let chained = default_link_derivatives(&BCCG, &y, &p).unwrap();
-        for name in ["mu", "sigma", "nu"] {
-            let (u_n, i_n) = &natural[name];
+        for name in [Param::Mu, Param::Sigma, Param::Nu] {
+            let (u_n, i_n) = (&natural[&name].score, &natural[&name].info);
             assert!(no_nan_array(u_n) && no_nan_array(i_n), "natural {name}");
-            let (u, w) = &chained[name];
+            let (u, w) = (&chained[&name].score, &chained[&name].info);
             assert!(finite_array(u) && finite_array(w), "chained {name}: {u:?}");
         }
     }
@@ -326,9 +327,9 @@ mod tests {
     fn cdf_quantile_roundtrip_bccg() {
         let y = array![0.6, 1.5, 3.0, 7.0, 2.0];
         let owned = [
-            ("mu", array![1.0, 2.0, 4.0, 6.0, 2.5]),
-            ("sigma", array![0.3, 0.25, 0.2, 0.35, 0.3]),
-            ("nu", array![1.0, 0.5, -0.5, 1.5, 0.0]),
+            (Param::Mu, array![1.0, 2.0, 4.0, 6.0, 2.5]),
+            (Param::Sigma, array![0.3, 0.25, 0.2, 0.35, 0.3]),
+            (Param::Nu, array![1.0, 0.5, -0.5, 1.5, 0.0]),
         ];
         check_cdf_quantile_roundtrip(&BCCG, &y, &owned, 1e-6);
         check_cdf_pdf_consistency(&BCCG, &y, &owned, 1e-5, 1e-3);
@@ -338,16 +339,16 @@ mod tests {
     fn cdf_monotone_bccg_and_zero_below_support() {
         let grid = Array1::from_iter((0..80).map(|i| 0.05 + i as f64 * 0.1));
         let owned = [
-            ("mu", array![3.0]),
-            ("sigma", array![0.3]),
-            ("nu", array![0.8]),
+            (Param::Mu, array![3.0]),
+            (Param::Sigma, array![0.3]),
+            (Param::Nu, array![0.8]),
         ];
         check_cdf_monotone_in_unit(&BCCG, &grid, &owned);
         // y ≤ 0 sits outside the y > 0 support.
         let boundary = [
-            ("mu", array![3.0, 3.0]),
-            ("sigma", array![0.3, 0.3]),
-            ("nu", array![0.8, 0.8]),
+            (Param::Mu, array![3.0, 3.0]),
+            (Param::Sigma, array![0.3, 0.3]),
+            (Param::Nu, array![0.8, 0.8]),
         ];
         let p = params_view(&boundary);
         let at_boundary = BCCG.cdf(&array![0.0, -1.0], &p).unwrap();
@@ -359,9 +360,9 @@ mod tests {
     fn median_quantile_is_mu() {
         // p = 0.5 ⇒ z_p = 0 ⇒ y = μ for every ν. (μ is the median.)
         let owned = [
-            ("mu", array![2.0, 5.0]),
-            ("sigma", array![0.3, 0.2]),
-            ("nu", array![0.5, -1.0]),
+            (Param::Mu, array![2.0, 5.0]),
+            (Param::Sigma, array![0.3, 0.2]),
+            (Param::Nu, array![0.5, -1.0]),
         ];
         let p = params_view(&owned);
         let med = BCCG.quantile(&array![0.5, 0.5], &p).unwrap();
@@ -373,9 +374,9 @@ mod tests {
     fn expected_value_is_mu_at_nu_one() {
         // At ν = 1 the distribution is symmetric about μ, so the mean equals μ.
         let owned = [
-            ("mu", array![4.0]),
-            ("sigma", array![0.3]),
-            ("nu", array![1.0]),
+            (Param::Mu, array![4.0]),
+            (Param::Sigma, array![0.3]),
+            (Param::Nu, array![1.0]),
         ];
         let p = params_view(&owned);
         let ev = BCCG.expected_value(&p).unwrap();
@@ -385,9 +386,9 @@ mod tests {
     #[test]
     fn variance_bccg_is_cv_squared_times_mu_squared() {
         let owned = [
-            ("mu", array![4.0]),
-            ("sigma", array![0.25]),
-            ("nu", array![1.0]),
+            (Param::Mu, array![4.0]),
+            (Param::Sigma, array![0.25]),
+            (Param::Nu, array![1.0]),
         ];
         let p = params_view(&owned);
         let v = BCCG.variance(&p).unwrap();
@@ -398,16 +399,16 @@ mod tests {
     #[test]
     fn initial_value_seeds_are_robust_and_sane() {
         let y = array![2.0, 2.1, 1.9, 2.2, 2.0, 1.8, 2.3, 50.0];
-        let mu0 = BCCG.initial_value("mu", &y);
+        let mu0 = BCCG.initial_value(Param::Mu, &y);
         assert!(
             (mu0 - 2.05).abs() < 0.3,
             "median seed near the core (got {mu0})"
         );
-        let sigma0 = BCCG.initial_value("sigma", &y);
+        let sigma0 = BCCG.initial_value(Param::Sigma, &y);
         assert!(
             sigma0 > 0.0 && sigma0 < 1.0,
             "robust CV seed (got {sigma0})"
         );
-        assert_eq!(BCCG.initial_value("nu", &y), 1.0);
+        assert_eq!(BCCG.initial_value(Param::Nu, &y), 1.0);
     }
 }

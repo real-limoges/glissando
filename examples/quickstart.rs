@@ -7,6 +7,7 @@
 
 use glissando::distributions::Gaussian;
 use glissando::ndarray::Array1;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
 
 fn main() -> Result<(), GamlssError> {
@@ -20,10 +21,10 @@ fn main() -> Result<(), GamlssError> {
     // one additive predictor per parameter
     let formula = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))],
         )
-        .with_terms("sigma", vec![Term::Intercept, Term::linear("x")]);
+        .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
 
     let family = Gaussian::new();
     let model = GamlssModel::fit(&data, &y, &formula, &family)?;
@@ -31,10 +32,13 @@ fn main() -> Result<(), GamlssError> {
 
     // predict on the response scale, keyed by parameter name
     let preds = model.predict(&data, &family)?;
-    println!("mu[0..3]    = {:?}", &preds["mu"].as_slice().unwrap()[..3]);
+    println!(
+        "mu[0..3]    = {:?}",
+        &preds[&Param::Mu].as_slice().unwrap()[..3]
+    );
     println!(
         "sigma[0..3] = {:?}",
-        &preds["sigma"].as_slice().unwrap()[..3]
+        &preds[&Param::Sigma].as_slice().unwrap()[..3]
     );
 
     // randomized quantile residuals are the GAMLSS default residual

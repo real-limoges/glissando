@@ -19,15 +19,18 @@
 //! `cauchit`). [`FlooredLogLink`] is internal-only.
 
 use crate::error::GamlssError;
+use crate::Param;
 use ndarray::{Array1, Zip};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
 mod links;
+mod scale;
 pub use links::{
     link_from_name, CauchitLink, CloglogLink, FlooredLogLink, IdentityLink, InverseLink,
     InverseSquareLink, Link, LinkContext, LogLink, LogitLink, ProbitLink, SqrtLink,
 };
+pub use scale::{CdfGrad, CdfMap, DerivativeMap, Eta, Natural, ScoreInfo};
 // Re-exported at crate-internal scope so submodules can `use super::MIN_POSITIVE`
 // after the move without breaking. MAX_ETA/MIN_ETA are link-internal today; they
 // are re-exported here anyway so a future submodule can opt in without a separate edit.
@@ -100,31 +103,11 @@ fn saturate(v: f64) -> f64 {
 // Distribution trait
 // ============================================================================
 
-/// Score / Fisher-information pairs keyed by distribution-parameter name.
-pub type DerivativesResult = Result<HashMap<String, (Array1<f64>, Array1<f64>)>, GamlssError>;
-
-/// Per-parameter `(∂F/∂η, ∂²F/∂η²)` pairs keyed by parameter name: the same
-/// shape as a derivatives map, used by the structural wrappers.
-///
-/// This is the *chained* map, produced by `structural::cdf_eta_grads`. A family's
-/// own [`Distribution::cdf_theta_derivatives`] returns the natural-scale
-/// [`CdfThetaMap`] instead.
-pub type CdfEtaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
-/// Result wrapper around [`CdfEtaMap`].
-pub type CdfEtaResult = Result<CdfEtaMap, GamlssError>;
-
-/// Per-parameter `(∂F/∂θ, ∂²F/∂θ²)` pairs: the *natural-scale* counterpart of
-/// [`CdfEtaMap`], returned by [`Distribution::cdf_theta_derivatives`].
-///
-/// Structurally identical to [`CdfEtaMap`]; the two are distinct names so a
-/// reader can tell at a glance which side of the chain rule a value sits on.
-pub type CdfThetaMap = HashMap<String, (Array1<f64>, Array1<f64>)>;
-/// Result wrapper around [`CdfThetaMap`], returned by
-/// [`Distribution::cdf_theta_derivatives`].
-pub type CdfThetaResult = Result<CdfThetaMap, GamlssError>;
-
 /// Map a natural-scale derivatives map onto the linear-predictor scale:
 /// `u_η = mu_eta · ∂l/∂θ` and `w_η = mu_eta² · i_θ`, per parameter.
+///
+/// This is the only generic way from [`Natural`] to [`Eta`], so a natural-scale map
+/// cannot reach the scoring loop without passing through it exactly once.
 ///
 /// This is the generic chain rule every family with a separable natural scale
 /// delegates to from [`Distribution::eta_derivatives`], so that a link override
@@ -144,46 +127,55 @@ pub type CdfThetaResult = Result<CdfThetaMap, GamlssError>;
 /// parameters, or if the link derivatives and the derivative arrays disagree on
 /// length.
 pub fn chain_to_eta(
-    natural: HashMap<String, (Array1<f64>, Array1<f64>)>,
+    natural: DerivativeMap<Natural>,
     ctx: &LinkContext,
-) -> DerivativesResult {
+) -> Result<DerivativeMap<Eta>, GamlssError> {
     natural
         .into_iter()
-        .map(|(name, (mut u, mut i))| {
-            let mu_eta = ctx.mu_eta(&name)?;
-            if mu_eta.len() != u.len() || mu_eta.len() != i.len() {
-                return Err(GamlssError::Internal(format!(
-                    "chain_to_eta length mismatch for '{}': mu_eta {}, u {}, i {}",
-                    name,
-                    mu_eta.len(),
-                    u.len(),
-                    i.len()
-                )));
-            }
-            Zip::from(&mut u)
-                .and(&mut i)
-                .and(mu_eta)
-                .for_each(|u_out, i_out, &me| {
-                    if me == 0.0 {
-                        // `dμ/dη = 0` freezes the observation. No move in η changes
-                        // its μ, so its score and information are exactly zero
-                        // however large the natural-scale pair is. Taking the product
-                        // literally gives `inf · 0` = NaN for a family whose
-                        // natural-scale derivative diverges at a saturated θ, and one
-                        // NaN row poisons the entire PWLS solve: `scoring::step`'s
-                        // `w < MIN_WEIGHT` and `step > MAX_STEP` tests are both false
-                        // for NaN, so nothing downstream catches it. A hard zero is
-                        // reachable: `SqrtLink::mu_eta(0.0)` and
-                        // `LogLink::mu_eta(η ≤ −745)` are both exactly 0.
-                        *u_out = 0.0;
-                        *i_out = 0.0;
-                    } else {
-                        *u_out = saturate(*u_out * me);
-                        *i_out = saturate(*i_out * me * me);
-                    }
-                });
-            Ok((name, (u, i)))
-        })
+        .map(
+            |(
+                name,
+                ScoreInfo {
+                    score: mut u,
+                    info: mut i,
+                    ..
+                },
+            )| {
+                let mu_eta = ctx.mu_eta(name)?;
+                if mu_eta.len() != u.len() || mu_eta.len() != i.len() {
+                    return Err(GamlssError::Internal(format!(
+                        "chain_to_eta length mismatch for '{}': mu_eta {}, u {}, i {}",
+                        name,
+                        mu_eta.len(),
+                        u.len(),
+                        i.len()
+                    )));
+                }
+                Zip::from(&mut u)
+                    .and(&mut i)
+                    .and(mu_eta)
+                    .for_each(|u_out, i_out, &me| {
+                        if me == 0.0 {
+                            // `dμ/dη = 0` freezes the observation. No move in η changes
+                            // its μ, so its score and information are exactly zero
+                            // however large the natural-scale pair is. Taking the product
+                            // literally gives `inf · 0` = NaN for a family whose
+                            // natural-scale derivative diverges at a saturated θ, and one
+                            // NaN row poisons the entire PWLS solve: `scoring::step`'s
+                            // `w < MIN_WEIGHT` and `step > MAX_STEP` tests are both false
+                            // for NaN, so nothing downstream catches it. A hard zero is
+                            // reachable: `SqrtLink::mu_eta(0.0)` and
+                            // `LogLink::mu_eta(η ≤ −745)` are both exactly 0.
+                            *u_out = 0.0;
+                            *i_out = 0.0;
+                        } else {
+                            *u_out = saturate(*u_out * me);
+                            *i_out = saturate(*i_out * me * me);
+                        }
+                    });
+                Ok((name, ScoreInfo::computed_on_eta(u, i)))
+            },
+        )
         .collect()
 }
 
@@ -206,12 +198,12 @@ pub fn chain_to_eta(
 ///
 /// Applied per parameter by `structural::cdf_eta_grads`, which is the sole caller.
 fn chain_cdf_to_eta(
-    d1: &mut Array1<f64>,
-    d2: &mut Array1<f64>,
+    natural: CdfGrad<Natural>,
     mu_eta: &Array1<f64>,
     mu_eta2: &Array1<f64>,
-    param: &str,
-) -> Result<(), GamlssError> {
+    param: Param,
+) -> Result<CdfGrad<Eta>, GamlssError> {
+    let CdfGrad { mut d1, mut d2, .. } = natural;
     if mu_eta.len() != d1.len() || mu_eta.len() != d2.len() {
         return Err(GamlssError::Internal(format!(
             "chain_cdf_to_eta length mismatch for '{}': mu_eta {}, d1 {}, d2 {}",
@@ -221,8 +213,8 @@ fn chain_cdf_to_eta(
             d2.len()
         )));
     }
-    Zip::from(d1)
-        .and(d2)
+    Zip::from(&mut d1)
+        .and(&mut d2)
         .and(mu_eta)
         .and(mu_eta2)
         .for_each(|d1_out, d2_out, &me, &me2| {
@@ -233,7 +225,7 @@ fn chain_cdf_to_eta(
             *d2_out = saturate(me * me * *d2_out + me2 * *d1_out);
             *d1_out = saturate(*d1_out * me);
         });
-    Ok(())
+    Ok(CdfGrad::computed_on_eta(d1, d2))
 }
 
 /// Implement [`Distribution::eta_derivatives`] by chaining the family's
@@ -247,9 +239,12 @@ macro_rules! eta_derivatives_via_chain {
         fn eta_derivatives(
             &self,
             y: &::ndarray::Array1<f64>,
-            params: &::std::collections::HashMap<&str, &::ndarray::Array1<f64>>,
+            params: &::std::collections::HashMap<$crate::Param, &::ndarray::Array1<f64>>,
             ctx: &$crate::distributions::LinkContext,
-        ) -> $crate::distributions::DerivativesResult {
+        ) -> ::std::result::Result<
+            $crate::distributions::DerivativeMap<$crate::distributions::Eta>,
+            $crate::error::GamlssError,
+        > {
             $crate::distributions::chain_to_eta(self.theta_derivatives(y, params)?, ctx)
         }
     };
@@ -258,15 +253,15 @@ macro_rules! eta_derivatives_via_chain {
 /// A statistical distribution for GAMLSS, defining parameters, link functions, and
 /// score / Fisher-information pairs that drive the IRLS algorithm.
 pub trait Distribution: Debug + Send + Sync {
-    /// Distribution-parameter names (e.g. `["mu", "sigma"]`).
-    fn parameters(&self) -> &[&'static str];
+    /// Distribution parameters (e.g. `[Param::Mu, Param::Sigma]`).
+    fn parameters(&self) -> &[Param];
 
     /// Default link function for the named parameter.
     ///
     /// # Errors
     ///
     /// Returns `GamlssError::UnknownParameter` if the name is not one of [`Self::parameters`].
-    fn default_link(&self, param: &str) -> Result<Box<dyn Link>, GamlssError>;
+    fn default_link(&self, param: Param) -> Result<Box<dyn Link>, GamlssError>;
 
     /// Whether this parameter accepts a link override from
     /// [`FitConfig::links`](crate::FitConfig::links). Default: `true`.
@@ -278,7 +273,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// `η → μ`, so `fit_gamlss` rejects the override instead of accepting it and
     /// producing wrong estimates.
     ///
-    /// Only two built-ins refuse: every [`Ocat`] parameter (its `params["mu"]`
+    /// Only two built-ins refuse: every [`Ocat`] parameter (its `params[&Param::Mu]`
     /// holds η rather than μ, and its threshold Jacobian is `exp(η_k)` only
     /// under the log link) and [`StudentT`]'s `nu` (its ν-floor KKT projection
     /// is written against [`FlooredLogLink`], whose
@@ -287,7 +282,7 @@ pub trait Distribution: Debug + Send + Sync {
     /// A `param` outside [`Self::parameters`] need not be handled here;
     /// `fit_gamlss` checks membership first, so implementors may answer
     /// arbitrarily for an unknown name.
-    fn allows_link_override(&self, _param: &str) -> bool {
+    fn allows_link_override(&self, _param: Param) -> bool {
         true
     }
 
@@ -302,12 +297,9 @@ pub trait Distribution: Debug + Send + Sync {
     /// have. [`Self::eta_derivatives`] is the complete one, and is what the scoring
     /// loop calls.
     ///
-    /// It carried the plain name `derivatives` and returned *η-scale* pairs until the
-    /// generic-chain-rule refactor. The rename is intentional: an
-    /// embedder calling the old name against the new contract would otherwise have
-    /// read natural-scale numbers as η-scale ones, or hit the error default at
-    /// runtime, with nothing failing at compile time. Same reasoning as the
-    /// deliberately-absent default body on [`Self::eta_derivatives`].
+    /// The return type carries the scale: a [`DerivativeMap<Natural>`] cannot be
+    /// handed to anything expecting η-scale values, so the only way to the scoring
+    /// loop is through [`chain_to_eta`].
     ///
     /// **The returned `i_θ` must be unfloored.** `MIN_WEIGHT` is applied exactly
     /// once, downstream in `scoring::step`, after the chain rule; see
@@ -315,8 +307,8 @@ pub trait Distribution: Debug + Send + Sync {
     fn theta_derivatives(
         &self,
         _y: &Array1<f64>,
-        _params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        _params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Natural>, GamlssError> {
         Err(GamlssError::Internal(format!(
             "{} has no separable natural-scale derivative; it implements \
              eta_derivatives directly",
@@ -332,11 +324,13 @@ pub trait Distribution: Debug + Send + Sync {
     /// `chain_to_eta(self.theta_derivatives(y, params)?, ctx)`; the rest build the η-scale
     /// quantities directly.
     ///
-    /// **There is deliberately no default body.** [`Distribution`] is public, so an
-    /// external implementor written against the old η-scale `theta_derivatives` contract
-    /// would keep compiling against a defaulted adapter and double-chain
-    /// to `mu_eta⁴ · i_θ`, with no error at compile time or run time. Requiring the
-    /// method turns that into a compile error.
+    /// A hand-written body builds its η-scale values with
+    /// [`ScoreInfo::computed_on_eta`], whose name marks the site as computing on η
+    /// directly rather than chaining.
+    ///
+    /// **There is deliberately no default body.** A family that writes only
+    /// `theta_derivatives` must still say how it reaches η (almost always via
+    /// [`eta_derivatives_via_chain!`]), rather than inheriting an adapter.
     ///
     /// The returned `w` must be **unfloored**: `MIN_WEIGHT` is applied once,
     /// downstream, in the scoring loop. See [`chain_to_eta`] for why the order
@@ -344,9 +338,9 @@ pub trait Distribution: Debug + Send + Sync {
     fn eta_derivatives(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
         ctx: &LinkContext,
-    ) -> DerivativesResult;
+    ) -> Result<DerivativeMap<Eta>, GamlssError>;
 
     /// Whether [`Self::eta_derivatives`] reads [`LinkContext::mu_eta2`]. Default: `false`.
     ///
@@ -364,31 +358,31 @@ pub trait Distribution: Debug + Send + Sync {
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError>;
 
     /// Marginal `Var(Y_i | params_i)` on the response scale, used for Pearson residuals.
     ///
     /// Distinct from the Fisher-information weight returned by [`Self::theta_derivatives`],
     /// which is on the linear-predictor scale.
-    fn variance(&self, params: &HashMap<&str, &Array1<f64>>) -> Result<Array1<f64>, GamlssError>;
+    fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError>;
 
     /// Marginal `E[Y_i | params_i]` on the response scale.
     ///
-    /// Default returns `params["mu"]` cloned. Distributions where `mu` is not the
+    /// Default returns `params[&Param::Mu]` cloned. Distributions where `mu` is not the
     /// expected value of `Y` (e.g. [`Binomial`] where `E[Y] = n·μ`) override.
     fn expected_value(
         &self,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        Ok(require(self, params, "mu")?.to_owned())
+        Ok(require(self, params, Param::Mu)?.to_owned())
     }
 
     /// Total model log-likelihood: `Σ log f(y_i | params_i)`.
     fn loglik(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<f64, GamlssError> {
         Ok(self.loglik_pointwise(y, params)?.sum())
     }
@@ -407,7 +401,7 @@ pub trait Distribution: Debug + Send + Sync {
     fn pdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         Ok(self.loglik_pointwise(y, params)?.mapv(f64::exp))
     }
@@ -419,7 +413,7 @@ pub trait Distribution: Debug + Send + Sync {
     fn cdf(
         &self,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError>;
 
     /// Analytic first and second derivatives of the CDF `F(y_i)` with respect to
@@ -431,7 +425,8 @@ pub trait Distribution: Debug + Send + Sync {
     /// `structural::cdf_eta_grads` chains to η generically via
     /// [`Link::mu_eta`] and [`Link::mu_eta2`], so an overridden link is honored
     /// rather than ignored. Building a default-link chain rule in here is the
-    /// bug this contract replaced.
+    /// bug this contract replaced, and the [`CdfMap<Natural>`] return type now
+    /// makes an η-scale map a compile error.
     ///
     /// Only parameters with a closed form are included; the default returns an
     /// empty map. The structural wrappers ([`Censored`] / [`Truncated`] /
@@ -445,8 +440,8 @@ pub trait Distribution: Debug + Send + Sync {
     fn cdf_theta_derivatives(
         &self,
         _y: &Array1<f64>,
-        _params: &HashMap<&str, &Array1<f64>>,
-    ) -> CdfThetaResult {
+        _params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<CdfMap<Natural>, GamlssError> {
         Ok(HashMap::new())
     }
 
@@ -455,7 +450,7 @@ pub trait Distribution: Debug + Send + Sync {
     fn quantile(
         &self,
         p: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
+        params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError>;
 
     /// Stable distribution name (e.g. `"Gaussian"`); used in error messages and
@@ -476,14 +471,14 @@ pub trait Distribution: Debug + Send + Sync {
 
     /// Initial response-scale value for a parameter, used to seed the IRLS loop.
     /// Override for distributions where `y` is not directly a sample of the parameter.
-    fn initial_value(&self, param: &str, y: &Array1<f64>) -> f64 {
+    fn initial_value(&self, param: Param, y: &Array1<f64>) -> f64 {
         // `validate_inputs` rejects empty `y` before fitting, so `mean` returning `None`
         // is unreachable on the public path. `expect` makes the precondition explicit
         // rather than masking it with a Gaussian-flavored fallback that would corrupt
         // IRLS init for non-Gaussian families (Poisson, Gamma, etc.).
         match param {
-            "mu" => y.mean().expect("validate_inputs rejects empty y"),
-            "sigma" => {
+            Param::Mu => y.mean().expect("validate_inputs rejects empty y"),
+            Param::Sigma => {
                 let s = y.std(1.0);
                 if s < 1e-4 {
                     1.0
@@ -491,14 +486,14 @@ pub trait Distribution: Debug + Send + Sync {
                     s
                 }
             }
-            "nu" => 5.0,
-            "phi" => 1.0,
+            Param::Nu => 5.0,
+            Param::Phi => 1.0,
             _ => 0.1,
         }
     }
 
     /// Build a fresh `UnknownParameter` error tagged with this distribution's name.
-    fn unknown_param(&self, param: &str) -> GamlssError {
+    fn unknown_param(&self, param: Param) -> GamlssError {
         GamlssError::UnknownParameter {
             distribution: self.name().to_string(),
             param: param.to_string(),
@@ -509,11 +504,11 @@ pub trait Distribution: Debug + Send + Sync {
 /// Look up `param` in a derivatives-input map or yield an `UnknownParameter` error.
 pub(crate) fn require<'a, D: Distribution + ?Sized>(
     dist: &D,
-    params: &HashMap<&str, &'a Array1<f64>>,
-    name: &str,
+    params: &HashMap<Param, &'a Array1<f64>>,
+    name: Param,
 ) -> Result<&'a Array1<f64>, GamlssError> {
     params
-        .get(name)
+        .get(&name)
         .copied()
         .ok_or_else(|| dist.unknown_param(name))
 }
@@ -599,10 +594,11 @@ pub use weibull::Weibull;
 ///
 /// ```
 /// use glissando::distributions::{from_name, Distribution};
+/// use glissando::Param;
 ///
 /// let d = from_name("Gaussian").unwrap();
 /// assert_eq!(d.name(), "Gaussian");
-/// assert_eq!(d.parameters(), &["mu", "sigma"]);
+/// assert_eq!(d.parameters(), &[Param::Mu, Param::Sigma]);
 ///
 /// assert!(from_name("Wishart").is_err());
 /// ```
@@ -671,10 +667,10 @@ pub(crate) mod test_helpers {
     /// `let links = ParamLinks::defaults(..); let ctx = links.context();`.
     ///
     /// η is reconstructed as `g(μ)` from the fixture's μ. That is exact for every
-    /// family except [`Ocat`], whose `params["mu"]` already holds η. Harmless there,
+    /// family except [`Ocat`], whose `params[&Param::Mu]` already holds η. Harmless there,
     /// because `Ocat` reparameterizes its thresholds and ignores the context.
     pub struct ParamLinks<'a> {
-        names: Vec<&'static str>,
+        names: Vec<Param>,
         links: Vec<LinkSlot<'a>>,
         etas: Vec<Array1<f64>>,
     }
@@ -683,9 +679,9 @@ pub(crate) mod test_helpers {
         /// Every parameter on its family default link.
         pub fn defaults<D: Distribution + ?Sized>(
             family: &D,
-            params: &HashMap<&str, &Array1<f64>>,
+            params: &HashMap<Param, &Array1<f64>>,
         ) -> Self {
-            Self::with_override(family, params, "", None)
+            Self::with_override(family, params, None)
         }
 
         /// Every parameter on its family default link, except `target`, which uses
@@ -693,32 +689,31 @@ pub(crate) mod test_helpers {
         /// whichever link the caller selected, not only the family's default.
         pub fn overriding<D: Distribution + ?Sized>(
             family: &D,
-            params: &HashMap<&str, &Array1<f64>>,
-            target: &str,
+            params: &HashMap<Param, &Array1<f64>>,
+            target: Param,
             link: &'a dyn Link,
         ) -> Self {
-            Self::with_override(family, params, target, Some(link))
+            Self::with_override(family, params, Some((target, link)))
         }
 
         fn with_override<D: Distribution + ?Sized>(
             family: &D,
-            params: &HashMap<&str, &Array1<f64>>,
-            target: &str,
-            override_link: Option<&'a dyn Link>,
+            params: &HashMap<Param, &Array1<f64>>,
+            override_: Option<(Param, &'a dyn Link)>,
         ) -> Self {
             let mut names = Vec::new();
             let mut links = Vec::new();
             let mut etas = Vec::new();
             for &name in family.parameters() {
-                let slot = match override_link {
-                    Some(l) if name == target => LinkSlot::Borrowed(l),
+                let slot = match override_ {
+                    Some((target, l)) if name == target => LinkSlot::Borrowed(l),
                     _ => LinkSlot::Owned(
                         family
                             .default_link(name)
                             .unwrap_or_else(|e| panic!("{}::{}: {}", family.name(), name, e)),
                     ),
                 };
-                let mu = params.get(name).unwrap_or_else(|| {
+                let mu = params.get(&name).unwrap_or_else(|| {
                     panic!("{}: fixture has no '{}' entry", family.name(), name)
                 });
                 etas.push(mu.mapv(|m| slot.get().link(m)));
@@ -743,8 +738,8 @@ pub(crate) mod test_helpers {
     pub fn default_link_derivatives<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
-        params: &HashMap<&str, &Array1<f64>>,
-    ) -> DerivativesResult {
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<DerivativeMap<Eta>, GamlssError> {
         let links = ParamLinks::defaults(family, params);
         family.eta_derivatives(y, params, &links.context())
     }
@@ -756,7 +751,7 @@ pub(crate) mod test_helpers {
     /// that returns observed information, which may legitimately be negative.
     pub fn derivative_keys_match_parameters<D: Distribution>(
         d: &D,
-        params: HashMap<&str, &Array1<f64>>,
+        params: HashMap<Param, &Array1<f64>>,
         y: &Array1<f64>,
     ) {
         keys_and_arrays_are_well_formed(d, params, y, true)
@@ -776,7 +771,7 @@ pub(crate) mod test_helpers {
     /// in the pipeline, so every floored row is counted in `weight_floor_hits`.
     pub fn derivative_keys_match_parameters_observed_info<D: Distribution>(
         d: &D,
-        params: HashMap<&str, &Array1<f64>>,
+        params: HashMap<Param, &Array1<f64>>,
         y: &Array1<f64>,
     ) {
         keys_and_arrays_are_well_formed(d, params, y, false)
@@ -784,17 +779,23 @@ pub(crate) mod test_helpers {
 
     fn keys_and_arrays_are_well_formed<D: Distribution>(
         d: &D,
-        params: HashMap<&str, &Array1<f64>>,
+        params: HashMap<Param, &Array1<f64>>,
         y: &Array1<f64>,
         require_non_negative_weights: bool,
     ) {
         let derivs = default_link_derivatives(d, y, &params).unwrap();
-        let mut keys: Vec<&str> = derivs.keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = derivs.keys().map(|p| p.as_str()).collect();
         keys.sort();
-        let mut expected: Vec<&str> = d.parameters().to_vec();
+        let mut expected: Vec<&str> = d.parameters().iter().map(|p| p.as_str()).collect();
         expected.sort();
         assert_eq!(keys, expected);
-        for (name, (u, w)) in &derivs {
+        for (
+            name,
+            ScoreInfo {
+                score: u, info: w, ..
+            },
+        ) in &derivs
+        {
             assert_eq!(u.len(), y.len());
             assert_eq!(w.len(), y.len());
             assert!(finite_array(u));
@@ -812,9 +813,7 @@ pub(crate) mod test_helpers {
     }
 
     /// Build a `params` view from owned arrays for test ergonomics.
-    pub fn params_view<'a>(
-        owned: &'a [(&'static str, Array1<f64>)],
-    ) -> HashMap<&'a str, &'a Array1<f64>> {
+    pub fn params_view(owned: &[(Param, Array1<f64>)]) -> HashMap<Param, &Array1<f64>> {
         owned.iter().map(|(k, v)| (*k, v)).collect()
     }
 
@@ -827,8 +826,8 @@ pub(crate) mod test_helpers {
     pub fn check_score_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
-        target: &str,
+        owned: &[(Param, Array1<f64>)],
+        target: Param,
         tol: f64,
     ) {
         let link = family.default_link(target).unwrap();
@@ -859,20 +858,20 @@ pub(crate) mod test_helpers {
     pub fn check_eta_score_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
-        target: &str,
+        owned: &[(Param, Array1<f64>)],
+        target: Param,
         link: &dyn Link,
         tol: f64,
     ) {
-        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let p: HashMap<Param, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let links = ParamLinks::overriding(family, &p, target, link);
         let derivs = family.eta_derivatives(y, &p, &links.context()).unwrap();
-        let analytic_u = derivs.get(target).unwrap().0.clone();
+        let analytic_u = derivs.get(&target).unwrap().score.clone();
 
         let eps: f64 = 1e-6;
         let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
 
-        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
+        let mut perturbed: Vec<(Param, Array1<f64>)> =
             owned.iter().map(|(k, v)| (*k, v.clone())).collect();
 
         for i in 0..y.len() {
@@ -880,12 +879,12 @@ pub(crate) mod test_helpers {
             let eta = link.link(mu_orig);
 
             perturbed[idx].1[i] = link.inv_link(eta + eps);
-            let p_plus: HashMap<&str, &Array1<f64>> =
+            let p_plus: HashMap<Param, &Array1<f64>> =
                 perturbed.iter().map(|(k, v)| (*k, v)).collect();
             let l_plus = family.loglik_pointwise(y, &p_plus).unwrap()[i];
 
             perturbed[idx].1[i] = link.inv_link(eta - eps);
-            let p_minus: HashMap<&str, &Array1<f64>> =
+            let p_minus: HashMap<Param, &Array1<f64>> =
                 perturbed.iter().map(|(k, v)| (*k, v)).collect();
             let l_minus = family.loglik_pointwise(y, &p_minus).unwrap()[i];
 
@@ -923,13 +922,18 @@ pub(crate) mod test_helpers {
     pub fn check_cdf_theta_derivatives_via_finite_diff<D: Distribution + ?Sized>(
         family: &D,
         y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
-        target: &str,
+        owned: &[(Param, Array1<f64>)],
+        target: Param,
         tol: f64,
     ) {
-        let p: HashMap<&str, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
+        let p: HashMap<Param, &Array1<f64>> = owned.iter().map(|(k, v)| (*k, v)).collect();
         let derivs = family.cdf_theta_derivatives(y, &p).unwrap();
-        let Some((analytic_d1, analytic_d2)) = derivs.get(target) else {
+        let Some(CdfGrad {
+            d1: analytic_d1,
+            d2: analytic_d2,
+            ..
+        }) = derivs.get(&target)
+        else {
             panic!(
                 "{}::{} supplies no analytic cdf_theta_derivatives entry, so this \
                  check would be vacuous. The structural wrappers fall back to a \
@@ -942,7 +946,7 @@ pub(crate) mod test_helpers {
 
         let eps: f64 = 1e-5;
         let idx = owned.iter().position(|(k, _)| *k == target).unwrap();
-        let mut perturbed: Vec<(&'static str, Array1<f64>)> =
+        let mut perturbed: Vec<(Param, Array1<f64>)> =
             owned.iter().map(|(k, v)| (*k, v.clone())).collect();
 
         for i in 0..y.len() {
@@ -950,19 +954,19 @@ pub(crate) mod test_helpers {
             let h = eps * theta.abs().max(1.0);
 
             let f0 = {
-                let pv: HashMap<&str, &Array1<f64>> =
+                let pv: HashMap<Param, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
             perturbed[idx].1[i] = theta + h;
             let f_plus = {
-                let pv: HashMap<&str, &Array1<f64>> =
+                let pv: HashMap<Param, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
             perturbed[idx].1[i] = theta - h;
             let f_minus = {
-                let pv: HashMap<&str, &Array1<f64>> =
+                let pv: HashMap<Param, &Array1<f64>> =
                     perturbed.iter().map(|(k, v)| (*k, v)).collect();
                 family.cdf(y, &pv).unwrap()[i]
             };
@@ -998,7 +1002,7 @@ pub(crate) mod test_helpers {
     pub fn check_cdf_quantile_roundtrip<D: Distribution + ?Sized>(
         d: &D,
         y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
+        owned: &[(Param, Array1<f64>)],
         tol: f64,
     ) {
         let p = params_view(owned);
@@ -1021,7 +1025,7 @@ pub(crate) mod test_helpers {
     pub fn check_cdf_pdf_consistency<D: Distribution + ?Sized>(
         d: &D,
         y: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
+        owned: &[(Param, Array1<f64>)],
         h: f64,
         tol: f64,
     ) {
@@ -1047,7 +1051,7 @@ pub(crate) mod test_helpers {
     pub fn check_discrete_cdf_matches_pmf<D: Distribution + ?Sized>(
         d: &D,
         ks: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
+        owned: &[(Param, Array1<f64>)],
         tol: f64,
     ) {
         let p = params_view(owned);
@@ -1073,11 +1077,11 @@ pub(crate) mod test_helpers {
     pub fn check_cdf_monotone_in_unit<D: Distribution + ?Sized>(
         d: &D,
         grid: &Array1<f64>,
-        owned: &[(&'static str, Array1<f64>)],
+        owned: &[(Param, Array1<f64>)],
     ) {
         let n = grid.len();
         // Broadcast the single-row params across the grid.
-        let broadcast: Vec<(&'static str, Array1<f64>)> = owned
+        let broadcast: Vec<(Param, Array1<f64>)> = owned
             .iter()
             .map(|(k, v)| (*k, Array1::from_elem(n, v[0])))
             .collect();
@@ -1120,14 +1124,14 @@ mod tests {
         // Values chosen so the expected result is exact in binary floating point.
         let eta = array![0.0, f64::ln(2.0)]; // σ = 1, 2
         let log = LogLink;
-        let ctx = LinkContext::new([("sigma", &log as &dyn Link, &eta)]);
+        let ctx = LinkContext::new([(Param::Sigma, &log as &dyn Link, &eta)]);
 
         let natural = HashMap::from([(
-            "sigma".to_string(),
-            (array![3.0, 5.0], array![4.0, 0.5]), // ∂l/∂σ, i_σ
+            Param::Sigma,
+            ScoreInfo::new(array![3.0, 5.0], array![4.0, 0.5]), // ∂l/∂σ, i_σ
         )]);
         let out = chain_to_eta(natural, &ctx).unwrap();
-        let (u, w) = &out["sigma"];
+        let (u, w) = (&out[&Param::Sigma].score, &out[&Param::Sigma].info);
 
         assert!((u[0] - 3.0).abs() < 1e-12); // 1·3
         assert!((u[1] - 10.0).abs() < 1e-12); // 2·5
@@ -1142,21 +1146,21 @@ mod tests {
         // drifting Student-t ν block into a frozen one.
         let eta = array![0.0];
         let id = IdentityLink;
-        let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
+        let ctx = LinkContext::new([(Param::Mu, &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("mu".to_string(), (array![1.0], array![1e-18]))]);
+        let natural = HashMap::from([(Param::Mu, ScoreInfo::new(array![1.0], array![1e-18]))]);
         let out = chain_to_eta(natural, &ctx).unwrap();
-        assert_eq!(out["mu"].1[0], 1e-18);
-        assert!(out["mu"].1[0] < MIN_WEIGHT);
+        assert_eq!(out[&Param::Mu].info[0], 1e-18);
+        assert!(out[&Param::Mu].info[0] < MIN_WEIGHT);
     }
 
     #[test]
     fn chain_to_eta_rejects_a_parameter_the_context_lacks() {
         let eta = array![0.0];
         let id = IdentityLink;
-        let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
+        let ctx = LinkContext::new([(Param::Mu, &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("sigma".to_string(), (array![1.0], array![1.0]))]);
+        let natural = HashMap::from([(Param::Sigma, ScoreInfo::new(array![1.0], array![1.0]))]);
         let err = chain_to_eta(natural, &ctx).unwrap_err();
         assert!(matches!(err, GamlssError::Internal(_)), "{err:?}");
     }
@@ -1165,9 +1169,9 @@ mod tests {
     fn chain_to_eta_rejects_a_length_mismatch() {
         let eta = array![0.0, 1.0];
         let id = IdentityLink;
-        let ctx = LinkContext::new([("mu", &id as &dyn Link, &eta)]);
+        let ctx = LinkContext::new([(Param::Mu, &id as &dyn Link, &eta)]);
 
-        let natural = HashMap::from([("mu".to_string(), (array![1.0], array![1.0]))]);
+        let natural = HashMap::from([(Param::Mu, ScoreInfo::new(array![1.0], array![1.0]))]);
         let err = chain_to_eta(natural, &ctx).unwrap_err();
         assert!(matches!(err, GamlssError::Internal(_)), "{err:?}");
     }
@@ -1216,7 +1220,7 @@ mod tests {
             from_name("BCT").unwrap(),
             from_name("BCPE").unwrap(),
         ] {
-            for p in d.parameters() {
+            for &p in d.parameters() {
                 let v = d.initial_value(p, &y);
                 assert!(
                     v.is_finite(),
@@ -1233,14 +1237,14 @@ mod tests {
 
     #[test]
     fn unknown_param_carries_distribution_name() {
-        let err = Gaussian.unknown_param("zeta");
+        let err = Gaussian.unknown_param(Param::Tau);
         match err {
             GamlssError::UnknownParameter {
                 distribution,
                 param,
             } => {
                 assert_eq!(distribution, "Gaussian");
-                assert_eq!(param, "zeta");
+                assert_eq!(param, "tau");
             }
             other => panic!("expected UnknownParameter, got {:?}", other),
         }

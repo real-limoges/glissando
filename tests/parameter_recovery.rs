@@ -1,6 +1,4 @@
-// Integration tests can't run under the `python` feature (PyO3 extension-module linking).
-#![cfg(not(feature = "python"))]
-
+use glissando::Param;
 use glissando::{distributions::StudentT, DataSet, Formula, GamlssModel, Term};
 use ndarray::Array1;
 use rand::prelude::*;
@@ -43,7 +41,7 @@ fn test_student_t_recovery() {
     let mut formulas = Formula::new();
 
     formulas.add_terms(
-        "mu".to_string(),
+        Param::Mu,
         vec![
             Term::Intercept,
             Term::Linear {
@@ -51,15 +49,15 @@ fn test_student_t_recovery() {
             },
         ],
     );
-    formulas.add_terms("sigma".to_string(), vec![Term::Intercept]);
-    formulas.add_terms("nu".to_string(), vec![Term::Intercept]);
+    formulas.add_terms(Param::Sigma, vec![Term::Intercept]);
+    formulas.add_terms(Param::Nu, vec![Term::Intercept]);
 
     let model = GamlssModel::fit(&data, &y, &formulas, &StudentT::new()).expect("Fit failed");
 
     // checks
-    let mu_coeffs = &model.models["mu"].coefficients;
-    let sigma_coeffs = &model.models["sigma"].coefficients;
-    let nu_coeffs = &model.models["nu"].coefficients;
+    let mu_coeffs = &model.models[&Param::Mu].coefficients;
+    let sigma_coeffs = &model.models[&Param::Sigma].coefficients;
+    let nu_coeffs = &model.models[&Param::Nu].coefficients;
 
     println!("Fitted Mu: {:?}", mu_coeffs);
     println!("Fitted Sigma: {:?}", sigma_coeffs);

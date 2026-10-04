@@ -1,4 +1,5 @@
 use glissando::distributions::StudentT;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssError, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use rand::RngExt;
@@ -33,11 +34,11 @@ fn main() -> Result<(), GamlssError> {
     //   nu    ~ intercept                 (constant tail weight)
     let formulas = Formula::new()
         .with_terms(
-            "mu",
+            Param::Mu,
             vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))],
         )
-        .with_terms("sigma", vec![Term::Intercept, Term::linear("x")])
-        .with_terms("nu", vec![Term::Intercept]);
+        .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")])
+        .with_terms(Param::Nu, vec![Term::Intercept]);
 
     // Fit it.
     println!("Fitting GAMLSS model...");
@@ -45,9 +46,9 @@ fn main() -> Result<(), GamlssError> {
     println!("Successfully Trained GAMLSS Model!");
 
     // Inspect the results.
-    let mu_model = &model.models["mu"];
-    let sigma_model = &model.models["sigma"];
-    let nu_model = &model.models["nu"];
+    let mu_model = &model.models[&Param::Mu];
+    let sigma_model = &model.models[&Param::Sigma];
+    let nu_model = &model.models[&Param::Nu];
 
     println!("--- Results ---");
     println!("Mu coefficients count: {}", mu_model.coefficients.len());

@@ -2,6 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use glissando::distributions::{
     Beta, Distribution, Gamma, Gaussian, NegativeBinomial, Poisson, StudentT,
 };
+use glissando::Param;
 use ndarray::Array1;
 use statrs::function::gamma::digamma as statrs_digamma;
 use std::collections::HashMap;
@@ -24,7 +25,7 @@ fn bench_poisson_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> = HashMap::from([("mu", &mu)]);
+                let params: HashMap<Param, &Array1<f64>> = HashMap::from([(Param::Mu, &mu)]);
                 Poisson.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
@@ -40,8 +41,8 @@ fn bench_gaussian_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> =
-                    HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+                let params: HashMap<Param, &Array1<f64>> =
+                    HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
                 Gaussian.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
@@ -57,8 +58,8 @@ fn bench_student_t_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> =
-                    HashMap::from([("mu", &mu), ("sigma", &sigma), ("nu", &nu)]);
+                let params: HashMap<Param, &Array1<f64>> =
+                    HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma), (Param::Nu, &nu)]);
                 StudentT.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
@@ -76,8 +77,8 @@ fn bench_gamma_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> =
-                    HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+                let params: HashMap<Param, &Array1<f64>> =
+                    HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
                 Gamma.theta_derivatives(black_box(&y_positive), black_box(&params))
             })
         });
@@ -94,8 +95,8 @@ fn bench_negative_binomial_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> =
-                    HashMap::from([("mu", &mu), ("sigma", &sigma)]);
+                let params: HashMap<Param, &Array1<f64>> =
+                    HashMap::from([(Param::Mu, &mu), (Param::Sigma, &sigma)]);
                 NegativeBinomial.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
@@ -116,8 +117,8 @@ fn bench_beta_derivatives(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::from_parameter(n), n, |b, _| {
             b.iter(|| {
-                let params: HashMap<&str, &Array1<f64>> =
-                    HashMap::from([("mu", &mu), ("phi", &phi)]);
+                let params: HashMap<Param, &Array1<f64>> =
+                    HashMap::from([(Param::Mu, &mu), (Param::Phi, &phi)]);
                 Beta.theta_derivatives(black_box(&y), black_box(&params))
             })
         });
@@ -170,7 +171,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("poisson_linear", n), n, |b, _| {
             b.iter(|| {
                 let formula = Formula::new().with_terms(
-                    "mu",
+                    Param::Mu,
                     vec![
                         Term::Intercept,
                         Term::Linear {
@@ -187,7 +188,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
             b.iter(|| {
                 let formula = Formula::new()
                     .with_terms(
-                        "mu",
+                        Param::Mu,
                         vec![
                             Term::Intercept,
                             Term::Linear {
@@ -195,7 +196,7 @@ fn bench_full_model_fit(c: &mut Criterion) {
                             },
                         ],
                     )
-                    .with_terms("sigma", vec![Term::Intercept]);
+                    .with_terms(Param::Sigma, vec![Term::Intercept]);
                 black_box(GamlssModel::fit(&data, &y, &formula, &Gaussian).unwrap())
             })
         });

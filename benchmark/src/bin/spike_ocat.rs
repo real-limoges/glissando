@@ -20,6 +20,7 @@
 //!     --output path/to/rust_ocat.json
 
 use glissando::distributions::Binomial;
+use glissando::Param;
 use glissando::{DataSet, Formula, GamlssModel, Smooth, Term};
 use ndarray::Array1;
 use polars::prelude::*;
@@ -80,7 +81,7 @@ fn make_formula() -> Formula {
         })
     };
     Formula::new().with_terms(
-        "mu",
+        Param::Mu,
         vec![Term::Intercept, mk_smooth("x1"), mk_smooth("x2")],
     )
 }
@@ -147,7 +148,7 @@ fn main() {
             Ok(model) => {
                 converged[k] = model.converged();
                 let preds = model.predict(&test_data, &family).expect("predict failed");
-                cum_preds.push(preds["mu"].clone());
+                cum_preds.push(preds[&Param::Mu].clone());
             }
             Err(e) => {
                 let result = SpikeResult {
