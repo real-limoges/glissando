@@ -5,7 +5,7 @@
 **Runnable code:** the snippets here are excerpted from the runnable programs under `examples/` at the repo root (`examples/*.rs` for Rust, `examples/python/` and `examples/wasm/` for the bindings).
 Run the Rust ones with `cargo run --example <name>`.
 
-The cookbook covers using glissando; `mathematics.md` derives the algorithm.
+The cookbook covers using glissando; `rust-api.md` and `bindings.md` are the lookup reference, and `mathematics.md` derives the algorithm.
 
 ## The pages
 

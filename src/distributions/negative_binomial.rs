@@ -78,12 +78,11 @@ impl Distribution for NegativeBinomial {
         let mu = require(self, params, Param::Mu)?;
         let sigma = require(self, params, Param::Sigma)?;
 
-        // **Every guard here is on a denominator, never on μ or σ themselves.** This
-        // body used to clamp both up to `MIN_POSITIVE`, which the folded η-scale form
-        // could afford and the un-folded one cannot: `chain_to_eta` multiplies by a
-        // `mu_eta` computed from η independently of anything clamped here, so a clamp
-        // that binds breaks the telescoping, and `exp(MIN_ETA) ≈ 9.4e-14` is already
-        // below `MIN_POSITIVE`. See the same argument at length in `binomial.rs`.
+        // **Every guard here is on a denominator, never on μ or σ themselves.**
+        // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
+        // anything clamped here, so a clamp that binds breaks the telescoping, and
+        // `exp(MIN_ETA) ≈ 9.4e-14` is already below `MIN_POSITIVE`. See the same
+        // argument at length in `binomial.rs`.
         let one_plus_sigma_mu = par_zip_map(sigma, mu, |s, m| 1.0 + s * m);
 
         let i_mu = par_zip_map(mu, &one_plus_sigma_mu, |m, d| {
@@ -113,7 +112,7 @@ impl Distribution for NegativeBinomial {
         //
         // The convention is chain-rule covariant, so it needs no special handling
         // here: taking `i_σ := (∂l/∂σ)²` gives `mu_eta²·i_σ = (mu_eta·∂l/∂σ)² =
-        // u_η²`, which is the previous η-scale weight *for any link*. Returned
+        // u_η²`, the η-scale weight *for any link*. Returned
         // unfloored, like every other weight.
         let i_sigma = u_sigma.mapv(|u| u * u);
 
@@ -273,8 +272,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/(μ(1+σμ))` and `1/σ²` that the previous η-scale
-        // forms canceled.
+        // The natural scores carry `1/(μ(1+σμ))` and `1/σ²` that the η-scale forms
+        // cancel.
         let y = array![0.0, 3.0, 7.0];
         let owned = [
             (Param::Mu, array![0.0, 1e-320, 1e-8]),

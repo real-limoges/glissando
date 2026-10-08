@@ -302,8 +302,8 @@ mod tests {
         // Covers both of this wrapper's link-dependent sites in one fixture:
         //   μ on `sqrt`:   the zero-truncation normalizer's `F'(0)/D` term, built
         //                  from Gamma's analytic CDF derivative;
-        //   ξ on `probit`: the zero atom, which used to write the logit chain rule
-        //                  inline and so ignored the override entirely.
+        //   ξ on `probit`: the zero atom, which must chain through the resolved
+        //                  link rather than logit.
         // Gamma's μ is strictly positive, so η = √μ stays in the link's domain.
         let y = array![0.0, 2.0, 3.0, 0.0];
         let owned = gamma_hurdle_owned();

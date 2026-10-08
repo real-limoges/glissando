@@ -79,8 +79,8 @@ impl Distribution for BCCG {
         //   dl/dν = −z·∂z/∂ν + log(y/μ)          (ν is identity-linked)
         // Expected Fisher information (matches gamlss BCCG once chained):
         //   I_μμ = (1/σ² + 2ν²)/μ²,   I_σσ = 2/σ²,   I_νν = 7σ²/4.
-        // Default links are log, log, identity. chain_to_eta reproduces the old η-scale
-        // pairs exactly off these. Weights come back unfloored.
+        // Default links are log, log, identity, which chain_to_eta applies to these
+        // pairs. Weights come back unfloored.
         let mu = require(self, params, Param::Mu)?;
         let sigma = require(self, params, Param::Sigma)?;
         let nu = require(self, params, Param::Nu)?;
@@ -304,8 +304,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms canceled.
+        // The natural scores carry `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the η-scale
+        // forms cancel.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             (Param::Mu, array![0.0, 1e-320, 1e-8]),

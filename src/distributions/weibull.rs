@@ -267,7 +267,7 @@ mod tests {
     fn score_matches_finite_diff_under_non_default_links() {
         // Both parameters default to a log link, under which
         // `∂l/∂η` and the folded form agree by construction. `sqrt` and `inverse`
-        // want a different `dμ/dη`, which this family no longer hardcodes.
+        // want a different `dμ/dη`.
         let y = array![1.0, 2.5, 5.0];
         let owned = [
             (Param::Mu, array![1.5, 2.0, 4.0]),
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/μ` and `1/σ` the old η-scale forms canceled.
+        // The natural scores carry `1/μ` and `1/σ` that the η-scale forms cancel.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             (Param::Mu, array![0.0, 1e-320, 1e-8]),

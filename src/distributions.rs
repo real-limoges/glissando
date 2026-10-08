@@ -634,9 +634,8 @@ pub(crate) mod test_helpers {
     /// Finiteness is deliberately not required of
     /// [`Distribution::theta_derivatives`]: a natural-scale score truly diverges
     /// as its parameter collapses (Gamma's `(2/σ³)·[… + y/μ]` at μ → 0, Weibull's
-    /// `σ(z−1)/μ`), past what an f64 can represent. The old bodies only looked finite
-    /// there because they clamped θ, and that clamp is what this refactor
-    /// removed to keep the chain rule telescoping. [`chain_to_eta`] is the single
+    /// `σ(z−1)/μ`), past what an f64 can represent, and clamping θ to keep it finite
+    /// would break the chain rule's telescoping. [`chain_to_eta`] is the single
     /// place finiteness is enforced, which is why the *chained* half of each
     /// saturated-parameter test still asserts [`finite_array`].
     pub fn no_nan_array(a: &Array1<f64>) -> bool {
@@ -685,7 +684,7 @@ pub(crate) mod test_helpers {
         }
 
         /// Every parameter on its family default link, except `target`, which uses
-        /// `link`. This is the post-refactor contract: the score must be `∂l/∂η` for
+        /// `link`. The score must be `∂l/∂η` for
         /// whichever link the caller selected, not only the family's default.
         pub fn overriding<D: Distribution + ?Sized>(
             family: &D,
@@ -910,7 +909,7 @@ pub(crate) mod test_helpers {
     /// scale**.
     ///
     /// The step is *relative*: `h = eps·max(|θ|, 1)`. For a positive parameter
-    /// that is numerically the same perturbation the previous η-scale version took
+    /// that is numerically the same perturbation an η-scale step takes
     /// through a log link (`σ·e^{±eps} ≈ σ(1 ± eps)`), so the callers' tolerances
     /// carry over; for an identity-linked parameter it is unchanged. An *absolute*
     /// step would put the minus side at or below zero for any θ ≲ eps.
@@ -1255,10 +1254,7 @@ mod tests {
     // The derivative-level gate for this lives with each family, not here: every
     // family file has a `score_matches_finite_diff_under_non_default_links` test
     // asserting its `eta_derivatives` agrees with a finite difference on an
-    // *overridden* link's η. Three characterization tests used to sit at this spot
-    // asserting the opposite (that the score DISAGREED) to pin the pre-refactor
-    // behavior; the generic chain rule landed, so they were replaced by the
-    // per-family gates rather than inverted in place.
+    // *overridden* link's η.
     //
     // The end-to-end counterparts are `tests/link_selection.rs` and the independent
     // MLE oracle in `tests/link_mle_oracle.rs`.

@@ -388,13 +388,11 @@ fn deviance<'a, D: Distribution + ?Sized>(
 
 /// Check every `config.links` key against the family before any fitting starts.
 ///
-/// Both of these failures used to produce no error, which is why they get a guard.
-/// An unknown key never matched inside the per-parameter loop below, so
-/// `with_link(Param::Sigma, "log")` on `Beta` (whose second parameter is `phi`) did
-/// nothing. And a parameter whose family hardcodes its own link in
-/// `eta_derivatives` would accept the override for `η → μ` while still computing
-/// the score and weight against the original link, the bug class the
-/// generic-chain-rule work exists to remove.
+/// Neither failure would otherwise produce an error. An unknown key never matches
+/// inside the per-parameter loop below, so `with_link(Param::Sigma, "log")` on
+/// `Beta` (whose second parameter is `phi`) would do nothing. And a parameter whose
+/// family hardcodes its own link in `eta_derivatives` would accept the override for
+/// `η → μ` while still computing the score and weight against the original link.
 ///
 /// Runs before `assemble_model_matrices`, so a typo fails before any work is done.
 fn validate_link_overrides<D: Distribution + ?Sized>(
@@ -437,7 +435,7 @@ fn param_list<D: Distribution + ?Sized>(family: &D) -> String {
 /// Reject a formula that gives terms to a parameter the family does not have.
 ///
 /// The fitting loop only ever looks up `family.parameters()`, so an extra key
-/// (`Param::Sigma` on a Poisson fit, `Param::Nu` on a Gaussian one) used to be
+/// (`Param::Sigma` on a Poisson fit, `Param::Nu` on a Gaussian one) would be
 /// dropped without a word. That is almost always a wrong family, not an intent.
 pub(crate) fn validate_formula_params<D: Distribution + ?Sized>(
     family: &D,
@@ -769,8 +767,8 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             eta: model.eta,
             // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
             fitted_values: model.mu,
-            // Summed from `term_edf` (`FittingParameter` no longer stores a
-            // separate total) so the two cannot drift apart.
+            // Summed from `term_edf` rather than stored separately, so the two
+            // cannot drift apart.
             edf: model.term_edf.iter().sum(),
             term_edf: model.term_edf,
             term_blocks,

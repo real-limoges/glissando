@@ -72,13 +72,11 @@ impl Distribution for Gamma {
         let sigma = require(self, params, Param::Sigma)?;
 
         // **Every guard here is on a denominator or a Gamma-function argument, never
-        // on μ or σ themselves.** This body used to clamp both up to `MIN_POSITIVE`.
-        // The folded η-scale form could afford that; the un-folded one can't.
-        // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
-        // anything clamped here, so a clamp that binds breaks the telescoping. And it
-        // binds at reachable parameters: `exp(MIN_ETA) ≈ 9.4e-14` is already below
-        // `MIN_POSITIVE`, and the newly-gated `inverse`/`sqrt` links on μ reach
-        // further still. Same argument spelled out at length in `binomial.rs`.
+        // on μ or σ themselves.** `chain_to_eta` multiplies by a `mu_eta` computed
+        // from η independently of anything clamped here, so a clamp that binds breaks
+        // the telescoping. And it binds at reachable parameters: `exp(MIN_ETA) ≈
+        // 9.4e-14` is already below `MIN_POSITIVE`, and the `inverse`/`sqrt` links on
+        // μ reach further still. Same argument spelled out at length in `binomial.rs`.
         let mu_guarded = mu.mapv(|m| m.max(DENOM_FLOOR));
         let sigma_guarded = sigma.mapv(|s| s.max(DENOM_FLOOR));
         // α = 1/σ² is a Gamma-function argument rather than a factor of the answer,
@@ -181,7 +179,7 @@ impl Distribution for Gamma {
         //   ∂F/∂μ  = −mass/μ
         //   ∂²F/∂μ² = mass·(1 + α − x)/μ²
         // The caller chains to η. Under the default log link mu_eta = mu_eta2 = μ,
-        // which recovers the previous η-scale pair exactly:
+        // which gives the η-scale pair:
         // μ·(−mass/μ) = −mass and mass(1+α−x) − mass = (x − α)·(−mass).
         // σ enters both α and x, so its CDF derivative needs ∂P/∂α (non-elementary).
         // That one is left to the wrapper's numeric fallback.
@@ -198,7 +196,7 @@ impl Distribution for Gamma {
             let x = y[i] / (mu[i].max(MIN_POSITIVE) * s * s);
             // γ-density mass at x: xᵅ·e⁻ˣ / Γ(α) = exp(α·ln x − x − lnΓ(α)).
             let mass = (alpha * x.ln() - x - ln_gamma(alpha)).exp();
-            // Un-folding puts μ in a denominator for the first time, so it gets a
+            // μ sits in a denominator here, so it gets a
             // `DENOM_FLOOR` guard rather than the `MIN_POSITIVE` clamp `x` uses.
             // The caller multiplies by a `mu_eta` computed from η independently of
             // anything clamped here, and `MIN_POSITIVE = 1e-10` sits *above* the
@@ -312,8 +310,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/(μ²σ²)`, `1/σ³`, `1/σ⁴` and `1/σ⁶`, all of which
-        // the previous η-scale forms canceled down to at most `1/σ⁴`. σ⁶ is the
+        // The natural scores carry `1/(μ²σ²)`, `1/σ³`, `1/σ⁴` and `1/σ⁶`, where the
+        // η-scale forms cancel down to at most `1/σ⁴`. σ⁶ is the
         // first to underflow, so this fixture is the one that pins the guard.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
@@ -347,8 +345,8 @@ mod tests {
 
     #[test]
     fn cdf_theta_derivatives_stay_finite_at_a_saturated_mu() {
-        // Un-folding put μ and μ² in denominators that the η-scale form (`−mass`,
-        // `(x−α)·−mass`) had canceled away entirely, which is why each power gets
+        // The natural-scale form puts μ and μ² in denominators that the η-scale form
+        // (`−mass`, `(x−α)·−mass`) cancels away entirely, which is why each power gets
         // its own `DENOM_FLOOR`: μ² underflows to exactly zero for a μ that μ alone
         // survives, and `inf · 0` is NaN.
         let y = array![1.0, 2.0, 0.5, 3.0];

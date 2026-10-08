@@ -69,19 +69,14 @@ impl Distribution for Binomial {
         // Under the default logit link `mu_eta = μ(1−μ)`, so `chain_to_eta` recovers
         // the classic `u_η = y − n·μ` and `w_η = n·μ(1−μ)`. Returned unfloored.
         //
-        // **The guard is on the denominator, not on μ.** This family used to clamp
-        // `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]` with `MIN_POSITIVE = 1e-10`. The folded
-        // form could afford that because the division canceled; the un-folded form
-        // cannot. `chain_to_eta` multiplies by a `mu_eta` computed from η
-        // independently of anything clamped here, so a clamp that binds breaks the
-        // telescoping. Under a probit link at η = −30 (the link's own clamp)
-        // μ = Φ(η) ≈ 5e-198, and clamping the denominator up to 1e-10 would collapse
-        // the score by ~190 orders of magnitude. The probit and cloglog acceptance
-        // gates exercise that regime. `DENOM_FLOOR` sits far below anything any link
-        // produces, so it only prevents a division by exactly zero.
-        //
-        // `1.0 - MIN_POSITIVE` was also never the upper clamp its name suggests once μ
-        // got close to 1.
+        // **The guard is on the denominator, not on μ.** `chain_to_eta` multiplies by
+        // a `mu_eta` computed from η independently of anything clamped here, so a
+        // clamp on μ that binds breaks the telescoping. Under a probit link at
+        // η = −30 (the link's own clamp) μ = Φ(η) ≈ 5e-198, and clamping the
+        // denominator up to 1e-10 would collapse the score by ~190 orders of
+        // magnitude. The probit and cloglog acceptance gates exercise that regime.
+        // `DENOM_FLOOR` sits far below anything any link produces, so it only
+        // prevents a division by exactly zero.
         let mu = require(self, params, Param::Mu)?;
         let n = self.trials(y.len());
 
@@ -317,9 +312,9 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_mu() {
-        // Un-folding brings back the `1/(μ(1−μ))` that `u = y − n·μ` canceled. The
-        // fixture spans both boundaries, μ exactly 0 and exactly 1 included, which
-        // the old `MIN_POSITIVE` clamp used to mask.
+        // The natural score carries a `1/(μ(1−μ))` that the η-scale `u = y − n·μ`
+        // cancels. The fixture spans both boundaries, μ exactly 0 and exactly 1
+        // included.
         let bin = Binomial::new(10);
         let y = array![0.0, 10.0, 5.0, 3.0];
         let owned = [(Param::Mu, array![0.0, 1.0, 1e-200, 1.0 - 1e-16])];
@@ -339,17 +334,17 @@ mod tests {
         // This is why the guard is on the denominator rather than on μ. Deep in the
         // probit tail the natural score `(y − nμ)/(μ(1−μ))` is enormous and
         // `mu_eta = φ(η)` is minuscule, and the product has to telescope back to
-        // `y·φ(η)/Φ(η)`, the inverse Mills ratio times y. The old `MIN_POSITIVE`
-        // clamp on μ would floor the denominator at 1e-10 and collapse the result by
-        // orders of magnitude, which kept the probit acceptance gate failing.
+        // `y·φ(η)/Φ(η)`, the inverse Mills ratio times y. A `MIN_POSITIVE` clamp on
+        // μ would floor the denominator at 1e-10 and collapse the result by orders
+        // of magnitude.
         //
         // η stops at −6 because of the *test helper*, not the fitter.
         // `ParamLinks` reconstructs η as `link(μ)`, and `ProbitLink::link` clamps μ
         // at `MIN_POSITIVE = 1e-10` (so η saturates around −6.36). In production η is
         // the primary quantity and μ is `inv_link(η)`, so no such round trip happens
         // and the tail extends to `MIN_ETA`. Φ(−6) ≈ 9.9e-10 is just clear of the
-        // clamp and far enough out to separate the two: the folded value would be ≈ 4
-        // and the correct one is ≈ 24.
+        // clamp and far enough out to separate the two: a clamped μ gives ≈ 4 and the
+        // correct value is ≈ 24.
         let bin = Binomial::new(10);
         let y = array![4.0];
         for &eta in &[-4.0_f64, -6.0] {

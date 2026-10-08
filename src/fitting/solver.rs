@@ -905,11 +905,10 @@ fn fit_pwls_with_grad_info(
 
     // `solve_robust`/`inv_robust` drop to an eigendecomposition when `lhs` goes
     // near-singular in floating point (a smooth term collapsing toward its penalty
-    // null space, say). The plain LU path has no fallback for that case, and it
-    // showed up as a CI-only `dgesv`/`dpotrf` failure that did not reproduce
-    // locally: BLAS-build-dependent rounding pushes a near-zero pivot to zero. The
-    // fast path matches the old direct solve/inv exactly, so nothing changes when
-    // `lhs` is well-conditioned.
+    // null space, say). The plain LU path has no fallback for that case, and
+    // BLAS-build-dependent rounding can push a near-zero pivot to exactly zero. The
+    // fast path is the plain direct solve/inv, so a well-conditioned `lhs` takes no
+    // detour.
     let beta_arr = linalg::solve_robust(&lhs, &nfo.x_t_w_z)?;
     let beta = Coefficients(beta_arr);
 

@@ -78,7 +78,7 @@ impl Distribution for BCT {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The `t` robustifying weight
         // w_t = (τ+1)/(τ+z²) downweights outliers and → 1 as τ → ∞ (→ BCCG).
         // Natural-scale scores; chain_to_eta reapplies the default links (log, log,
-        // identity, log) and recovers the old η-scale values exactly:
+        // identity, log):
         //   dl/dμ = [w_t·z·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [w_t·z² − 1] / σ
         //   dl/dν = −w_t·z·∂z/∂ν + log(y/μ)
@@ -136,8 +136,8 @@ impl Distribution for BCT {
             i_sigma[i] = (2.0 * t / (t + 3.0)) * inv_s_sq;
             i_nu[i] = (7.0 * s * s / 4.0) * shrink;
             // τ information mirrors StudentT and → 0 as τ → ∞ (df is unidentifiable
-            // for a normal). The `.abs()` survives the un-fold: it used to wrap
-            // `i_τ·τ²`, and τ² > 0, so `|i_τ·τ²| = |i_τ|·τ²`.
+            // for a normal). Taking `.abs()` here, before chaining, is safe: τ² > 0,
+            // so `|i_τ|·τ² = |i_τ·τ²|`.
             i_tau_out[i] = (0.25
                 * (trigamma(t / 2.0) - trigamma((t + 1.0) / 2.0)
                     + 2.0 * (t + 3.0) / (t * (t + 1.0))))
@@ -326,8 +326,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms canceled.
+        // The natural scores carry `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the η-scale
+        // forms cancel.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             (Param::Mu, array![0.0, 1e-320, 1e-8]),

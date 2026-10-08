@@ -145,15 +145,15 @@ Requiring the method turns that into a compile error.
   New `Term::Offset`, `Term::Factor` (with `Contrast::Treatment` or sum-to-zero contrasts) and `Term::Interaction` variants back them.
 - **Missing-data handling**: `NaAction::DropRows` (the default, R's `na.omit`) or `NaAction::Fail`, set with `FitConfig::with_na_action`.
 - **Prior weights**: `GamlssModel::fit_weighted`, and a `weights` argument on `fit_with_config` and `json::fit`.
-- **Structural likelihoods (STRUCT-1..3)**: `Censored`, `Truncated`, and `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base family, in `src/distributions/{censored,truncated,hurdle}.rs`.
+- **Structural likelihoods**: `Censored`, `Truncated`, and `Hurdle` wrapper distributions (+ the `CensorStatus` enum) over any base family, in `src/distributions/{censored,truncated,hurdle}.rs`.
   Censoring swaps the density for a survival/interval probability built from the base `cdf`; truncation renormalizes by the in-support mass; hurdle composes a logit-linked zero atom (`xi`) with a zero-truncated base.
-- **Finite mixtures (STRUCT-4)**: `MixtureModel` and `fit_mixture` in `src/fitting/mixture.rs` fit a `K`-component mixture by EM, reusing the prior-weighted RS fit as the M-step.
+- **Finite mixtures**: `MixtureModel` and `fit_mixture` in `src/fitting/mixture.rs` fit a `K`-component mixture by EM, reusing the prior-weighted RS fit as the M-step.
   Both are re-exported at the crate root.
 - **`Distribution::cdf_theta_derivatives`**: a new trait hook returning analytic natural-scale `(∂F/∂θ, ∂²F/∂θ²)` per parameter.
   It is implemented for Gaussian μ and σ, Student-t μ and σ, and Gamma μ; every other parameter uses a central-difference fallback.
   The shared helper in `src/distributions/structural.rs` chains the result to the η scale once and drives the censoring and truncation score and observed-information weight.
   (It shipped under the name `cdf_eta_derivatives` with an η-scale contract; see the rename under "Fixed: non-default links" above.)
-- **SER-1 serialization**: a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`) and a `Distribution::descriptor` hook.
+- **Family serialization**: a `FamilyDescriptor` enum (`src/distributions/descriptor.rs`) and a `Distribution::descriptor` hook.
   `Binomial`, `Ocat`, and the structural wrappers now round-trip through `to_json` / `from_json`, as the stateless families already did.
   `MixtureModel` has its own `to_json` / `from_json`.
 

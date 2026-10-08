@@ -175,7 +175,7 @@ mod tests {
         // Under the default log link `∂l/∂η` and the folded
         // `y − μ` agree by construction, so the default-link check above cannot
         // tell a natural-scale score from an η-scale one. `sqrt` can: it wants
-        // `dμ/dη = 2√μ`, which this family no longer hardcodes.
+        // `dμ/dη = 2√μ`.
         let y = array![0.0, 1.0, 4.0, 9.0, 6.0];
         let owned = [(Param::Mu, array![0.5, 1.5, 3.0, 8.0, 5.0])];
         check_eta_score_via_finite_diff(&Poisson, &y, &owned, Param::Mu, &SqrtLink, 1e-5);
@@ -184,8 +184,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_mu() {
-        // Un-folding introduces a `1/μ` the old `u = y − μ` canceled, so the
-        // saturated tail is newly reachable arithmetic. `DENOM_FLOOR` has to keep
+        // The natural score carries a `1/μ` that the η-scale `u = y − μ` cancels, so
+        // the saturated tail is live arithmetic. `DENOM_FLOOR` has to keep
         // both the natural score and the chained η-score finite there, including
         // where μ has underflowed to exactly zero.
         let y = array![0.0, 3.0, 10.0];

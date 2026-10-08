@@ -50,15 +50,12 @@ impl Distribution for Beta {
         let mu = require(self, params, Param::Mu)?;
         let phi = require(self, params, Param::Phi)?;
 
-        // **The floor sits on the Gamma-function arguments, not on μ or φ.** This
-        // family used to clamp `μ ∈ [MIN_POSITIVE, 1−MIN_POSITIVE]`. The folded
-        // η-scale form could afford that; the un-folded one can't. `chain_to_eta`
-        // multiplies by a `mu_eta` computed from η independently of anything clamped
-        // here, so a clamp that binds breaks the telescoping. μ now gets to be
-        // probit/cloglog/cauchit, and under a probit at η = −10 the true
-        // μ = Φ(−10) ≈ 7.6e-24, fourteen orders of magnitude below the old clamp,
-        // which would have evaluated ψ and ψ' at the wrong α entirely. Same argument
-        // spelled out at length in `binomial.rs`.
+        // **The floor sits on the Gamma-function arguments, not on μ or φ.**
+        // `chain_to_eta` multiplies by a `mu_eta` computed from η independently of
+        // anything clamped here, so a clamp on μ that binds breaks the telescoping.
+        // Under a probit at η = −10 the true μ = Φ(−10) ≈ 7.6e-24, and a clamp at
+        // `MIN_POSITIVE` would evaluate ψ and ψ' at the wrong α entirely. Same
+        // argument spelled out at length in `binomial.rs`.
         //
         // What needs guarding is α = μφ and β = (1−μ)φ hitting exactly 0,
         // where ψ(0) = −∞ and ψ'(0) = +∞. `TRIGAMMA_FLOOR` is the binding one of the
@@ -84,8 +81,7 @@ impl Distribution for Beta {
         // Natural scale. This family is separable, so there are no chain-rule
         // multiplies here.
         // `chain_to_eta` reapplies them from the resolved link (`mu_eta = μ(1−μ)`
-        // for logit, `φ` for log) and reproduces the old η-scale values under the
-        // defaults. Weights come back unfloored.
+        // for logit, `φ` for log). Weights come back unfloored.
 
         // μ. dl/dμ = φ·[log(y) − log(1−y) − ψ(α) + ψ(β)].
         let dl_dmu = phi * (&log_y - &log_1_minus_y - &psi_alpha + &psi_beta);
@@ -194,12 +190,11 @@ mod tests {
 
     #[test]
     fn score_tracks_a_mu_far_below_the_old_clamp() {
-        // Regression for the `μ.clamp(MIN_POSITIVE, 1−MIN_POSITIVE)` this body used to
-        // apply. Under a probit link at η = −10 the true μ is Φ(−10) ≈ 7.6e-24. The
-        // clamp evaluated ψ and ψ' at 1e-10 instead, fourteen orders of magnitude
-        // away, so `chain_to_eta` multiplied a `mu_eta` taken from the true η into a
-        // score taken from a different μ, and the product stopped telescoping. Two μ
-        // that far apart must not produce the same derivative.
+        // μ must not be clamped. Under a probit link at η = −10 the true μ is
+        // Φ(−10) ≈ 7.6e-24. A clamp at 1e-10 would evaluate ψ and ψ' fourteen orders
+        // of magnitude away, so `chain_to_eta` would multiply a `mu_eta` taken from
+        // the true η into a score taken from a different μ, and the product would
+        // stop telescoping. Two μ that far apart must not produce the same derivative.
         let y = array![0.5];
         let clamped = [(Param::Mu, array![1e-10]), (Param::Phi, array![10.0])];
         let truthful = [(Param::Mu, array![7.6e-24]), (Param::Phi, array![10.0])];

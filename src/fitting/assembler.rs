@@ -708,7 +708,7 @@ mod tests {
     }
 
     /// A second smooth term's penalty must start right after the first smooth's
-    /// coefficients; `Efficiency #11`'s block-local `PenaltyMatrix` storage depends
+    /// coefficients; the block-local `PenaltyMatrix` storage depends
     /// on that offset.
     #[test]
     fn second_smooth_penalty_offset_equals_first_smooth_coeff_count() {

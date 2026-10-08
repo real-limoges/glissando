@@ -204,7 +204,7 @@ impl Distribution for StudentT {
         //   μ:  ∂F/∂μ = −g/σ,    ∂²F/∂μ² = g'/σ².
         //   σ:  ∂F/∂σ = −zg/σ,   ∂²F/∂σ² = (2zg + z²g')/σ².
         // The caller chains to η. Under the default links (identity, log) that
-        // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
+        // gives the η-scale forms: μ has mu_eta = 1 and
         // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
         // σ·(−zg/σ) = −zg and (2zg + z²g') − zg = zg + z²g'.
         // ν has no elementary CDF derivative (incomplete-beta shape derivative) and
@@ -594,10 +594,10 @@ mod tests {
 
     #[test]
     fn the_nu_block_shares_the_guarded_sigma_with_the_mu_sigma_block() {
-        // The ν block used to rebuild `z` from a raw σ where `mu_sigma_derivatives`
-        // divides by the `DENOM_FLOOR`-guarded reciprocal. On an exactly-fitting row
-        // (y = μ) with a collapsed σ that is `0/0` = NaN against the guarded form's
-        // `0 · 1e300` = 0, so the ν score alone went NaN while μ and σ stayed finite.
+        // The ν block must build `z` from the same `DENOM_FLOOR`-guarded reciprocal
+        // as `mu_sigma_derivatives`. From a raw σ, an exactly-fitting row (y = μ) with
+        // a collapsed σ gives `0/0` = NaN against the guarded form's `0 · 1e300` = 0,
+        // so the ν score alone would go NaN while μ and σ stay finite.
         let y = array![1.0, 2.0];
         let owned = [
             (Param::Mu, array![1.0, 2.0]),
@@ -639,8 +639,7 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_sigma() {
-        // Un-folding introduces `1/σ` and `1/σ²` that the previous η-scale forms
-        // canceled.
+        // The natural scores carry `1/σ` and `1/σ²` that the η-scale forms cancel.
         let y = array![-1.0, 0.5, 2.0];
         let owned = [
             (Param::Mu, array![0.0, 0.5, 1.0]),
@@ -706,8 +705,8 @@ mod tests {
 
     #[test]
     fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
-        // Same exposure as Gaussian's: un-folding σ introduced a `1/σ` and a `1/σ²`
-        // the η-scale forms did not have. ν is swept alongside σ because `g` and
+        // Same exposure as Gaussian's: the natural-scale σ derivatives carry a `1/σ`
+        // and a `1/σ²` the η-scale forms do not. ν is swept alongside σ because `g` and
         // `g'` both carry it. σ = 0 exactly is excluded:
         // `z = (y−μ)/σ` overflows there and `w_robust · z²` is a `0 · ∞` NaN.
         let y = array![0.0, 1.0, 2.0, -1.0];
