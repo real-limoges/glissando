@@ -2,9 +2,9 @@
 //!
 //! A family's score and information can live on two scales: the parameter's own
 //! **natural** scale θ, or the **linear-predictor** scale η that the Fisher-scoring
-//! loop works on. The numbers are the same shape either way, so before these types
-//! existed a natural-scale value read as an η-scale one (or chained twice) compiled
-//! and ran, and only the estimates were wrong.
+//! loop works on. The numbers are the same shape either way, so without a scale tag
+//! a natural-scale value read as an η-scale one (or chained twice) compiles and
+//! runs, and only the estimates are wrong.
 //!
 //! [`ScoreInfo`] and [`CdfGrad`] carry the scale as a type parameter, [`Natural`] or
 //! [`Eta`]. A value can only be built through a constructor, so its scale is always a

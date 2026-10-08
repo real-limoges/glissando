@@ -67,7 +67,7 @@ let model = GamlssModel::fit(&data, &y, &formula, &Weibull::new()).unwrap();  //
 
 **Beta** models a response on the open interval (0, 1): rates, fractions, proportions that are neither exactly 0 nor exactly 1.
 Its second parameter is the precision `phi` (larger means less spread), not a `sigma`, so the formula needs a `phi` entry.
-For data with exact zeros or ones, use a zero/one-inflated variant (not yet shipped; see `DIST-5` in the roadmap) or the `Hurdle` wrapper below.
+For data with exact zeros or ones, use a zero/one-inflated variant (not yet shipped) or the `Hurdle` wrapper below.
 
 ## Counts
 
@@ -167,5 +167,5 @@ let mixture = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &FitConfig::
 
 ## Not yet shipped
 
-Skew/kurtotic families beyond Box-Cox (`DIST-3`), the extra count families (`DIST-4`), zero-inflated / zero-adjusted families (`DIST-5`), and Tweedie (`DIST-7`) are on the roadmap but not implemented.
+Skew/kurtotic families beyond Box-Cox, the extra count families, zero-inflated / zero-adjusted families, and Tweedie are not implemented yet.
 For semicontinuous data with exact zeros, use `Hurdle` over a positive base family.

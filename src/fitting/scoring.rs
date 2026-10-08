@@ -260,8 +260,7 @@ pub(super) fn step<D: Distribution + ?Sized>(
     //    count how often each guard fires so the caller can flag a degenerate fit.
     //
     //    One `Zip::for_each` pass builds both `z` and the floored weights `w` and
-    //    tallies the clamp counters: two output allocations instead of the four
-    //    the old mapv-chained intermediates produced.
+    //    tallies the clamp counters, with two output allocations.
     let n = target.eta.len();
     let mut z = Array1::<f64>::zeros(n);
     let mut w = Array1::<f64>::zeros(n);

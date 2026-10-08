@@ -202,9 +202,8 @@ pub enum Smooth {
         /// Training-data range `(min, max)` the uniform knot grid is anchored to.
         /// **Leave `None` when building a formula.** It gets resolved once from the
         /// training data at fit time and stored here, so prediction reuses the
-        /// same basis. The knots used to be re-derived from the *prediction* data's
-        /// range, which gave wrong values for any out-of-range or
-        /// subset prediction. Pinning the range fixed it.
+        /// same basis. Re-deriving knots from the *prediction* data's range would
+        /// give wrong values for any out-of-range or subset prediction.
         #[cfg_attr(feature = "serde", serde(default))]
         range: Option<(f64, f64)>,
     },

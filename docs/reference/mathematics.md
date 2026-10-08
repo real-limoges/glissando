@@ -886,7 +886,7 @@ Unlike the expected information of the plain families, an observed second deriva
 Observed information is also not link-invariant, which is why these three wrappers keep an `eta_derivatives` override rather than returning a natural-scale pair: the exact $\eta$-transform carries a $\mu_{\eta\eta}\,\partial\ell/\partial\theta$ term with no $\mu_\eta^2$ factor, so the weight is provably not of the form $\mu_\eta^2 \times (\text{anything natural})$.
 They consume $\eta$-scale $F'$ and $F''$ built by the second-order rule of [CHAIN-GENERIC], and honor an overridden link through it.
 
-#### [STRUCT-1] Censoring
+#### [CENSORED] Censoring
 
 Each observation is exact, or known only to lie below / above / within an interval.
 The pointwise log-likelihood swaps the density for a survival / interval probability built from the base CDF:
@@ -913,7 +913,7 @@ with $D' = F'(\text{hi}) - F'(y)$, $D'' = F''(\text{hi}) - F''(y)$.
 Event rows keep the base family's $(u, w)$, so an all-event `Censored` reduces exactly to the base log-likelihood.
 Source: `src/distributions/censored.rs`.
 
-#### [STRUCT-2] Truncation
+#### [TRUNCATED] Truncation
 
 The response is observed only within $(\text{lo}, \text{hi})$; out-of-range values are *absent*, not censored, so the density renormalizes by the in-support mass $D = F(\text{hi}) - F(\text{lo})$:
 $$
@@ -927,7 +927,7 @@ A $(-\infty, \infty)$ truncation reduces to the base.
 The wrapper's CDF/quantile are renormalized onto the truncated support, $F_T(y) = (F(y) - F(\text{lo}))/D$.
 Source: `src/distributions/truncated.rs`.
 
-#### [STRUCT-3] Hurdle / two-part
+#### [HURDLE] Hurdle / two-part
 
 A point mass at zero plus a *zero-truncated* base for the positive part, with a logit-linked atom $\xi = P(Y = 0)$:
 $$
@@ -1152,7 +1152,7 @@ For each parameter $\theta_k$ (e.g., $\mu$, $\sigma$, $\nu$):
 
 4. **Smoothing parameter selection**: GCV, REML, or Fellner–Schall (§8, [REML-LAML]).
 
-5. **Step-halving on the penalized deviance** (FIT-1): the accepted update is $\beta_k^{(t)} + \alpha\, d_k$ with $d_k = \hat\beta_k - \beta_k^{(t)}$ and $\alpha \in \{1, \tfrac12, \tfrac14, \dots\}$ backtracked until
+5. **Step-halving on the penalized deviance**: the accepted update is $\beta_k^{(t)} + \alpha\, d_k$ with $d_k = \hat\beta_k - \beta_k^{(t)}$ and $\alpha \in \{1, \tfrac12, \tfrac14, \dots\}$ backtracked until
 
    $$
    GD(\beta_k^{(t)} + \alpha d_k) + \sum_j \lambda_j\, (\beta_k^{(t)} + \alpha
@@ -1235,7 +1235,7 @@ When `prior_weights = None`, the formula reduces to $W = \mathrm{diag}(\mathrm{s
 
 Source: `src/fitting/scoring.rs` (`step`).
 
-### [STRUCT-4] Finite Mixtures via EM
+### [MIXTURE-EM] Finite Mixtures via EM
 
 A $K$-component finite mixture has density
 $$
@@ -1338,7 +1338,7 @@ $$
 
 The new design matrix $[\mathbf{1}_n \mid B Z]$ has full column rank, and the constraint $\mathbf{1}_k^T \beta = 0$ (i.e.\ the smooth has mean zero across knots) is enforced automatically.
 
-### [DESIGN-TERMS] Design-Matrix Terms: Factors, Interactions, and Offsets (DATA-1/2/3)
+### [DESIGN-TERMS] Design-Matrix Terms: Factors, Interactions, and Offsets
 
 The assembler (`src/fitting/assembler.rs`) turns a parameter's term list into design columns.
 Beyond the intercept, linear, and smooth blocks above, three parametric term kinds expand here.
@@ -2188,13 +2188,13 @@ A reverse index from each mathematical concept to the code that implements it, f
 | Beta derivatives ([BETA]) | `src/distributions/beta.rs` |
 | Binomial derivatives ([BINOMIAL]) | `src/distributions/binomial.rs` |
 | Ordered categorical derivatives ([OCAT]) | `src/distributions/ocat.rs` |
-| Censoring wrapper ([STRUCT-1]) | `src/distributions/censored.rs` |
-| Truncation wrapper ([STRUCT-2]) | `src/distributions/truncated.rs` |
-| Hurdle wrapper ([STRUCT-3]) | `src/distributions/hurdle.rs` |
+| Censoring wrapper ([CENSORED]) | `src/distributions/censored.rs` |
+| Truncation wrapper ([TRUNCATED]) | `src/distributions/truncated.rs` |
+| Hurdle wrapper ([HURDLE]) | `src/distributions/hurdle.rs` |
 | Analytic CDF parameter derivatives + numeric fallback ([STRUCT-CDF-THETA]) | `src/distributions/{gaussian,student_t,gamma}.rs` (`cdf_theta_derivatives`), `src/distributions/structural.rs` |
 | Generic link chain rule + link-override validation ([CHAIN-GENERIC]) | `src/distributions.rs` (`chain_to_eta`, `chain_cdf_to_eta`, `allows_link_override`), `src/distributions/links.rs` (`LinkContext`, `mu_eta2`), `src/fitting.rs` (`validate_link_overrides`) |
-| Finite mixtures via EM ([STRUCT-4]) | `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`) |
-| `FamilyDescriptor` serialization (SER-1) | `src/distributions/descriptor.rs` |
+| Finite mixtures via EM ([MIXTURE-EM]) | `src/fitting/mixture.rs` (`fit_mixture`, `MixtureModel`) |
+| `FamilyDescriptor` serialization | `src/distributions/descriptor.rs` |
 | Digamma / trigamma batched (§2) | `src/math.rs` |
 | Distribution trait (§1) | `src/distributions.rs` |
 | CDF / PDF / quantile / `is_discrete` trait methods ([CDF-TRIO]) | `src/distributions.rs` + per-family files |

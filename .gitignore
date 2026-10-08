@@ -11,13 +11,11 @@ CLAUDE.md
 *.pyc
 __pycache__/
 
-# Accidental root-level npm scaffolding — the published npm package is pkg/.
+# Accidental root-level npm scaffolding; the published npm package is pkg/.
 /package.json
 /package-lock.json
 
-# docs/: only the public reference/ tree (cookbook + math) is tracked;
-# decisions/, state.yaml, private-notes/, html/ stay local, and so do the
-# implementation guides filed under reference/ (*-implementation.md).
+# docs/: only the public reference/ tree is tracked.
 docs/*
 !docs/reference/
 docs/reference/*-implementation.md

@@ -94,7 +94,7 @@ impl Distribution for BCPE {
         // Box-Cox spine (z, ∂z/∂ν) shared with BCCG. The PE score swaps out the
         // normal's −z. With a = z/c, gₜ = |a|^τ, and D = (τ/2c)|a|^{τ−1}sign(z)
         // (= z at τ=2). Natural scale; chain_to_eta reapplies the default links (log, log,
-        // identity, log) and recovers the old η-scale values exactly:
+        // identity, log):
         //   dl/dμ = [D·T/σ − ν] / μ   (T = (y/μ)^ν = 1+νσz)
         //   dl/dσ = [(τ/2)gₜ − 1] / σ   (numerator = z·D − 1)
         //   dl/dν = −D·∂z/∂ν + log(y/μ)
@@ -373,8 +373,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_saturated_parameters() {
-        // Un-folding introduces `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the previous
-        // η-scale forms canceled.
+        // The natural scores carry `1/μ`, `1/μ²`, `1/σ` and `1/σ²` that the η-scale
+        // forms cancel.
         let y = array![1.0, 2.0, 3.0];
         let owned = [
             (Param::Mu, array![0.0, 1e-320, 1e-8]),

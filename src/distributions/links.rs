@@ -782,9 +782,8 @@ mod tests {
 
     #[test]
     fn mu_eta_reconstructs_hardcoded_gaussian_weights() {
-        // Regression target for the future generic-weight refactor: the chain-rule
-        // reconstruction u_η = mu_eta·∂l/∂θ, w_η = mu_eta²·i_θ must equal the
-        // weights gaussian.rs hard-codes today.
+        // The chain-rule reconstruction u_η = mu_eta·∂l/∂θ, w_η = mu_eta²·i_θ must
+        // equal Gaussian's closed-form η-scale weights.
         let (y, mu, sigma) = (1.3_f64, 0.4_f64, 0.8_f64);
 
         // μ: identity link, mu_eta = 1. Natural scale: ∂l/∂μ = (y−μ)/σ², i_μ = 1/σ².

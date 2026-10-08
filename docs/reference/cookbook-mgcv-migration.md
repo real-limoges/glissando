@@ -4,7 +4,7 @@
 **The one big difference:** in R's `gamlss`, each distribution parameter gets its own formula argument (`mu.formula`, `sigma.formula`, ...); in glissando they are entries in a single `Formula`, keyed by parameter name.
 `mgcv::gam` models only the mean, so a `gam(y ~ s(x))` maps to a glissando fit with a `mu` predictor and default (intercept-only) predictors elsewhere.
 **Status:** glissando does not yet cover everything R does.
-This guide maps what exists and names what does not, with the roadmap ID so you can check status.
+This guide maps what exists and names what does not.
 
 Read `cookbook-quickstart.md` first for the mechanics; this page is about translation.
 
@@ -48,11 +48,11 @@ R family codes map to glissando family constructors as follows.
 | `BCT` | `BCT::new()` | |
 | `BCPE` | `BCPE::new()` | |
 | ordinal (`ocat` in mgcv) | `Ocat::new(k)` | 2 to 5 levels |
-| `IG`, `LOGNO`, `EXP`, `GG`, `PARETO` | not shipped | `DIST-2` remainder |
-| `SN`, `ST`, `SHASH`, `JSU`, `PE` | not shipped | `DIST-3` |
-| `GEOM`, `LG`, `BB`, `PIG`, `SICHEL`, `DEL` | not shipped | `DIST-4` |
-| `ZIP`, `ZINBI`, `ZAGA`, `ZAIG`, `BEINF` | not shipped | `DIST-5`; use `Hurdle` as a stopgap |
-| `TW` (Tweedie) | not shipped | `DIST-7` |
+| `IG`, `LOGNO`, `EXP`, `GG`, `PARETO` | Not shipped | |
+| `SN`, `ST`, `SHASH`, `JSU`, `PE` | Not shipped | |
+| `GEOM`, `LG`, `BB`, `PIG`, `SICHEL`, `DEL` | Not shipped | |
+| `ZIP`, `ZINBI`, `ZAGA`, `ZAIG`, `BEINF` | Not shipped | Use `Hurdle` as a stopgap |
+| `TW` (Tweedie) | Not shipped | |
 
 ## Smooths and basis codes
 
@@ -66,11 +66,11 @@ Set the count with `k=`; the default knot count differs from mgcv's.
 | `s(x, k=20)` | `s(x, k=20)` | `Smooth::ps("x").n_splines(20)` | shipped |
 | `te(x, z)` | `te(x, z)` | `Smooth::tensor("x", "z")` | shipped (2D only) |
 | `s(g, bs="re")` (random intercept) | `s(g, bs="re")` | `Smooth::re("g")` | shipped |
-| `s(x, bs="cc")` (cyclic) | not available | | `SMOOTH-1` |
-| `s(x, bs="tp")` (thin-plate) | not available | | `SMOOTH-2` |
-| `s(x, by = f)` (varying-coefficient) | not available | | `SMOOTH-3` |
-| `s(x, g, bs="re")` (random slope) | not available | | `SMOOTH-4` |
-| `ti(...)`, `te(...)` in >2D | not available | | `SMOOTH-6` |
+| `s(x, bs="cc")` (cyclic) | Not available | | Not shipped |
+| `s(x, bs="tp")` (thin-plate) | Not available | | Not shipped |
+| `s(x, by = f)` (varying-coefficient) | Not available | | Not shipped |
+| `s(x, g, bs="re")` (random slope) | Not available | | Not shipped |
+| `ti(...)`, `te(...)` in >2D | Not available | | Not shipped |
 
 Factors, interactions, and offsets carry over directly: `factor(g)`, `x:z`, `x*z`, and `offset(logexp)` all parse in a glissando formula string, the same as in R.
 
@@ -87,7 +87,7 @@ let model = GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::n
 ```
 
 mgcv's `method = "GCV.Cp"` maps to `Gcv`; `method = "REML"` is the default.
-There is no `magic`-style grid selection (`FIT-4`) or the `gamlss` CG algorithm (`FIT-3`) yet.
+There is no `magic`-style grid selection or `gamlss` CG algorithm yet.
 
 ## Common workflows, translated
 
@@ -99,7 +99,7 @@ The glissando equivalent:
 let resid = model.quantile_residuals(&family, &y, Some(seed)).unwrap();
 ```
 
-The `wp()` worm plot and `qqnorm` Q-Q plot are not built in (`DIAG-1` / `DIAG-2`), but you can draw them from these residuals.
+The `wp()` worm plot and `qqnorm` Q-Q plot are not built in, but you can draw them from these residuals.
 
 **Model comparison.**
 R's `GAIC(m1, m2, k=2)` and `LR.test`:
@@ -134,10 +134,10 @@ let curves = model.centiles(&grid, &family, &[3.0, 15.0, 50.0, 85.0, 97.0]).unwr
 
 These R features have no glissando equivalent yet.
 
-- **Per-smooth significance / p-values** (mgcv `summary.gam` Tr/Wald table): not implemented (`INFER-5`).
+- **Per-smooth significance / p-values** (mgcv `summary.gam` Tr/Wald table): not implemented.
   The whole-model likelihood-ratio test (`lr_test`) is the closest substitute.
-- **Confidence intervals** for curves and coefficients: partial (`INFER-6`).
+- **Confidence intervals** for curves and coefficients: partial.
   The coefficient covariance (`covariance_matrix`) and the per-observation standard error of the linear predictor (`predict_with_se` -> `se_eta`) are computed and exposed, so you can build a band yourself; there is no function that returns bounds directly.
-- **Worm plots, Q-Q plots, deviance residuals, goodness-of-fit statistics** (`DIAG-1` .. `DIAG-4`): not built in.
-- **Term-effect / partial-effect plots** (`plot.gam`): the primitives exist (`design_matrix`, `term_index_map`, `covariance_matrix`), but nothing assembles the per-term curve with a band (`DIAG-5`).
+- **Worm plots, Q-Q plots, deviance residuals, goodness-of-fit statistics**: not built in.
+- **Term-effect / partial-effect plots** (`plot.gam`): the primitives exist (`design_matrix`, `term_index_map`, `covariance_matrix`), but nothing assembles the per-term curve with a band.
 - The families and smooths marked "not shipped" in the tables above.

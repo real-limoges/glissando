@@ -119,7 +119,7 @@ impl Distribution for Gaussian {
         //   μ:  ∂F/∂μ = −φ/σ,    ∂²F/∂μ² = φ'/σ² = −zφ/σ².
         //   σ:  ∂F/∂σ = −zφ/σ,   ∂²F/∂σ² = zφ(2 − z²)/σ².
         // The caller chains to η. Under the default links (identity, log) that
-        // recovers the previous η-scale forms exactly: μ has mu_eta = 1 and
+        // gives the η-scale forms: μ has mu_eta = 1 and
         // mu_eta2 = 0, so it is unchanged; σ has mu_eta = mu_eta2 = σ, giving
         // σ·(−zφ/σ) = −zφ and σ²·zφ(2−z²)/σ² + σ·(−zφ/σ) = zφ(1 − z²).
         let mu = require(self, params, Param::Mu)?;
@@ -270,8 +270,8 @@ mod tests {
 
     #[test]
     fn derivatives_stay_finite_at_a_saturated_sigma() {
-        // Un-folding brings back the `1/σ²` and `1/σ³` that the old `w_σ = 2`
-        // canceled. Both have to stay finite where the log link can still land,
+        // The natural-scale pairs carry `1/σ²` and `1/σ³` that the η-scale `w_σ = 2`
+        // cancels. Both have to stay finite where the log link can still land,
         // σ underflowed to exactly zero included.
         let y = array![0.0, 1.0, 2.0];
         let owned = [
@@ -359,9 +359,9 @@ mod tests {
 
     #[test]
     fn cdf_theta_derivatives_stay_finite_at_a_saturated_sigma() {
-        // Un-folding σ put a `1/σ` in `∂F/∂σ` and a `1/σ²` in `∂²F/∂σ²` where the
-        // η-scale forms had none, so the saturated tail became reachable
-        // arithmetic. Span both ends of what the log link can produce inside its
+        // The natural-scale σ derivatives put a `1/σ` in `∂F/∂σ` and a `1/σ²` in
+        // `∂²F/∂σ²` where the η-scale forms have none, so the saturated tail is
+        // reachable arithmetic. Span both ends of what the log link can produce inside its
         // own η clamp, plus σ underflowed to exactly zero.
         let y = array![0.0, 1.0, 2.0, -1.0];
         let owned = [
