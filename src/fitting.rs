@@ -489,6 +489,29 @@ pub(crate) fn validate_formula_params<D: Distribution + ?Sized>(
     }
 }
 
+/// Reject a formula in which two terms of one parameter share a name; names key
+/// `term_index_map` and stepwise selection.
+pub(crate) fn validate_unique_term_names<D: Distribution + ?Sized>(
+    family: &D,
+    formula: &Formula,
+) -> Result<(), GamlssError> {
+    for param in family.parameters() {
+        let Some(terms) = formula.get(param) else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        for term in terms {
+            let name = term.term_name();
+            if !seen.insert(name.clone()) {
+                return Err(GamlssError::Input(format!(
+                    "Formula for {param} has two terms named '{name}'"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     data: &DataSet,
     y: &Array1<f64>,
@@ -498,6 +521,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
     config: &FitConfig,
 ) -> Result<(IndexMap<Param, FittedParameter>, FitDiagnostics), GamlssError> {
     validate_formula_params(family, formula)?;
+    validate_unique_term_names(family, formula)?;
     validate_link_overrides(family, config)?;
     // With no cycle there is no covariance or deviance to report, so a zero
     // budget is a configuration error rather than an empty fit.
@@ -863,20 +887,24 @@ pub fn sample_posterior_seeded(
     n_samples: usize,
     seed: Option<u64>,
 ) -> Result<Vec<Array1<f64>>, GamlssError> {
+    match seed {
+        Some(s) => {
+            sample_posterior_with(beta_hat, v_beta, n_samples, &mut StdRng::seed_from_u64(s))
+        }
+        None => sample_posterior_with(beta_hat, v_beta, n_samples, &mut rng()),
+    }
+}
+
+/// Like [`sample_posterior`], drawing from the caller's RNG.
+pub(crate) fn sample_posterior_with(
+    beta_hat: &Coefficients,
+    v_beta: &CovarianceMatrix,
+    n_samples: usize,
+    rng: &mut impl Rng,
+) -> Result<Vec<Array1<f64>>, GamlssError> {
     let l_factor =
         linalg::cholesky_lower(&v_beta.0).map_err(|_| GamlssError::PosteriorNotPositiveDefinite)?;
-    Ok(match seed {
-        Some(s) => sample_from_cholesky(
-            &beta_hat.0,
-            &l_factor,
-            n_samples,
-            &mut StdRng::seed_from_u64(s),
-        ),
-        None => {
-            let mut rng_rs = rng();
-            sample_from_cholesky(&beta_hat.0, &l_factor, n_samples, &mut rng_rs)
-        }
-    })
+    Ok(sample_from_cholesky(&beta_hat.0, &l_factor, n_samples, rng))
 }
 
 pub(crate) fn sample_from_cholesky(

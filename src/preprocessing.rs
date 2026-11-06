@@ -10,7 +10,6 @@ use crate::distributions::Distribution;
 use crate::error::GamlssError;
 use crate::types::{DataSet, Formula};
 use ndarray::prelude::*;
-use std::collections::HashSet;
 
 /// Owned, row-aligned model frame returned by [`drop_incomplete_rows`]: the
 /// filtered response, referenced columns, and (optional) prior weights.
@@ -35,14 +34,7 @@ pub fn drop_incomplete_rows(
     weights: Option<&Array1<f64>>,
 ) -> Result<CompleteFrame, GamlssError> {
     // Only the columns the formula references; nothing else can mask a row.
-    let mut referenced: HashSet<&str> = HashSet::new();
-    for terms in formula.values() {
-        for term in terms {
-            for col in term.column_names() {
-                referenced.insert(col);
-            }
-        }
-    }
+    let referenced = formula.referenced_columns();
 
     // Only the response and the referenced columns count in the completeness
     // test. Weights are left out on purpose: a non-finite or negative weight is a
@@ -107,7 +99,7 @@ pub fn drop_incomplete_rows(
 /// - Response variable contains only finite values
 /// - All parameters in the distribution have formulas
 /// - All variables referenced in formulas exist in the data
-/// - All numeric variables contain only finite values
+/// - Every variable the formula references contains only finite values
 /// - If `weights` is `Some`, its length matches `y`, all values are finite and ≥ 0
 pub fn validate_inputs<D: Distribution + ?Sized>(
     y: &Array1<f64>,
@@ -141,15 +133,7 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
         }
     }
 
-    // Collect all referenced column names from formulas
-    let mut referenced_columns: HashSet<&str> = HashSet::new();
-    for terms in formula.values() {
-        for term in terms {
-            for col in term.column_names() {
-                referenced_columns.insert(col);
-            }
-        }
-    }
+    let referenced_columns = formula.referenced_columns();
 
     // Check all referenced columns exist in data
     for col in &referenced_columns {
@@ -173,12 +157,13 @@ pub fn validate_inputs<D: Distribution + ?Sized>(
         }
     }
 
-    // Check for non-finite values in every column.
-    for (name, arr) in data.iter() {
+    // Only referenced columns matter; others never reach the fit.
+    for col in &referenced_columns {
+        let Some(arr) = data.get(*col) else { continue };
         let non_finite_count = arr.iter().filter(|v| !v.is_finite()).count();
         if non_finite_count > 0 {
             return Err(GamlssError::NonFiniteValues {
-                name: name.clone(),
+                name: col.to_string(),
                 count: non_finite_count,
             });
         }

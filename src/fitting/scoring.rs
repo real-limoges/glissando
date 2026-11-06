@@ -247,9 +247,12 @@ pub(super) fn step<D: Distribution + ?Sized>(
         LinkContext::first_order(entries)
     };
     let all_derivs = family.eta_derivatives(y, &params_ref, &link_ctx)?;
-    let target_derivs = all_derivs
-        .get(&target_param)
-        .ok_or_else(|| GamlssError::Input(format!("No derivation for {} found", target_param)))?;
+    let target_derivs = all_derivs.get(&target_param).ok_or_else(|| {
+        GamlssError::Internal(format!(
+            "Family returned no derivatives for {}",
+            target_param
+        ))
+    })?;
     let (deriv_u, deriv_w) = (&target_derivs.score, &target_derivs.info);
 
     let target = models.get(&target_param).ok_or_else(|| {

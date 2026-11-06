@@ -208,6 +208,8 @@ impl Direction {
 )]
 pub struct StepRecord {
     /// Human-readable description of the accepted move, e.g. `"+ x1 on mu"`.
+    /// Serialized as `"move"`; `"move_"` is still accepted when reading.
+    #[cfg_attr(feature = "serialization", serde(rename = "move", alias = "move_"))]
     pub move_: String,
     /// GAIC of the model after this move.
     pub gaic: f64,
@@ -239,7 +241,7 @@ fn with_added(f: &Formula, param: Param, t: &Term) -> Formula {
     f.clone().with_terms(param, terms)
 }
 
-/// Copy of `f` with every term named like `t` removed from `param`'s term list.
+/// Copy of `f` with the term named like `t` removed from `param`'s term list.
 fn with_dropped(f: &Formula, param: Param, t: &Term) -> Formula {
     let terms: Vec<Term> = f
         .get(&param)

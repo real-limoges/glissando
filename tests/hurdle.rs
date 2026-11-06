@@ -25,6 +25,67 @@ fn gamma_latent(mu: f64, sigma: f64, m: usize) -> Array1<f64> {
     Gamma.quantile(&p, &view).unwrap()
 }
 
+/// Intercept-only hurdle-Gamma fit: 40% zeros, the rest Gamma(3, 0.5).
+fn fit_hurdle_gamma() -> (GamlssModel, Array1<f64>, Hurdle) {
+    let (n_zero, n_pos) = (120, 180);
+    let mut vals = vec![0.0; n_zero];
+    vals.extend(gamma_latent(3.0, 0.5, n_pos).iter().copied());
+    let y = Array1::from_vec(vals);
+    let formula = Formula::new()
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept])
+        .with_terms(Param::Xi, vec![Term::Intercept]);
+    let hurdle = Hurdle::new(Box::new(Gamma::new()));
+    let fit = GamlssModel::fit(&dummy_data(y.len()), &y, &formula, &hurdle).unwrap();
+    (fit, y, hurdle)
+}
+
+/// The fitted mean counts the zeros.
+#[test]
+fn hurdle_expected_value_counts_the_zeros() {
+    let (fit, y, hurdle) = fit_hurdle_gamma();
+    let diagnostics = fit.diagnostics(&hurdle, &y).unwrap();
+    let mean_fit = (&y - &diagnostics.response_residuals)[0];
+    let mean_sample = y.mean().unwrap();
+    assert!(
+        (mean_fit - mean_sample).abs() < 0.1,
+        "fitted mean {mean_fit} should match sample mean {mean_sample}"
+    );
+}
+
+/// With the zero atom randomized, residuals of a correct fit look N(0, 1).
+#[test]
+fn hurdle_quantile_residuals_are_standard_normal() {
+    let (fit, y, hurdle) = fit_hurdle_gamma();
+    let r = fit.quantile_residuals(&hurdle, &y, Some(11)).unwrap();
+    let mean = r.mean().unwrap();
+    let sd = r.std(1.0);
+    assert!(mean.abs() < 0.2, "residual mean {mean}");
+    assert!((sd - 1.0).abs() < 0.2, "residual sd {sd}");
+
+    let zeros: Vec<f64> = r.iter().take(120).copied().collect();
+    let spread = zeros.iter().cloned().fold(f64::MIN, f64::max)
+        - zeros.iter().cloned().fold(f64::MAX, f64::min);
+    assert!(
+        spread > 1.0,
+        "zero-row residuals are lumped: spread {spread}"
+    );
+}
+
+/// Centiles inside the atom are zero.
+#[test]
+fn hurdle_centiles_respect_the_atom() {
+    let (fit, _y, hurdle) = fit_hurdle_gamma();
+    let c = fit
+        .centiles(&dummy_data(1), &hurdle, &[10.0, 90.0])
+        .unwrap();
+    assert_eq!(c["C10"][0], 0.0, "the 10th centile sits in the 40% atom");
+    assert!(
+        c["C90"][0] > 3.0,
+        "the 90th centile is in the positive part"
+    );
+}
+
 #[test]
 fn hurdle_recovers_zero_fraction_and_positive_mean() {
     // 40% structural zeros, the other 60% positive Gamma(mu=3, sigma=0.5).
