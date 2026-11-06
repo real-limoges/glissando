@@ -514,11 +514,79 @@ fn term_name_strings_are_correct() {
     let blocks = model.term_index_map(Param::Mu).unwrap();
     let names: Vec<&str> = blocks.iter().map(|(n, _, _)| n.as_str()).collect();
     assert_eq!(names[0], "(intercept)");
-    assert_eq!(names[1], "s(x)");
-    assert_eq!(names[2], "s(group)");
+    assert_eq!(names[1], "s(x, bs=\"cr\")");
+    assert_eq!(names[2], "s(group, bs=\"re\")");
 
     let sigma_blocks = model.term_index_map(Param::Sigma).unwrap();
     assert_eq!(sigma_blocks[0].0, "(intercept)");
+}
+
+/// Different terms on one column get different names.
+#[test]
+fn same_column_terms_have_distinct_names() {
+    let names: Vec<String> = [
+        Term::linear("g"),
+        Term::factor("g"),
+        Term::smooth(Smooth::ps("g")),
+        Term::smooth(Smooth::cr("g")),
+        Term::smooth(Smooth::re("g")),
+        Term::interaction(Term::factor("g"), Term::linear("x")),
+    ]
+    .iter()
+    .map(Term::term_name)
+    .collect();
+    assert_eq!(
+        names,
+        [
+            "g",
+            "factor(g)",
+            "s(g)",
+            "s(g, bs=\"cr\")",
+            "s(g, bs=\"re\")",
+            "factor(g):x",
+        ]
+    );
+}
+
+/// A repeated term is rejected.
+#[test]
+fn duplicate_term_names_are_rejected() {
+    let mut rng = Generator::new(67);
+    let (y, data) = rng.linear_gaussian(40, 1.0, 1.0, 0.5);
+    let formula = Formula::new()
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::linear("x"), Term::linear("x")],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
+    let err = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap_err();
+    assert!(
+        matches!(&err, GamlssError::Input(msg) if msg.contains("'x'")),
+        "expected a duplicate-term Input error, got {err:?}"
+    );
+}
+
+/// Factor terms are named `factor(g)` in `term_index_map`.
+#[test]
+fn term_index_map_names_factor_terms() {
+    let mut rng = Generator::new(68);
+    let n = 60;
+    let (y, mut data) = rng.linear_gaussian(n, 1.0, 1.0, 0.5);
+    data.insert_column("g", Array1::from_iter((0..n).map(|i| (i % 3) as f64)));
+    let formula = Formula::new()
+        .with_terms(
+            Param::Mu,
+            vec![Term::Intercept, Term::linear("x"), Term::factor("g")],
+        )
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+    let names: Vec<&str> = model
+        .term_index_map(Param::Mu)
+        .unwrap()
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    assert_eq!(names, ["(intercept)", "x", "factor(g)"]);
 }
 
 /// Seeded posterior: same seed gives identical samples, no seed diverges (with overwhelming probability).
@@ -559,6 +627,44 @@ fn seeded_predict_samples_are_reproducible() {
         .zip(run_unseeded[&Param::Mu].iter())
         .all(|(a, b)| a.iter().zip(b.iter()).all(|(x, y)| x == y));
     assert!(!all_equal, "unseeded run should differ from seeded run");
+}
+
+/// Seeded mu and sigma draws are not the same standard normals.
+#[test]
+fn seeded_predict_samples_are_independent_across_parameters() {
+    let mut rng = Generator::new(321);
+    let (y, data) = rng.linear_gaussian(80, 2.0, 5.0, 1.0);
+    let formula = Formula::new()
+        .with_terms(Param::Mu, vec![Term::Intercept])
+        .with_terms(Param::Sigma, vec![Term::Intercept]);
+    let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
+
+    let samples = model
+        .predict_samples(&data, &Gaussian::new(), 20, Some(42))
+        .unwrap();
+
+    // Back out each draw's z value (mu: identity link, sigma: log link).
+    let standardized = |param: Param, to_eta: fn(f64) -> f64| -> Vec<f64> {
+        let fitted = &model.models[&param];
+        let beta = fitted.coefficients.0[0];
+        let sd = fitted.covariance.0[[0, 0]].sqrt();
+        samples[&param]
+            .iter()
+            .map(|s| (to_eta(s[0]) - beta) / sd)
+            .collect()
+    };
+    let z_mu = standardized(Param::Mu, |v| v);
+    let z_sigma = standardized(Param::Sigma, f64::ln);
+
+    let max_gap = z_mu
+        .iter()
+        .zip(&z_sigma)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    assert!(
+        max_gap > 1e-3,
+        "mu and sigma reused the same standard-normal draws: {z_mu:?} vs {z_sigma:?}"
+    );
 }
 
 /// Same test, but through posterior_samples this time (coefficient-space samples).

@@ -2,7 +2,7 @@
 //! [`Param::Sigma`], …) to the list of [`Term`]s describing each parameter's linear
 //! predictor.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 
 use crate::error::GamlssError;
@@ -107,6 +107,15 @@ impl Formula {
     /// Returns the distribution parameters this formula has terms for.
     pub fn param_names(&self) -> Vec<Param> {
         self.0.keys().copied().collect()
+    }
+
+    /// Every data column any parameter's terms read, sorted by name.
+    pub fn referenced_columns(&self) -> BTreeSet<&str> {
+        self.0
+            .values()
+            .flatten()
+            .flat_map(Term::column_names)
+            .collect()
     }
 }
 

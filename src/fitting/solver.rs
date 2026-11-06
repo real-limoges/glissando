@@ -24,8 +24,7 @@ const MIN_LAMBDA: f64 = 1e-10;
 /// part of the penalty null space when computing the pseudo-determinant.
 const REML_RANK_TOL_EPS: f64 = 1e-8;
 
-/// Clamp on |log λ| applied to REML's optimized output before exponentiation.
-/// Wide enough that no valid solution reaches it, narrow enough to keep L-BFGS
+/// Clamp on |log λ| for every smoothing criterion. Wide enough that no valid solution reaches it, narrow enough to keep L-BFGS
 /// out of numerically pathological regions.
 pub(super) const LOG_LAMBDA_CLAMP: f64 = 30.0;
 
@@ -52,7 +51,7 @@ const FS_TOL: f64 = 1e-4;
 /// Relative floor on the Fellner-Schall multiplicative-update numerator
 /// `tr(S_λ⁺ S_j) − tr(V S_j)`. Wood-Fasiolo §3 discusses pathological signs
 /// (the numerator should be non-negative under the smoothness prior); a small
-/// relative floor keeps the update bounded when it dips.
+/// floor, relative to `tr(S_λ⁺ S_j)`, keeps the update positive when it dips.
 const FS_NUMERATOR_FLOOR_REL: f64 = 1e-12;
 
 /// Floor on the Fellner-Schall denominator `β̂ᵀ S_j β̂`, which is near-zero
@@ -660,7 +659,7 @@ pub(crate) fn run_optimization(
 
     // Warm-start from the previous lambdas (in log-space) when available.
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => prev.mapv(|l| l.max(MIN_LAMBDA).ln()),
+        Some(prev) if prev.len() == n_penalties => prev.mapv(clamped_log_lambda),
         _ => Array1::<f64>::zeros(n_penalties),
     };
 
@@ -671,15 +670,25 @@ pub(crate) fn run_optimization(
         &cfg,
     )?;
 
-    Ok(best_log_lambdas.mapv(f64::exp))
+    Ok(clamped_exp(&best_log_lambdas))
+}
+
+/// Clamped `ln λ` for a warm start.
+fn clamped_log_lambda(lambda: f64) -> f64 {
+    lambda
+        .max(MIN_LAMBDA)
+        .ln()
+        .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
+}
+
+/// `exp` of clamped log λ, so a runaway L-BFGS step stays finite.
+fn clamped_exp(log_lambdas: &Array1<f64>) -> Array1<f64> {
+    log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP).exp())
 }
 
 /// REML/LAML analogue of `run_optimization`.
 ///
-/// What differs from the GCV path:
-/// - the cold start uses `initial_log_lambda` (the mgcv-style heuristic) instead of zeros;
-/// - the returned log λ is clamped to `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]`
-///   before exponentiation, so a runaway L-BFGS step cannot return a non-finite λ.
+/// Unlike the GCV path, the cold start uses `initial_log_lambda` instead of zeros.
 ///
 /// `polish` decides whether to follow the L-BFGS solve with the deterministic
 /// Fellner-Schall pass described below. The caller in `scoring::step` sets it
@@ -710,11 +719,7 @@ pub(crate) fn run_optimization_reml(
     };
 
     let initial_log_lambdas = match initial_lambdas {
-        Some(prev) if prev.len() == n_penalties => prev.mapv(|l| {
-            l.max(MIN_LAMBDA)
-                .ln()
-                .clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP)
-        }),
+        Some(prev) if prev.len() == n_penalties => prev.mapv(clamped_log_lambda),
         _ => initial_log_lambda(x_model, penalty_matrices),
     };
 
@@ -725,8 +730,7 @@ pub(crate) fn run_optimization_reml(
         &cfg,
     )?;
 
-    let clamped = best_log_lambdas.mapv(|l| l.clamp(-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP));
-    let lbfgs_lambdas = clamped.mapv(f64::exp);
+    let lbfgs_lambdas = clamped_exp(&best_log_lambdas);
 
     if !polish {
         return Ok(lbfgs_lambdas);
@@ -852,11 +856,8 @@ pub(crate) fn run_optimization_fellner_schall(
             let tr_v_s = (&info.v_matrix.slice(s![start..=end, start..=end]) * &s_j.block).sum();
             let bsb = s_j.block.dot(&beta_block).dot(&beta_block);
 
-            let numerator = (tr_pinv_s - tr_v_s).max(FS_NUMERATOR_FLOOR_REL * lambdas[j]);
-            let denominator = bsb.max(FS_DENOMINATOR_FLOOR);
-            let lambda_new = (lambdas[j] * (numerator / denominator))
-                .max(MIN_LAMBDA)
-                .min(lambda_ceiling);
+            let lambda_new =
+                fellner_schall_update(lambdas[j], tr_pinv_s, tr_v_s, bsb, lambda_ceiling);
 
             let log_change = (lambda_new.ln() - lambdas[j].ln()).abs();
             if log_change > max_log_change {
@@ -871,6 +872,16 @@ pub(crate) fn run_optimization_fellner_schall(
     }
 
     Ok(lambdas)
+}
+
+/// One Fellner-Schall step for one penalty. The numerator floor scales with
+/// `tr(S_λ⁺ S_j)` (like `1/λ`), not with `λ`.
+fn fellner_schall_update(lambda: f64, tr_pinv_s: f64, tr_v_s: f64, bsb: f64, ceiling: f64) -> f64 {
+    let numerator = (tr_pinv_s - tr_v_s).max(FS_NUMERATOR_FLOOR_REL * tr_pinv_s);
+    let denominator = bsb.max(FS_DENOMINATOR_FLOOR);
+    (lambda * (numerator / denominator))
+        .max(MIN_LAMBDA)
+        .min(ceiling)
 }
 
 /// Solves the penalized weighted least squares problem:
@@ -1330,11 +1341,8 @@ mod reml_tests {
                 let tr_v_s =
                     (&info.v_matrix.slice(s![start..=end, start..=end]) * &s_j.block).sum();
                 let bsb = s_j.block.dot(&beta_block).dot(&beta_block);
-                let numerator = (tr_pinv_s - tr_v_s).max(FS_NUMERATOR_FLOOR_REL * lambdas[j]);
-                let denominator = bsb.max(FS_DENOMINATOR_FLOOR);
-                new_lambdas[j] = (lambdas[j] * (numerator / denominator))
-                    .max(MIN_LAMBDA)
-                    .min(lambda_ceiling);
+                new_lambdas[j] =
+                    fellner_schall_update(lambdas[j], tr_pinv_s, tr_v_s, bsb, lambda_ceiling);
             }
             lambdas = new_lambdas;
         }
@@ -1424,6 +1432,38 @@ mod reml_tests {
                 rel_err
             );
         }
+    }
+
+    /// A straight line sends GCV's λ to +∞; the result must stay within the clamp.
+    #[test]
+    fn gcv_lambda_is_clamped() {
+        let (x, _z, w, ps) = synthetic_pwls_problem();
+        let n = w.len();
+        let z = Array1::from_iter((0..n).map(|i| 1.0 + 2.0 * i as f64 / n as f64));
+        let nfo = WeightedNormalEquations::new(&x, &z, &w);
+        let lambdas = run_optimization(&nfo, &ps, Some(&arr1(&[1e20]))).unwrap();
+        let ceiling = LOG_LAMBDA_CLAMP.exp();
+        for &l in &lambdas {
+            assert!(
+                l.is_finite() && l <= ceiling * (1.0 + 1e-12),
+                "GCV λ = {l:e} escaped the clamp ceiling {ceiling:e}"
+            );
+        }
+    }
+
+    /// At large λ a genuine positive numerator must not be swamped by the floor.
+    #[test]
+    fn fellner_schall_floor_scales_with_numerator() {
+        let lambda = 1e10;
+        let ceiling = LOG_LAMBDA_CLAMP.exp();
+        let updated = fellner_schall_update(lambda, 6e-10, 3e-10, 3e-10, ceiling);
+        assert!(
+            (updated / lambda - 1.0).abs() < 1e-9,
+            "a stationary F-S point moved: {lambda:e} -> {updated:e}"
+        );
+        // A negative numerator shrinks λ.
+        let shrunk = fellner_schall_update(lambda, 6e-10, 7e-10, 3e-10, ceiling);
+        assert!(shrunk < lambda, "negative numerator grew λ: {shrunk:e}");
     }
 
     /// The hand-rolled L-BFGS must reach the same REML optimum the deterministic

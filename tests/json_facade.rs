@@ -270,6 +270,8 @@ fn step_gaic_json_returns_trace_and_loadable_model() {
     // The true linear term should be selected for mu.
     let trace = out["trace"].as_array().unwrap();
     assert!(!trace.is_empty(), "expected at least one accepted move");
+    assert!(trace[0]["move"].as_str().unwrap().contains('x'));
+    assert!(trace[0].get("move_").is_none());
     assert!(out["formula"]["mu"].as_array().unwrap().len() >= 2);
 
     // The embedded model round-trips back through `load`.
@@ -279,6 +281,14 @@ fn step_gaic_json_returns_trace_and_loadable_model() {
     let preds = json::predict(&restored, restored_family.as_ref(), r#"{"x": [11.0]}"#).unwrap();
     let parsed: HashMap<String, Vec<f64>> = serde_json::from_str(&preds).unwrap();
     assert_eq!(parsed["mu"].len(), 1);
+}
+
+/// The legacy `"move_"` key still deserializes.
+#[test]
+fn step_record_accepts_legacy_move_key() {
+    let legacy = r#"{"move_": "+ x on mu", "gaic": 12.5, "edf": 3.0}"#;
+    let record: glissando::selection::StepRecord = serde_json::from_str(legacy).unwrap();
+    assert_eq!(record.move_, "+ x on mu");
 }
 
 // --- Quantile residuals and centiles facade ---

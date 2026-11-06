@@ -73,6 +73,29 @@ fn mixture_recovers_two_components() {
     }
 }
 
+/// Clusters far enough apart that cross-component densities underflow `exp`.
+#[test]
+fn mixture_survives_underflowing_component_densities() {
+    let (data, y) = two_cluster_data();
+    let y = y.mapv(|v| if v > 3.0 { v + 10_000.0 } else { v });
+    let mix = fit_mixture(
+        &data,
+        &y,
+        &intercept_only(),
+        &Gaussian::new(),
+        2,
+        &FitConfig::default(),
+        Some(42),
+    )
+    .unwrap();
+
+    assert!(mix.converged);
+    assert!(mix.log_likelihood.is_finite());
+    for w in &mix.weights {
+        assert!((*w - 0.5).abs() < 1e-6, "weight should be 0.5, got {w}");
+    }
+}
+
 #[test]
 fn mixture_beats_single_component() {
     let (data, y) = two_cluster_data();

@@ -102,6 +102,32 @@ fn fail_action_errors_on_missing() {
     );
 }
 
+/// `NaAction::Fail` ignores missing values in unreferenced columns.
+#[test]
+fn fail_action_ignores_unreferenced_column() {
+    let n = 50;
+    let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+    let y: Vec<f64> = x.iter().map(|&xi| 2.0 + 3.0 * xi).collect();
+    let mut junk = vec![0.0; n];
+    junk[3] = f64::NAN;
+
+    let mut data = DataSet::new();
+    data.insert_column("x", Array1::from_vec(x));
+    data.insert_column("junk", Array1::from_vec(junk));
+
+    let model = GamlssModel::fit_with_config(
+        &data,
+        &Array1::from_vec(y),
+        None,
+        &formula(),
+        &Gaussian,
+        FitConfig::default().with_na_action(NaAction::Fail),
+    )
+    .expect("an unreferenced missing value should not fail the fit");
+    let slope = model.models[&Param::Mu].coefficients.0[1];
+    assert!((slope - 3.0).abs() < 1e-6, "slope {slope}");
+}
+
 /// Dropping every row (all of them incomplete) is an error, not an empty fit.
 #[test]
 fn all_rows_missing_is_empty_data_error() {

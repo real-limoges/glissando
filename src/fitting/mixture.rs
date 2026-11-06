@@ -7,11 +7,11 @@
 //!
 //! - **E-step**: posterior responsibilities `r_ik = w_k g_k(y_i) / Σ_j w_j g_j(y_i)`.
 //! - **M-step**: refit each component via the prior-weighted RS fit
-//!   ([`GamlssModel::fit_with_config`] with `weights = r[:,k]`), then set
+//!   ([`GamlssModel::fit_with_config`] with floored `weights = r[:,k]`), then set
 //!   `w_k = mean_i r_ik`.
 //!
-//! It stops once the mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` stops
-//! improving. Oracle: R `gamlss.mx` (`gamlssMX`).
+//! It stops once the mixture global deviance changes by less than
+//! `FitConfig::gd_tolerance`. Oracle: R `gamlss.mx` (`gamlssMX`).
 
 use super::diagnostics;
 use crate::distributions::{Distribution, FamilyDescriptor};
@@ -30,8 +30,8 @@ const EM_MAX_ITER: usize = 200;
 /// Every responsibility is floored to this (then rows renormalized) before the
 /// M-step, so no component can lose all its mass and collapse the weighted fit.
 const RESP_FLOOR: f64 = 1e-3;
-/// Mixture densities are summed with this floor to keep `log Σ` finite.
-const DENS_FLOOR: f64 = 1e-300;
+/// Log-likelihood counted for a row with zero density under every component.
+const LOG_DENS_FLOOR: f64 = -690.775_527_898_213_7; // ln(1e-300)
 
 /// A fitted `K`-component finite mixture: the component models, their mixing
 /// weights, and the EM convergence summary.
@@ -47,8 +47,7 @@ pub struct MixtureModel {
     pub weights: Vec<f64>,
     /// Mixture log-likelihood `Σ_i log Σ_k w_k g_k(y_i)` at convergence.
     pub log_likelihood: f64,
-    /// Whether the EM loop met the absolute log-likelihood tolerance
-    /// (`FitConfig::gd_tolerance`, in deviance-equivalent log-likelihood units).
+    /// Whether the change in global deviance met `FitConfig::gd_tolerance`.
     pub converged: bool,
     /// Number of EM outer iterations performed.
     pub iterations: usize,
@@ -173,13 +172,12 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
 
     for iter in 0..EM_MAX_ITER {
         iterations = iter + 1;
-        floor_and_normalize_rows(&mut resp);
 
-        // M-step: refit each component with its responsibility column as weights.
-        // The k component fits are independent (only the responsibility column
-        // changes between them), so run them in parallel. The row-count check and
-        // the weight bookkeeping stay serial; they are cheap and need `n`/`k`.
-        let wj_cols: Vec<Array1<f64>> = (0..k).map(|j| resp.column(j).to_owned()).collect();
+        // M-step: mixing weights from the unfloored responsibilities, then refit
+        // each component (in parallel) with its floored responsibility column.
+        weights = (0..k).map(|j| resp.column(j).sum() / n as f64).collect();
+        let floored = floored_rows(&resp);
+        let wj_cols: Vec<Array1<f64>> = (0..k).map(|j| floored.column(j).to_owned()).collect();
         let fit_results: Vec<Result<GamlssModel, GamlssError>> = {
             #[cfg(feature = "parallel")]
             {
@@ -216,8 +214,7 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         };
 
         components.clear();
-        let mut raw_weights = Vec::with_capacity(k);
-        for (wj, fit) in wj_cols.iter().zip(fit_results) {
+        for fit in fit_results {
             let comp = fit?;
             // The mixture math indexes fitted values against y, so a dropped row
             // would misalign them. Reject it.
@@ -234,33 +231,39 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
                         .into(),
                 ));
             }
-            raw_weights.push(wj.sum() / n as f64);
             components.push(comp);
         }
-        let wsum: f64 = raw_weights.iter().sum();
-        weights = raw_weights.iter().map(|w| w / wsum).collect();
 
-        // E-step: weighted component densities → responsibilities + mixture loglik.
-        let mut dens = Array2::<f64>::zeros((n, k));
+        // E-step via log-sum-exp, so underflowing densities stay finite.
+        let mut log_dens = Array2::<f64>::zeros((n, k));
         for (j, comp) in components.iter().enumerate() {
             let params = diagnostics::fitted_params_view(&comp.models);
             let ll_pt = family.loglik_pointwise(y, &params)?;
+            let log_w = weights[j].ln();
             for i in 0..n {
-                dens[[i, j]] = weights[j] * ll_pt[i].exp();
+                log_dens[[i, j]] = log_w + ll_pt[i];
             }
         }
 
         log_likelihood = 0.0;
         for i in 0..n {
-            let row_sum: f64 = (0..k).map(|j| dens[[i, j]]).sum::<f64>().max(DENS_FLOOR);
-            log_likelihood += row_sum.ln();
+            let row = log_dens.row(i);
+            let row_max = row.fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+            if !row_max.is_finite() {
+                log_likelihood += LOG_DENS_FLOOR;
+                resp.row_mut(i).fill(1.0 / k as f64);
+                continue;
+            }
+            let log_sum = row_max + row.iter().map(|&l| (l - row_max).exp()).sum::<f64>().ln();
+            log_likelihood += log_sum;
             for j in 0..k {
-                resp[[i, j]] = dens[[i, j]] / row_sum;
+                resp[[i, j]] = (log_dens[[i, j]] - log_sum).exp();
             }
         }
 
-        let abs_change = (log_likelihood - prev_ll).abs();
-        if iter > 0 && abs_change < tol {
+        // `gd_tolerance` is in deviance units (−2·loglik).
+        let deviance_change = 2.0 * (log_likelihood - prev_ll).abs();
+        if iter > 0 && deviance_change < tol {
             converged = true;
             break;
         }
@@ -317,19 +320,12 @@ fn init_responsibilities(y: &Array1<f64>, k: usize, rng: &mut StdRng) -> Array2<
     resp
 }
 
-/// Floor every responsibility to [`RESP_FLOOR`] and renormalize each row to sum
-/// to 1, guaranteeing no component column is entirely zero.
-fn floor_and_normalize_rows(resp: &mut Array2<f64>) {
-    let (n, k) = resp.dim();
-    for i in 0..n {
-        let mut sum = 0.0;
-        for j in 0..k {
-            let v = resp[[i, j]].max(RESP_FLOOR);
-            resp[[i, j]] = v;
-            sum += v;
-        }
-        for j in 0..k {
-            resp[[i, j]] /= sum;
-        }
+/// `resp` floored to [`RESP_FLOOR`] with each row renormalized to sum to 1.
+fn floored_rows(resp: &Array2<f64>) -> Array2<f64> {
+    let mut floored = resp.mapv(|v| v.max(RESP_FLOOR));
+    for mut row in floored.rows_mut() {
+        let sum = row.sum();
+        row /= sum;
     }
+    floored
 }

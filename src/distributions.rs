@@ -414,6 +414,20 @@ pub trait Distribution: Debug + Send + Sync {
         params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError>;
 
+    /// `P(Y < y_i)`, or `None` when it equals [`Self::cdf`] (no atoms).
+    /// Default: `F(y − 1)` for discrete families.
+    fn cdf_left_limit(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Option<Array1<f64>>, GamlssError> {
+        if self.is_discrete() {
+            Ok(Some(self.cdf(&(y - 1.0), params)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Analytic first and second derivatives of the CDF `F(y_i)` with respect to
     /// each parameter **on its own natural scale θ**, returned per parameter as
     /// `(∂F/∂θ, ∂²F/∂θ²)`, vectorized over rows.

@@ -133,10 +133,10 @@ pub(crate) fn compute<D: Distribution + ?Sized>(
 /// correct continuous fit, so `r = Φ⁻¹(U) ∼ N(0,1)` for every family, and one
 /// Q-Q/worm-plot reference applies across all distributions. For a discrete response
 /// `F` jumps, so the **randomized PIT** spreads each atom across its jump interval:
-/// `u_i = F(y_i−1) + v_i·(F(y_i) − F(y_i−1))` with `v_i ∼ U(0,1)`.
+/// `u_i = F(y_i⁻) + v_i·(F(y_i) − F(y_i⁻))` with `v_i ∼ U(0,1)`, using
+/// [`Distribution::cdf_left_limit`].
 ///
-/// `seed` makes the discrete randomization reproducible (via `StdRng`); it is
-/// ignored for continuous families, where `u = F(y)` is deterministic.
+/// `seed` makes the randomization reproducible; it is ignored when there are no atoms.
 ///
 /// # Errors
 /// Propagates [`GamlssError`] from the family's `cdf` evaluation.
@@ -151,10 +151,8 @@ pub fn quantile_residuals<D: Distribution + ?Sized>(
     use rand::{rng, Rng, SeedableRng};
     use rand_distr::{Distribution as _, StandardUniform};
 
-    let u = if family.is_discrete() {
-        let upper = family.cdf(y, params)?; // F(y)
-        let lower = family.cdf(&(y - 1.0), params)?; // F(y−1)
-
+    let upper = family.cdf(y, params)?; // F(y)
+    let u = if let Some(lower) = family.cdf_left_limit(y, params)? {
         // One generic filler, two RNG concretizations; same shape as `sample_posterior_seeded`.
         fn randomize<R: Rng>(rng: &mut R, lower: &Array1<f64>, upper: &Array1<f64>) -> Array1<f64> {
             ndarray::Zip::from(lower).and(upper).map_collect(|&a, &b| {
@@ -167,7 +165,7 @@ pub fn quantile_residuals<D: Distribution + ?Sized>(
             None => randomize(&mut rng(), &lower, &upper),
         }
     } else {
-        family.cdf(y, params)? // continuous: u = F(y)
+        upper // continuous, no atoms: u = F(y)
     };
 
     Ok(u.mapv(std_normal_quantile))

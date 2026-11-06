@@ -132,14 +132,17 @@ impl Term {
     ///
     /// - `Intercept`  → `"(intercept)"`
     /// - `Linear(x)`  → `"x"`
+    /// - `Factor(g)`  → `"factor(g)"` (the contrast is not part of the name)
+    /// - `Offset(x)`  → `"offset(x)"`
     /// - `Smooth`     → delegates to [`Smooth::term_name`]
+    /// - `Interaction(a, b)` → `"a:b"`
     pub fn term_name(&self) -> String {
         match self {
             Term::Intercept => "(intercept)".to_string(),
             Term::Linear { col_name } => col_name.clone(),
             Term::Smooth(s) => s.term_name(),
             Term::Offset { col_name } => format!("offset({col_name})"),
-            Term::Factor { col_name, .. } => col_name.clone(),
+            Term::Factor { col_name, .. } => format!("factor({col_name})"),
             Term::Interaction(left, right) => {
                 format!("{}:{}", left.term_name(), right.term_name())
             }
@@ -378,11 +381,13 @@ impl Smooth {
         self
     }
 
-    /// Returns an mgcv-style label for this smooth term.
+    /// Returns an mgcv-style label for this smooth term, including its basis.
     ///
-    /// - `PSpline1D(x)` / `CrSpline1D(x)` / `RandomEffect(x)` → `"s(x)"` (with
-    ///   an optional `, pc={v}` suffix on point-constrained CR splines).
-    /// - `TensorProduct(x1, x2)` → `"te(x1,x2)"`.
+    /// - `PSpline1D(x)` → `"s(x)"`
+    /// - `CrSpline1D(x)` → `"s(x, bs=\"cr\")"`, or `"s(x, bs=\"cr\", pc={v})"`
+    ///   when point-constrained
+    /// - `RandomEffect(g)` → `"s(g, bs=\"re\")"`
+    /// - `TensorProduct(x1, x2)` → `"te(x1,x2)"`
     pub fn term_name(&self) -> String {
         match self {
             Smooth::PSpline1D { col_name, .. } => format!("s({col_name})"),
@@ -390,9 +395,9 @@ impl Smooth {
                 col_name,
                 pc: Some(v),
                 ..
-            } => format!("s({col_name}), pc={v}"),
-            Smooth::CrSpline1D { col_name, .. } => format!("s({col_name})"),
-            Smooth::RandomEffect { col_name, .. } => format!("s({col_name})"),
+            } => format!("s({col_name}, bs=\"cr\", pc={v})"),
+            Smooth::CrSpline1D { col_name, .. } => format!("s({col_name}, bs=\"cr\")"),
+            Smooth::RandomEffect { col_name, .. } => format!("s({col_name}, bs=\"re\")"),
             Smooth::TensorProduct {
                 col_name_1,
                 col_name_2,

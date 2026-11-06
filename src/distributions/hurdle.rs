@@ -13,9 +13,9 @@
 //! contaminate a single process.
 //!
 //! The wrapper adds one fitted parameter `xi` (the zero probability, logit link)
-//! on top of the base family's parameters, and the positive part reuses the
-//! zero-truncation machinery rather than reinventing it. Like the other
-//! structural wrappers it is excluded from [`from_name`](super::from_name).
+//! on top of the base family's parameters. The moments assume the base has
+//! non-negative support. Like the other structural wrappers it is excluded from
+//! [`from_name`](super::from_name).
 
 use super::structural::{cdf_eta_grads, delegate_to_base, rewrite_base_derivatives};
 use super::{
@@ -52,6 +52,26 @@ impl Hurdle {
     fn is_zero(y: f64) -> bool {
         y <= 0.0
     }
+
+    /// The zero probability `xi` from a parameter map.
+    fn xi<'a>(
+        &self,
+        params: &HashMap<Param, &'a Array1<f64>>,
+    ) -> Result<&'a Array1<f64>, GamlssError> {
+        params
+            .get(&Param::Xi)
+            .copied()
+            .ok_or_else(|| self.unknown_param(Param::Xi))
+    }
+
+    /// The base CDF at zero, `F(0)`, per row.
+    fn base_cdf_at_zero(
+        &self,
+        n: usize,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        self.base.cdf(&Array1::zeros(n), params)
+    }
 }
 
 impl Distribution for Hurdle {
@@ -86,17 +106,92 @@ impl Distribution for Hurdle {
         }
     }
 
-    delegate_to_base!(is_discrete, expected_value, cdf, quantile);
+    delegate_to_base!(is_discrete);
+
+    /// `ξ + (1−ξ)·(F(y) − F(0)) / (1 − F(0))` for `y ≥ 0`, else 0.
+    fn cdf(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let xi = self.xi(params)?;
+        let f_y = self.base.cdf(y, params)?;
+        let f0 = self.base_cdf_at_zero(y.len(), params)?;
+        Ok(Array1::from_shape_fn(y.len(), |i| {
+            if y[i] < 0.0 {
+                return 0.0;
+            }
+            let xi_i = clamp_prob(xi[i]);
+            let mass = (1.0 - f0[i]).max(PROB_EPS);
+            let positive = ((f_y[i] - f0[i]) / mass).clamp(0.0, 1.0);
+            xi_i + (1.0 - xi_i) * positive
+        }))
+    }
+
+    /// `P(Y < y)`: 0 at the atom, so a zero's residual spreads over `[0, ξ]`.
+    fn cdf_left_limit(
+        &self,
+        y: &Array1<f64>,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Option<Array1<f64>>, GamlssError> {
+        let below = if self.base.is_discrete() {
+            self.cdf(&(y - 1.0), params)?
+        } else {
+            self.cdf(y, params)?
+        };
+        Ok(Some(Array1::from_shape_fn(y.len(), |i| {
+            if Self::is_zero(y[i]) {
+                0.0
+            } else {
+                below[i]
+            }
+        })))
+    }
+
+    /// 0 for `p ≤ ξ`, else `F⁻¹(F(0) + (p−ξ)/(1−ξ)·(1 − F(0)))`.
+    fn quantile(
+        &self,
+        p: &Array1<f64>,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let xi = self.xi(params)?;
+        let f0 = self.base_cdf_at_zero(p.len(), params)?;
+        let p_base = Array1::from_shape_fn(p.len(), |i| {
+            let xi_i = clamp_prob(xi[i]);
+            let within = ((p[i] - xi_i) / (1.0 - xi_i)).clamp(0.0, 1.0);
+            let mass = (1.0 - f0[i]).max(PROB_EPS);
+            clamp_prob(f0[i] + within * mass)
+        });
+        let q_base = self.base.quantile(&p_base, params)?;
+        Ok(Array1::from_shape_fn(p.len(), |i| {
+            if p[i] <= clamp_prob(xi[i]) {
+                0.0
+            } else {
+                q_base[i]
+            }
+        }))
+    }
+
+    /// `(1−ξ)·E_b / (1 − F(0))`.
+    fn expected_value(
+        &self,
+        params: &HashMap<Param, &Array1<f64>>,
+    ) -> Result<Array1<f64>, GamlssError> {
+        let xi = self.xi(params)?;
+        let mean_b = self.base.expected_value(params)?;
+        let f0 = self.base_cdf_at_zero(mean_b.len(), params)?;
+        Ok(Array1::from_shape_fn(mean_b.len(), |i| {
+            let mass = (1.0 - f0[i]).max(PROB_EPS);
+            (1.0 - clamp_prob(xi[i])) * mean_b[i] / mass
+        }))
+    }
 
     fn loglik_pointwise(
         &self,
         y: &Array1<f64>,
         params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
-        let xi = params
-            .get(&Param::Xi)
-            .copied()
-            .ok_or_else(|| self.unknown_param(Param::Xi))?;
+        let xi = self.xi(params)?;
         // Positive-part density is the base left-truncated at zero:
         // log g_T(y) = base.loglik(y) − log(1 − F(0)).
         let base_ll = self.base.loglik_pointwise(y, params)?;
@@ -196,10 +291,19 @@ impl Distribution for Hurdle {
         Ok(out)
     }
 
+    /// `(1−ξ)·(Var_b + E_b²) / (1 − F(0)) − E[Y]²`.
     fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
-        // Reports the untruncated base variance. The zero atom and the truncation
-        // are not folded in. This is a known diagnostic approximation, as in Truncated.
-        self.base.variance(params)
+        let xi = self.xi(params)?;
+        let mean_b = self.base.expected_value(params)?;
+        let var_b = self.base.variance(params)?;
+        let f0 = self.base_cdf_at_zero(mean_b.len(), params)?;
+        Ok(Array1::from_shape_fn(mean_b.len(), |i| {
+            let keep = 1.0 - clamp_prob(xi[i]);
+            let mass = (1.0 - f0[i]).max(PROB_EPS);
+            let second_moment = keep * (var_b[i] + mean_b[i] * mean_b[i]) / mass;
+            let mean = keep * mean_b[i] / mass;
+            (second_moment - mean * mean).max(0.0)
+        }))
     }
 
     fn name(&self) -> &'static str {
@@ -240,6 +344,114 @@ mod tests {
         let owned = gamma_hurdle_owned();
         let h = Hurdle::new(Box::new(Gamma::new()));
         derivative_keys_match_parameters_observed_info(&h, params_view(&owned), &y);
+    }
+
+    #[test]
+    fn cdf_has_the_zero_atom_and_the_truncated_base() {
+        let owned = gamma_hurdle_owned();
+        let params = params_view(&owned);
+        let h = Hurdle::new(Box::new(Gamma::new()));
+
+        let below = h.cdf(&array![-1.0, -0.5, -2.0, -0.1], &params).unwrap();
+        assert!(below.iter().all(|&v| v == 0.0), "below zero: {below}");
+
+        let at_zero = h.cdf(&Array1::zeros(4), &params).unwrap();
+        for v in &at_zero {
+            assert!((v - 0.3).abs() < 1e-12, "F(0) should be xi = 0.3, got {v}");
+        }
+
+        // A Gamma base puts no mass at zero, so above zero F_H = ξ + (1−ξ)·F.
+        let y = array![1.0, 2.5, 0.7, 6.0];
+        let base_cdf = Gamma::new().cdf(&y, &params).unwrap();
+        let hurdle_cdf = h.cdf(&y, &params).unwrap();
+        for i in 0..4 {
+            let want = 0.3 + 0.7 * base_cdf[i];
+            assert!((hurdle_cdf[i] - want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn quantile_inverts_cdf_and_returns_zero_inside_the_atom() {
+        let owned = gamma_hurdle_owned();
+        let params = params_view(&owned);
+        let h = Hurdle::new(Box::new(Gamma::new()));
+
+        let inside_atom = h.quantile(&array![0.1, 0.2, 0.29, 0.05], &params).unwrap();
+        assert!(inside_atom.iter().all(|&v| v == 0.0), "{inside_atom}");
+
+        let y = array![1.0, 2.5, 0.7, 6.0];
+        let back = h.quantile(&h.cdf(&y, &params).unwrap(), &params).unwrap();
+        for i in 0..4 {
+            assert!(
+                (back[i] - y[i]).abs() < 1e-6,
+                "q(F({})) = {}",
+                y[i],
+                back[i]
+            );
+        }
+    }
+
+    #[test]
+    fn moments_fold_in_the_atom() {
+        let owned = gamma_hurdle_owned();
+        let params = params_view(&owned);
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        let mean_b = Gamma::new().expected_value(&params).unwrap();
+        let var_b = Gamma::new().variance(&params).unwrap();
+
+        let mean = h.expected_value(&params).unwrap();
+        let var = h.variance(&params).unwrap();
+        for i in 0..4 {
+            // F(0) = 0 for Gamma, so E = (1−ξ)·E_b and E[Y²] = (1−ξ)·(V_b + E_b²).
+            let want_mean = 0.7 * mean_b[i];
+            let want_var = 0.7 * (var_b[i] + mean_b[i] * mean_b[i]) - want_mean * want_mean;
+            assert!((mean[i] - want_mean).abs() < 1e-12);
+            assert!((var[i] - want_var).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn poisson_hurdle_truncates_the_base_zero() {
+        use crate::distributions::Poisson;
+        let mu = array![2.0];
+        let xi = array![0.4];
+        let params = HashMap::from([(Param::Mu, &mu), (Param::Xi, &xi)]);
+        let h = Hurdle::new(Box::new(Poisson::new()));
+        let p0 = (-2.0_f64).exp();
+
+        let cdf = h.cdf(&array![0.0], &params).unwrap()[0];
+        assert!((cdf - 0.4).abs() < 1e-12);
+        let cdf1 = h.cdf(&array![1.0], &params).unwrap()[0];
+        let want1 = 0.4 + 0.6 * (2.0 * p0) / (1.0 - p0);
+        assert!((cdf1 - want1).abs() < 1e-12);
+
+        // The left limit at 1 is F(0) = ξ, and at the atom it is 0.
+        let (mu2, xi2) = (array![2.0, 2.0], array![0.4, 0.4]);
+        let params2 = HashMap::from([(Param::Mu, &mu2), (Param::Xi, &xi2)]);
+        let left = h
+            .cdf_left_limit(&array![0.0, 1.0], &params2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(left[0], 0.0);
+        assert!((left[1] - 0.4).abs() < 1e-12);
+
+        let mean = h.expected_value(&params).unwrap()[0];
+        assert!((mean - 0.6 * 2.0 / (1.0 - p0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn left_limit_spreads_the_atom_over_a_continuous_base() {
+        let owned = gamma_hurdle_owned();
+        let params = params_view(&owned);
+        let h = Hurdle::new(Box::new(Gamma::new()));
+        let y = array![0.0, 2.0, 0.0, 4.0];
+        let left = h.cdf_left_limit(&y, &params).unwrap().unwrap();
+        let cdf = h.cdf(&y, &params).unwrap();
+        assert_eq!(left[0], 0.0);
+        assert_eq!(left[2], 0.0);
+        // Continuous positive part: no jump above zero.
+        assert_eq!(left[1], cdf[1]);
+        assert_eq!(left[3], cdf[3]);
     }
 
     #[test]

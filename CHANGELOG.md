@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- `predict_samples` with a seed gave every parameter the same standard-normal draws; the parameters now share one RNG and draw independently. Seeded output changes.
+- `Hurdle` `cdf`, `quantile`, `expected_value` and `variance` now include the zero atom, so centiles and residuals are correct for hurdle models. Quantile residuals randomize the atom through the new `Distribution::cdf_left_limit`.
+- Term names no longer collide: factors are named `factor(g)`, CR splines `s(x, bs="cr")`, random effects `s(g, bs="re")`. A formula with two same-named terms for one parameter is rejected. Saved models keep their old names.
+- The step trace's JSON key is `"move"` (was `"move_"`), matching Python; `"move_"` is still read.
+- GCV now clamps log λ like REML; the Fellner-Schall numerator floor scales with the numerator instead of with λ.
+- Mixture EM: mixing weights come from the unfloored responsibilities, the E-step uses log-sum-exp, and convergence compares the deviance change to `gd_tolerance`.
+- `NaAction::Fail` no longer rejects missing values in columns the formula never reads.
+- A family that omits a parameter's derivatives is reported as `GamlssError::Internal`, not `Input`.
+
 ### Changed (breaking): distribution parameters are a `Param` enum, not strings
 
 Parameter names (`"mu"`, `"sigma"`, `"nu"`, `"tau"`, `"phi"`, `"xi"`, `"delta_1"`..`"delta_4"`) were strings everywhere, so a typo or a parameter from the wrong family was only noticed when something looked it up, and sometimes never.

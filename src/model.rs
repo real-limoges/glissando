@@ -10,6 +10,8 @@ use crate::Param;
 use crate::{FitConfig, FitDiagnostics, GamlssError, ModelDiagnostics};
 use indexmap::IndexMap;
 use ndarray::{Array1, Array2};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -551,9 +553,9 @@ impl GamlssModel {
     /// Randomized normalized quantile residuals (gamlss's default residual).
     ///
     /// If the model is correct these are standard normal regardless of the
-    /// family: the basis for a single Q-Q/worm plot across distributions. For
-    /// discrete families the construction is randomized; pass `seed = Some(s)`
-    /// for reproducible residuals (`seed` is ignored for continuous families).
+    /// family: the basis for a single Q-Q/worm plot across distributions. Where
+    /// the family has atoms the construction is randomized; pass `seed = Some(s)`
+    /// for reproducible residuals.
     /// Evaluate against the same response `y` the model was fit on. See
     /// [`fitting::diagnostics::quantile_residuals`](crate::diagnostics::quantile_residuals).
     ///
@@ -681,6 +683,25 @@ impl GamlssModel {
         n_samples: usize,
         seed: Option<u64>,
     ) -> Result<HashMap<Param, Vec<Array1<f64>>>, GamlssError> {
+        // One RNG shared by all parameters, so their draws are independent.
+        match seed {
+            Some(s) => self.predict_samples_with(
+                new_data,
+                family,
+                n_samples,
+                &mut StdRng::seed_from_u64(s),
+            ),
+            None => self.predict_samples_with(new_data, family, n_samples, &mut rand::rng()),
+        }
+    }
+
+    fn predict_samples_with<D: Distribution + ?Sized>(
+        &self,
+        new_data: &DataSet,
+        family: &D,
+        n_samples: usize,
+        rng: &mut impl rand::Rng,
+    ) -> Result<HashMap<Param, Vec<Array1<f64>>>, GamlssError> {
         check_family_identity(&self.family, family)?;
         let n_obs = new_data
             .n_obs()
@@ -696,11 +717,11 @@ impl GamlssModel {
                 fitted_param.coefficients.0.len(),
             )?;
 
-            let beta_samples = fitting::sample_posterior_seeded(
+            let beta_samples = fitting::sample_posterior_with(
                 &fitted_param.coefficients,
                 &fitted_param.covariance,
                 n_samples,
-                seed,
+                rng,
             )?;
 
             let link = resolve_link(family, param_name, fitted_param)?;
