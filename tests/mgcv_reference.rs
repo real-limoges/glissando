@@ -26,6 +26,10 @@
 // `record_studentt`, which gates μ, σ, ν, EDF, SE and the (unweighted)
 // log-likelihood. mgcv's `scat()` is retained only as a loose, μ-only cross-method
 // sanity check.
+//
+// Native only: the summary is read from disk and `flate2` is a non-wasm
+// dev-dependency, so `wasm-pack test` must not compile this file.
+#![cfg(not(target_arch = "wasm32"))]
 
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
