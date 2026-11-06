@@ -36,7 +36,10 @@ const DENS_FLOOR: f64 = 1e-300;
 /// A fitted `K`-component finite mixture: the component models, their mixing
 /// weights, and the EM convergence summary.
 #[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct MixtureModel {
     /// One fitted [`GamlssModel`] per component, in component order.
     pub components: Vec<GamlssModel>,
@@ -83,7 +86,7 @@ impl MixtureModel {
     /// # Errors
     ///
     /// Returns [`GamlssError::Input`] if serialization fails.
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     pub fn to_json(&self) -> Result<String, GamlssError> {
         serde_json::to_string(self).map_err(|e| GamlssError::Input(e.to_string()))
     }
@@ -94,7 +97,7 @@ impl MixtureModel {
     /// # Errors
     ///
     /// Returns [`GamlssError::Input`] if deserialization fails.
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     pub fn from_json(json: &str) -> Result<Self, GamlssError> {
         serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))
     }
@@ -133,6 +136,7 @@ impl MixtureModel {
 ///
 /// # Errors
 ///
+/// - [`GamlssError::EmptyData`] if `y` is empty.
 /// - [`GamlssError::Input`] if `k < 2`, or if a component fit drops rows so the
 ///   fitted values no longer align with `y` (mixture needs complete-case data).
 /// - Any error from the underlying [`GamlssModel::fit_with_config`].
@@ -151,6 +155,10 @@ pub fn fit_mixture<D: Distribution + ?Sized>(
         )));
     }
     let n = y.len();
+    // The seeding draws row indices from 0..n, which panics on an empty range.
+    if n == 0 {
+        return Err(GamlssError::EmptyData);
+    }
     let tol = config.gd_tolerance;
 
     let mut rng = StdRng::seed_from_u64(seed.unwrap_or_else(|| rand::rng().random()));

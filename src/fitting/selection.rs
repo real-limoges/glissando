@@ -36,7 +36,10 @@ fn params_view(model: &GamlssModel) -> HashMap<Param, &Array1<f64>> {
 
 /// One row of an information-criterion comparison table.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct IcRow {
     /// Caller-supplied label identifying the model.
     pub label: String,
@@ -50,7 +53,10 @@ pub struct IcRow {
 
 /// Result of a likelihood-ratio test of `small` nested in `big`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct LrTest {
     /// `LR = 2·(ℓ̂_big − ℓ̂_small) = GD_small − GD_big`.
     pub lr_stat: f64,
@@ -149,7 +155,10 @@ pub fn lr_test<D: Distribution + ?Sized>(
 
 /// The moves the stepwise search may make for one distribution parameter.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct StepScope {
     /// Distribution parameter the candidates apply to. It must be one of the
     /// family's parameters; [`step_gaic`] rejects it otherwise.
@@ -160,8 +169,11 @@ pub struct StepScope {
 
 /// Which direction the greedy search may move at each step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(rename_all = "lowercase"))]
 pub enum Direction {
     /// Only add absent candidate terms.
     Forward,
@@ -190,7 +202,10 @@ impl Direction {
 
 /// One accepted step in a [`step_gaic`] run.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct StepRecord {
     /// Human-readable description of the accepted move, e.g. `"+ x1 on mu"`.
     pub move_: String,
@@ -247,8 +262,10 @@ fn with_dropped(f: &Formula, param: Param, t: &Term) -> Formula {
 /// matching gamlss's `stepGAIC`, so the result is a **local** optimum, not
 /// necessarily the global one. Candidate moves are enumerated in a deterministic
 /// order (scope order, then candidate order), so identical inputs give back an
-/// identical [`StepResult::trace`]. A trial fit that errors (non-convergence,
-/// singular system) is skipped, not treated as a reason to abort the whole search.
+/// identical [`StepResult::trace`]. A trial fit that errors (a singular system,
+/// say) is skipped, not treated as a reason to abort the whole search. A trial
+/// that runs out of iterations without converging is not an error, so it is
+/// scored like any other.
 ///
 /// # Errors
 ///
@@ -319,7 +336,7 @@ pub fn step_gaic<D: Distribution + ?Sized>(
                 };
                 candidates.push(Candidate {
                     is_add,
-                    term_name: t.term_name().to_string(),
+                    term_name: t.term_name(),
                     param: s.param,
                     trial,
                 });

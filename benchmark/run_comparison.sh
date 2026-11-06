@@ -82,8 +82,13 @@ fi
 
 uv run --project "${SCRIPT_DIR}" python3 "${SCRIPT_DIR}/orchestrate.py" ${ARGS}
 
+# The committed fixture is the gzipped copy: the plain JSON is over GitHub's
+# 100 MB file limit. -n drops the timestamp so identical data gives identical bytes.
+gzip -9 -n -k -f "${OUTPUT_DIR}/comparison_summary.json"
+
 echo ""
 echo "========================================"
 echo "Comparison complete!"
 echo "Results: ${OUTPUT_DIR}/comparison_summary.json"
+echo "Fixture: ${OUTPUT_DIR}/comparison_summary.json.gz (commit this one)"
 echo "========================================"

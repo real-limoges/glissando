@@ -10,8 +10,11 @@ use std::ops::{Deref, DerefMut};
 
 /// Regression coefficient vector. Derefs to `Array1<f64>`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(transparent))]
 pub struct Coefficients(pub Array1<f64>);
 
 macro_rules! impl_deref_for_vector_wrapper {
@@ -57,8 +60,11 @@ impl PenaltyMatrix {
 
 /// Covariance matrix of coefficient estimates, V = (X'WX + Σλ·S)⁻¹. Derefs to `Array2<f64>`.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(transparent))]
 pub struct CovarianceMatrix(pub Array2<f64>);
 
 macro_rules! impl_deref_for_matrix_wrapper {
@@ -117,7 +123,7 @@ mod tests {
 
     // --- Serialization round-trip ---
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     #[test]
     fn coefficients_json_round_trip() {
         let c = Coefficients(array![1.5, 2.5, 3.5]);
@@ -126,7 +132,7 @@ mod tests {
         assert_eq!(back.0, c.0);
     }
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     #[test]
     fn covariance_matrix_json_round_trip() {
         let m = CovarianceMatrix(ndarray::arr2(&[[1.0, 0.0], [0.0, 1.0]]));

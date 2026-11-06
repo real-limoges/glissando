@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Mirror of .github/workflows/rust.yml blocking jobs. Runs locally before push.
 #
-# Install once per clone:
+# Install once per clone (or run `make hooks`):
 #   ln -sf ../../scripts/pre-push.sh .git/hooks/pre-push
+#
+# Keep this file in lockstep with .github/workflows/rust.yml.
 #
 # Skip individual stages with env vars:
 #   SKIP_FMT=1 SKIP_CLIPPY=1 SKIP_AUDIT_DUPLICATES=1 SKIP_TEST_OPENBLAS=1 \
@@ -14,16 +16,22 @@
 
 set -euo pipefail
 
-# Match CI's coverage floor.
+# Match CI's coverage floor (COVERAGE_THRESHOLD in rust.yml).
 COVERAGE_THRESHOLD="${COVERAGE_THRESHOLD:-92}"
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-red()    { printf '\033[31m%s\033[0m\n' "$*"; }
-green()  { printf '\033[32m%s\033[0m\n' "$*"; }
-yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
-bold()   { printf '\033[1m%s\033[0m\n' "$*"; }
+# Palette mirrors dotfiles/starship/starship.toml (24-bit truecolor).
+# Colorblind-safe: success is blue (not green), failure is orange (not red).
+#   ok/success  #00afff  starship success symbol
+#   header      #00d7ff  starship dir path
+#   skip        #ffbf5f  starship branch / cmd output (amber)
+#   fail        #ff5f00  starship [!] failure indicator (orange)
+red()    { printf '\033[38;2;255;95;0m%s\033[0m\n'   "$*"; }  # fail: orange
+green()  { printf '\033[38;2;0;175;255m%s\033[0m\n'  "$*"; }  # ok: blue
+yellow() { printf '\033[38;2;255;191;95m%s\033[0m\n' "$*"; }  # skip: amber
+bold()   { printf '\033[1;38;2;0;215;255m%s\033[0m\n' "$*"; } # header: cyan bold
 
 stage() {
   local name="$1"; shift
@@ -58,7 +66,7 @@ bold "pre-push: mirroring CI (rust.yml). Set SKIP_<JOB>=1 to skip a stage."
 stage fmt cargo fmt --check
 
 # --- clippy (workspace, deny warnings) ---------------------------------------
-stage clippy cargo clippy --workspace -- -D warnings
+stage clippy cargo clippy --workspace --all-targets -- -D warnings
 
 # --- audit-duplicates (fail on new transitive duplicates) --------------------
 stage audit-duplicates ./scripts/audit-duplicates.sh
@@ -67,7 +75,7 @@ stage audit-duplicates ./scripts/audit-duplicates.sh
 stage test-openblas cargo test --verbose
 
 # --- test-pure-rust ----------------------------------------------------------
-stage test-pure-rust cargo test --no-default-features --features pure-rust --verbose
+stage test-pure-rust cargo test --no-default-features --features pure-rust,serialization --verbose
 
 # --- check-wasm --------------------------------------------------------------
 check_wasm() {

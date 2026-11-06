@@ -7,7 +7,7 @@ For worked examples start with `cookbook-quickstart.md`; for each family's const
 
 | Term | Builder | Formula String |
 |------|---------|----------------|
-| Intercept | `Term::Intercept` | `1` (implicit; `0` or `-1` suppresses it) |
+| Intercept | `Term::Intercept` | `1` (implicit; a `0` or `-1` term suppresses it, written `y ~ 0 + x` or `y ~ -1 + x`, since the parser splits on `+` only and `y ~ x - 1` does not parse) |
 | Linear | `Term::linear("x")` | `x` |
 | Factor | `Term::factor("g")`, `Term::factor_with("g", Contrast::SumToZero)` | `factor(g)`, `factor(g, sum)` |
 | Interaction | `Term::interaction(Term::linear("a"), Term::factor("b"))` | `a:b`; `a*b` expands to `a + b + a:b` |
@@ -144,6 +144,7 @@ Every fallible call returns `GamlssError`.
 | `Optimization` | Smoothing-parameter optimization failed |
 | `Linalg` | A factorization or solve failed |
 | `PosteriorNotPositiveDefinite` | Posterior sampling could not factor the covariance |
+| `InvalidParamName` | A string names no distribution parameter at all |
 | `UnknownParameter` | The parameter does not belong to the family |
 | `FamilyMismatch` | The model was used with a different family than it was fit with |
 | `Shape` | Array shapes disagree |

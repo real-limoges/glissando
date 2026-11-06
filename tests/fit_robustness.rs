@@ -198,8 +198,8 @@ fn step_halving_toggle_is_a_no_op_on_well_behaved_data() {
     }
 }
 
-/// Regression guard for the `MAX_STEP_NO_HALVING` fallback clamp in
-/// `fitting::mod` (mirrors `scoring::MAX_STEP_NO_HALVING`, 20): `MAX_STEP`
+/// Regression guard for the `scoring::MAX_STEP_NO_HALVING` (20) fallback clamp
+/// that `fit_gamlss` in `src/fitting.rs` applies: `MAX_STEP`
 /// itself was widened from 20 to 1e6 on the premise that step-halving's
 /// deviance-guarded line search owns overshoot control, but `step_halving:
 /// false` disables that line search entirely, so nothing else bounds the

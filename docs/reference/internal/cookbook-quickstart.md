@@ -1,10 +1,4 @@
-# Quickstart: fit, predict, diagnose
-
-## Corrections
-
-- **2026-09-30:** The npm package is not yet published; the text called it published.
-  WASM `gaic` returns the JSON string `{"gaic": v}`, not a number, so the example now parses it.
-  The nodejs build command now puts `--target` before the cargo feature flags, which wasm-pack 0.15 requires.
+# Quickstart: Fit, Predict, Diagnose
 
 **Goal:** fit one Gaussian location-scale model end to end, then predict and check residuals, in Rust, Python, and JavaScript.
 **Model:** `mu ~ 1 + s(x)`, `sigma ~ 1 + x`, so both the mean and the spread vary with `x` (a plain GAM models only the mean).
@@ -27,7 +21,7 @@ data.insert_column("x", Array1::from_vec(x));
 
 // 2. one additive predictor per parameter
 let formula = Formula::new()
-    .with_terms(Param::Mu, vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))])
+    .with_terms(Param::Mu, vec![Term::Intercept, Term::smooth(Smooth::ps("x"))])
     .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
 
 // 3. fit
@@ -56,7 +50,7 @@ let formula = Formula::from_strings([
 ]).unwrap();
 ```
 
-`Formula::parse("mu", "y ~ s(x)")` builds a single parameter; `from_strings` builds several at once.
+`Formula::parse(Param::Mu, "y ~ s(x)")` builds a single parameter; `from_strings` builds several at once.
 The response on the left of `~` is parsed and discarded, because `y` is passed to `fit` separately.
 
 ## Python

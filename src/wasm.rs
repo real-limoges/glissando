@@ -29,21 +29,9 @@ impl WasmGamlssModel {
     /// The fitted block for `param`, or an error naming the available ones. A
     /// string that is no parameter name at all gets the same error.
     fn fitted_param(&self, param: &str) -> Result<&crate::fitting::FittedParameter, JsError> {
-        param
-            .parse::<crate::Param>()
-            .ok()
-            .and_then(|p| self.model.models.get(&p))
-            .ok_or_else(|| {
-                JsError::new(&format!(
-                    "Parameter '{}' not found. Available: {:?}",
-                    param,
-                    self.model
-                        .models
-                        .keys()
-                        .map(|p| p.as_str())
-                        .collect::<Vec<_>>()
-                ))
-            })
+        self.model
+            .fitted_param_by_name(param)
+            .map_err(|msg| JsError::new(&msg))
     }
 }
 

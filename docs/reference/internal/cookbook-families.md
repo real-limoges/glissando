@@ -1,10 +1,4 @@
-# The distribution gallery
-
-## Corrections
-
-- **2026-09-30:** Beta's parameters are `mu, phi` (the table said `mu, sigma`).
-  Ocat exposes `delta_1 .. delta_{k-1}`, not `.. delta_{k-2}`.
-  The 4-level example now supplies `delta_3`, without which the fit is rejected.
+# The Distribution Gallery
 
 **What this is:** every distribution family glissando ships, what it models, its parameters, and how to construct it.
 **How to swap:** the fit call is identical across families; only the family value and the set of modeled parameters change.
@@ -14,7 +8,7 @@ A family with a `nu` parameter (Student-t, the Box-Cox trio) needs a formula ent
 The parameter names matter: your formula must supply one predictor per parameter the family exposes.
 The response-scale meaning of `mu` is the mean for most families, and `sigma` is a dispersion or scale, but the higher parameters (`nu`, `tau`) are shape parameters whose meaning is family-specific.
 
-## Base families at a glance
+## Base Families at a Glance
 
 | Family | Rust | Parameters | Models |
 |--------|------|------------|--------|
@@ -33,7 +27,7 @@ The response-scale meaning of `mu` is the mean for most families, and `sigma` is
 
 Three structural wrappers (`Censored`, `Truncated`, `Hurdle`) and finite mixtures (`fit_mixture`) wrap any base family; they are at the end of this page.
 
-## Continuous, symmetric
+## Continuous, Symmetric
 
 **Gaussian** is the default and the usual choice when the response is real-valued and roughly symmetric.
 Unlike a plain regression, a GAMLSS fit can model `sigma` on covariates.
@@ -53,7 +47,7 @@ let formula = Formula::new()
 let model = GamlssModel::fit(&data, &y, &formula, &StudentT::new()).unwrap();
 ```
 
-## Continuous, positive
+## Continuous, Positive
 
 **Gamma** and **Weibull** both model strictly positive responses (durations, costs, concentrations).
 Gamma is the classical right-skewed choice; Weibull is the standard choice for survival and reliability data.
@@ -63,11 +57,12 @@ Their default links keep `mu` and `sigma` positive, and the inverse / sqrt links
 let model = GamlssModel::fit(&data, &y, &formula, &Weibull::new()).unwrap();  // y > 0
 ```
 
-## Bounded proportions
+## Bounded Proportions
 
 **Beta** models a response on the open interval (0, 1): rates, fractions, proportions that are neither exactly 0 nor exactly 1.
 Its second parameter is the precision `phi` (larger means less spread), not a `sigma`, so the formula needs a `phi` entry.
-For data with exact zeros or ones, use a zero/one-inflated variant (not yet shipped) or the `Hurdle` wrapper below.
+For data with exact zeros, the `Hurdle` wrapper below adds a point mass at zero.
+Exact ones, or zeros and ones together, need a zero/one-inflated variant, which is not yet shipped.
 
 ## Counts
 
@@ -88,7 +83,7 @@ let family = Binomial::with_trials(Array1::from_vec(vec![10.0, 8.0, 12.0 /* ... 
 
 In Python this constructor takes a *list* of per-row trial counts, not a scalar: `glissando.Binomial([10, 8, 12, ...])`.
 
-## Ordered categorical
+## Ordered Categorical
 
 **Ocat** models an ordinal response with 2 to 5 levels (coded 1..k).
 Beyond `mu` it exposes `delta_1 .. delta_{k-1}` threshold-offset parameters, so a 4-level Ocat has `mu`, `delta_1`, `delta_2`, `delta_3`.
@@ -105,7 +100,7 @@ let model = GamlssModel::fit(&data, &y, &formula, &family).unwrap();
 let probs = model.predict_class_probabilities(&data, &family).unwrap();  // n x 4
 ```
 
-## The Box-Cox family (skew and kurtosis)
+## The Box-Cox Family (Skew and Kurtosis)
 
 These distributions are the basis of LMS growth-chart / centile curves.
 **BCCG** (Cole-Green) adds a `nu` skewness parameter to a positive response; **BCT** adds a `tau` kurtosis parameter on top (Box-Cox-t); **BCPE** replaces the t tail with a power-exponential one.
@@ -125,7 +120,7 @@ let curves = model.centiles(&grid, &family, &[3.0, 15.0, 50.0, 85.0, 97.0]).unwr
 
 `centiles` returns one curve per requested percentile; `quantile_prediction` instead takes a per-row centile level and returns one value per row.
 
-## Structural wrappers
+## Structural Wrappers
 
 These wrap a boxed base family and carry per-observation response-side state.
 Fit and predict work as usual once constructed.
@@ -139,6 +134,9 @@ let status = Array1::from_vec(vec![CensorStatus::Event, CensorStatus::Right /* .
 let family = Censored::new(Box::new(Gaussian::new()), status);
 ```
 
+`Censored::new` covers event, left and right censoring.
+For interval-censored rows (status `CensorStatus::Interval`, true value in `[y, upper]`), pass the upper bounds with `Censored::with_upper(base, status, upper)`; `upper` must be as long as `status`.
+
 **Truncated** bounds the support (observations outside `[lower, upper]` could not have been sampled); `+inf` / `-inf` bounds encode one-sided truncation:
 
 ```rust
@@ -148,14 +146,15 @@ let upper = Array1::from_elem(n, f64::INFINITY);
 let family = Truncated::new(Box::new(Gaussian::new()), lower, upper);
 ```
 
-**Hurdle** is a two-part structure that adds a `xi` parameter governing a point mass, a generalization of zero-inflation:
+**Hurdle** is a two-part model: a logit-linked point mass `xi = P(Y = 0)` plus the zero-truncated base family for the positive values.
+It is a hurdle, not zero-inflation: every zero comes from the point mass, none from the base.
 
 ```rust
 use glissando::distributions::Hurdle;
 let family = Hurdle::new(Box::new(Gaussian::new()));   // gains a "xi" parameter
 ```
 
-## Finite mixtures
+## Finite Mixtures
 
 `fit_mixture` fits a `k`-component mixture of a base family by EM, reusing the prior-weighted RS fit as the M-step:
 
@@ -165,7 +164,7 @@ let mixture = fit_mixture(&data, &y, &formula, &Gaussian::new(), 2, &FitConfig::
 // mixture.components: Vec<GamlssModel>, mixture.weights: Vec<f64>, mixture.log_likelihood
 ```
 
-## Not yet shipped
+## Not Yet Shipped
 
 Skew/kurtotic families beyond Box-Cox, the extra count families, zero-inflated / zero-adjusted families, and Tweedie are not implemented yet.
 For semicontinuous data with exact zeros, use `Hurdle` over a positive base family.

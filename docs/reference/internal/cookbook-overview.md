@@ -1,20 +1,21 @@
-# glissando cookbook
+# glissando Cookbook
 
 **Scope:** worked, copy-pasteable examples for fitting GAMLSS models with glissando, one page per topic.
-**Surfaces:** every recipe is shown in Rust; the quickstart and the family gallery also give the WASM/JS and Python equivalents, since the three surfaces share a wire format and differ only in ergonomics.
+**Surfaces:** every recipe is shown in Rust; the quickstart also gives the WASM/JS and Python equivalents, since the three surfaces share a wire format and differ only in ergonomics.
+The family gallery is Rust only, with a Python mirror in `examples/python/families.py`.
 **Runnable code:** the snippets here are excerpted from the runnable programs under `examples/` at the repo root (`examples/*.rs` for Rust, `examples/python/` and `examples/wasm/` for the bindings).
 Run the Rust ones with `cargo run --example <name>`.
 
 The cookbook covers using glissando; `rust-api.md` and `bindings.md` are the lookup reference, and `mathematics.md` derives the algorithm.
 
-## The pages
+## The Pages
 
 - `cookbook-quickstart.md` fits one model end to end (fit, predict, diagnose) in all three surfaces.
   Start here.
 - `cookbook-families.md` is the distribution gallery: what each family models, how to construct it, and a minimal fit for each.
 - `cookbook-mgcv-migration.md` maps R `mgcv` / `gamlss` idioms onto glissando, with the common workflows translated and the current gaps named.
 
-## The shape of every fit
+## The Shape of Every Fit
 
 Every model, on every surface, has the same four inputs.
 
@@ -25,7 +26,7 @@ Every model, on every surface, has the same four inputs.
 
 You hand those to `fit`, get back a fitted model, and then `predict`, take `centiles`, pull `quantile_residuals`, or compare models with `gaic` / `lr_test` / `step_gaic`.
 
-## Conventions in these pages
+## Conventions in These Pages
 
 - Rust snippets assume `use glissando::{...};` and build arrays through `glissando::ndarray` (re-exported) to avoid an `ndarray` version mismatch.
 - The response `y` is passed separately from the data, so a formula's left-hand side (the `y ~` part of a string formula) is parsed and then ignored.

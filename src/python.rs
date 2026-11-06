@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 
-use crate::distributions::{CensorStatus, FamilyDescriptor};
+use crate::distributions::{CensorStatus, FamilyDescriptor, Ocat};
 use crate::ffi::FamilyHandle;
 use crate::fitting::selection::{self, Direction, StepScope};
 use crate::fitting::{FitConfig, SmoothingCriterion};
@@ -69,9 +69,7 @@ struct PyOcat {
 impl PyOcat {
     #[new]
     fn new(n_categories: usize) -> PyResult<Self> {
-        if !(2..=5).contains(&n_categories) {
-            return Err(PyValueError::new_err("Ocat: n_categories must be 2–5"));
-        }
+        Ocat::try_new(n_categories).map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { n_categories })
     }
 }
@@ -275,15 +273,8 @@ fn parse_fit_config(config: &Bound<'_, PyDict>) -> PyResult<FitConfig> {
     }
     if let Some(v) = config.get_item("na_action")? {
         let s: String = v.extract()?;
-        fit_config.na_action = match s.to_ascii_lowercase().as_str() {
-            "drop_rows" | "drop" | "omit" => crate::fitting::NaAction::DropRows,
-            "fail" | "error" => crate::fitting::NaAction::Fail,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "Unknown na_action '{other}', expected 'drop_rows' or 'fail'"
-                )))
-            }
-        };
+        fit_config.na_action = crate::fitting::NaAction::from_name(&s)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
     }
     Ok(fit_config)
 }
@@ -396,21 +387,9 @@ impl PyGamlssModel {
     /// The fitted block for `param`, or a `KeyError` naming the available ones.
     /// A string that is no parameter name at all gets the same `KeyError`.
     fn fitted_param(&self, param: &str) -> PyResult<&crate::fitting::FittedParameter> {
-        param
-            .parse::<Param>()
-            .ok()
-            .and_then(|p| self.inner.models.get(&p))
-            .ok_or_else(|| {
-                PyKeyError::new_err(format!(
-                    "Parameter '{}' not found. Available: {:?}",
-                    param,
-                    self.inner
-                        .models
-                        .keys()
-                        .map(|p| p.as_str())
-                        .collect::<Vec<_>>()
-                ))
-            })
+        self.inner
+            .fitted_param_by_name(param)
+            .map_err(PyKeyError::new_err)
     }
 }
 
@@ -770,8 +749,8 @@ impl PyGamlssModel {
         Ok(d.into())
     }
 
-    /// Information-criterion comparison table over `(label, model)` pairs, ranked
-    /// in input order. Returns a list of dicts
+    /// Information-criterion comparison table over `(label, model)` pairs, one
+    /// row per model in input order (not sorted by GAIC). Returns a list of dicts
     /// `{"label", "edf", "global_deviance", "gaic"}`.
     ///
     /// All models must be fit to the same response `y`; the family is taken from

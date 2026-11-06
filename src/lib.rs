@@ -33,7 +33,7 @@
 //! ```
 //! use glissando::{GamlssModel, DataSet, Formula, Param, Term};
 //! use glissando::distributions::Gaussian;
-//! use ndarray::Array1;
+//! use glissando::ndarray::Array1;
 //!
 //! let y = Array1::from_vec(vec![2.1, 4.0, 5.9, 8.1, 10.0]);
 //! let mut data = DataSet::new();

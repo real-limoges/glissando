@@ -16,6 +16,11 @@ def test_module_exposes_expected_classes():
         "BCCG",
         "BCT",
         "BCPE",
+        "Weibull",
+        "Ocat",
+        "Censored",
+        "Truncated",
+        "Hurdle",
     ):
         assert hasattr(glissando, name), f"glissando is missing class {name!r}"
 
@@ -30,6 +35,7 @@ def test_stateless_distributions_construct():
     glissando.BCCG()
     glissando.BCT()
     glissando.BCPE()
+    glissando.Weibull()
 
 
 def test_binomial_takes_n_trials():

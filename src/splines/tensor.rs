@@ -5,7 +5,8 @@ use ndarray::{s, Array2, ArrayView1, ArrayViewMut1, Zip};
 /// Compute the Kronecker product of two matrices: C = A ⊗ B.
 ///
 /// If A is (m × n) and B is (p × q), the result is (mp × nq). Used to build
-/// tensor product basis matrices.
+/// tensor product penalty matrices; the basis uses the row-wise
+/// [`row_kronecker_into`] instead.
 pub(crate) fn kronecker_product(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
     let (m, n) = a.dim();
     let (p, q) = b.dim();

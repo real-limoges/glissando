@@ -1,15 +1,22 @@
 /target
 .DS_Store
-benchmark/output/
-!benchmark/output/comparison_summary.json
+# `output/*`, not `output/`: git cannot re-include a file inside an excluded
+# directory, and the gzipped summary is the committed mgcv fixture.
+benchmark/output/*
+!benchmark/output/comparison_summary.json.gz
 benchmark/target/
 .idea/
 CLAUDE.md
 .claude
 
+.venv/
 .venv-prepush/
 *.pyc
 __pycache__/
+
+# CI build outputs (maturin wheels, coverage report).
+dist/
+lcov.info
 
 # Accidental root-level npm scaffolding; the published npm package is pkg/.
 /package.json
@@ -18,4 +25,3 @@ __pycache__/
 # docs/: only the public reference/ tree is tracked.
 docs/*
 !docs/reference/
-docs/reference/*-implementation.md

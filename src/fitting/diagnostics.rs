@@ -19,7 +19,10 @@ use std::collections::HashMap;
 
 /// Aggregated model diagnostics including residuals, EDF, and information criteria.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ModelDiagnostics {
     /// `(y − E[Y]) / √Var(Y)`
     pub pearson_residuals: Array1<f64>,
@@ -151,7 +154,8 @@ pub fn quantile_residuals<D: Distribution + ?Sized>(
     let u = if family.is_discrete() {
         let upper = family.cdf(y, params)?; // F(y)
         let lower = family.cdf(&(y - 1.0), params)?; // F(y−1)
-                                                     // One generic filler, two RNG concretizations; same shape as `sample_posterior_seeded`.
+
+        // One generic filler, two RNG concretizations; same shape as `sample_posterior_seeded`.
         fn randomize<R: Rng>(rng: &mut R, lower: &Array1<f64>, upper: &Array1<f64>) -> Array1<f64> {
             ndarray::Zip::from(lower).and(upper).map_collect(|&a, &b| {
                 let v: f64 = StandardUniform.sample(rng); // v ∼ U[0,1)

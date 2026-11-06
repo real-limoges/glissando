@@ -29,8 +29,11 @@ use std::collections::HashMap;
 
 /// Per-observation censoring code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(rename_all = "snake_case"))]
 pub enum CensorStatus {
     /// Observed exactly at `y`. Likelihood contribution is the base density.
     Event,
@@ -60,7 +63,7 @@ pub struct Censored {
     upper: Array1<f64>,
     /// Cached `status.iter().any(|s| *s == CensorStatus::Interval)`. `status` is
     /// immutable after construction, so this is computed once here rather than
-    /// rescanned on every `loglik_pointwise` / `theta_derivatives` call (i.e.
+    /// rescanned on every `loglik_pointwise` / `eta_derivatives` call (i.e.
     /// every IRLS iteration).
     has_interval: bool,
 }
@@ -80,7 +83,9 @@ impl Censored {
     }
 
     /// Wrap `base` with censoring `status` and interval `upper` bounds (read only
-    /// on [`CensorStatus::Interval`] rows). `upper` must match `status` in length.
+    /// on [`CensorStatus::Interval`] rows). `upper` must match `status` in
+    /// length; a mismatch is reported as [`GamlssError::Input`] when the family
+    /// first meets a response.
     pub fn with_upper(
         base: Box<dyn Distribution>,
         status: Array1<CensorStatus>,
@@ -110,9 +115,11 @@ impl Censored {
         &self.upper
     }
 
-    /// Reject a response whose length does not match the stored `status` vector.
+    /// Reject a response whose length does not match the stored `status` and
+    /// `upper` vectors.
     fn check_len(&self, n: usize) -> Result<(), GamlssError> {
-        check_state_len("Censored: status", self.status.len(), n)
+        check_state_len("Censored: status", self.status.len(), n)?;
+        check_state_len("Censored: upper", self.upper.len(), n)
     }
 }
 

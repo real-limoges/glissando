@@ -11,8 +11,10 @@
 //! These recovery fits used to collapse rarely and nondeterministically. The
 //! λ-objective is unimodal but has a flat high-λ shelf (smooth pinned to its
 //! null space) that OpenBLAS reduction-order noise could occasionally tip the
-//! optimizer onto. That's now fixed by the collapse-guarded restart in
-//! `fitting::scoring::step`. The root-cause
+//! optimizer onto. Two things fix it: `.cargo/config.toml` pins BLAS to one
+//! thread, so the reductions (and these fits) are deterministic, and the
+//! collapse-guarded restart in `fitting::scoring::step` probes other basins
+//! when a smooth lands on the shelf anyway. The root-cause
 //! diagnostics live in `tests/lambda_bistability.rs` and
 //! `solver::reml_tests::diagnostic_laml_landscape_control_case` (both `#[ignore]`d).
 

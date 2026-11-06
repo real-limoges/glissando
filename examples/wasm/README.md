@@ -1,6 +1,6 @@
 # WASM / JavaScript examples
 
-Runnable JavaScript version of the cookbook quickstart ([`docs/reference/cookbook-quickstart.md`](../../docs/reference/cookbook-quickstart.md)), against the `glissando` npm package (the committed `pkg/`).
+Runnable JavaScript version of the cookbook quickstart ([`docs/reference/internal/cookbook-quickstart.md`](../../docs/reference/internal/cookbook-quickstart.md)), against the `glissando` npm package (the committed `pkg/`).
 
 ## Building for Node
 

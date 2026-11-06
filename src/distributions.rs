@@ -31,10 +31,8 @@ pub use links::{
     InverseSquareLink, Link, LinkContext, LogLink, LogitLink, ProbitLink, SqrtLink,
 };
 pub use scale::{CdfGrad, CdfMap, DerivativeMap, Eta, Natural, ScoreInfo};
-// Re-exported at crate-internal scope so submodules can `use super::MIN_POSITIVE`
-// after the move without breaking. MAX_ETA/MIN_ETA are link-internal today; they
-// are re-exported here anyway so a future submodule can opt in without a separate edit.
-#[allow(unused_imports)]
+// Re-exported at crate-internal scope for the family submodules (`ocat.rs` uses
+// the η clamps, several families use `MIN_POSITIVE`).
 pub(crate) use links::{MAX_ETA, MIN_ETA, MIN_POSITIVE};
 
 /// Lower bound on Fisher-information weights to keep `W` positive definite.
@@ -363,8 +361,8 @@ pub trait Distribution: Debug + Send + Sync {
 
     /// Marginal `Var(Y_i | params_i)` on the response scale, used for Pearson residuals.
     ///
-    /// Distinct from the Fisher-information weight returned by [`Self::theta_derivatives`],
-    /// which is on the linear-predictor scale.
+    /// Distinct from the Fisher information returned by [`Self::theta_derivatives`]
+    /// (natural parameter scale) and [`Self::eta_derivatives`] (linear-predictor scale).
     fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError>;
 
     /// Marginal `E[Y_i | params_i]` on the response scale.

@@ -1,4 +1,4 @@
-# Migrating from R (mgcv / gamlss)
+# Migrating from R (`mgcv` / `gamlss`)
 
 **Who this is for:** people who know `gamlss()` or `mgcv::gam()` and want the glissando equivalent.
 **The one big difference:** in R's `gamlss`, each distribution parameter gets its own formula argument (`mu.formula`, `sigma.formula`, ...); in glissando they are entries in a single `Formula`, keyed by parameter name.
@@ -8,7 +8,7 @@ This guide maps what exists and names what does not.
 
 Read `cookbook-quickstart.md` first for the mechanics; this page is about translation.
 
-## The mental model
+## The Mental Model
 
 R `gamlss` and glissando fit the same model: each parameter of the distribution has its own predictor.
 Translating a fit is mostly mechanical.
@@ -30,7 +30,7 @@ let model = GamlssModel::fit(&data, &y, &formula, &Gaussian::new()).unwrap();
 
 The response `y` is passed as its own argument to `fit`, so the left side of the `~` is parsed and discarded.
 
-## Family names
+## Family Names
 
 R family codes map to glissando family constructors as follows.
 
@@ -54,10 +54,11 @@ R family codes map to glissando family constructors as follows.
 | `ZIP`, `ZINBI`, `ZAGA`, `ZAIG`, `BEINF` | Not shipped | Use `Hurdle` as a stopgap |
 | `TW` (Tweedie) | Not shipped | |
 
-## Smooths and basis codes
+## Smooths and Basis Codes
 
 glissando's `s(x)` defaults to a P-spline (mgcv's `bs="ps"`), not mgcv's thin-plate default.
-Set the count with `k=`; the default knot count differs from mgcv's.
+Set the count with `k=`.
+The P-spline default matches mgcv's (`k = 10`), but `bs="cr"` defaults to `k = 6` here against mgcv's 10, so pass `k=10` explicitly when porting a `cr` smooth.
 
 | R / mgcv | glissando string | glissando builder | Status |
 |----------|------------------|-------------------|--------|
@@ -74,10 +75,10 @@ Set the count with `k=`; the default knot count differs from mgcv's.
 
 Factors, interactions, and offsets carry over directly: `factor(g)`, `x:z`, `x*z`, and `offset(logexp)` all parse in a glissando formula string, the same as in R.
 
-## Smoothing-parameter selection
+## Smoothing-Parameter Selection
 
 mgcv's default is REML; glissando's is also REML (`SmoothingCriterion::Reml`), so the out-of-the-box behavior lines up.
-GCV is available too.
+GCV (`Gcv`) and the Fellner-Schall fixed-point update (`FellnerSchall`) are available too.
 Set it through the config struct (only `na_action` and `links` have builder methods; the numeric knobs are plain fields):
 
 ```rust
@@ -89,7 +90,7 @@ let model = GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::n
 mgcv's `method = "GCV.Cp"` maps to `Gcv`; `method = "REML"` is the default.
 There is no `magic`-style grid selection or `gamlss` CG algorithm yet.
 
-## Common workflows, translated
+## Common Workflows, Translated
 
 **Residual diagnostics.**
 R's `residuals(m)` on a `gamlss` fit returns randomized quantile residuals by default.
@@ -130,7 +131,7 @@ R's `centiles()` / `centiles.pred()`:
 let curves = model.centiles(&grid, &family, &[3.0, 15.0, 50.0, 85.0, 97.0]).unwrap();
 ```
 
-## Known gaps versus R
+## Known Gaps Versus R
 
 These R features have no glissando equivalent yet.
 

@@ -76,11 +76,12 @@ pub(super) fn boxcox_seed(param: Param, y: &Array1<f64>) -> Option<f64> {
 }
 
 /// Second-order Box-Cox mean approximation shared by BCCG/BCT/BCPE:
-/// `E[Y] ≈ μ·(1 + ½σ²(1−ν))`, exact at `ν = 1` (symmetric, mean = μ) and at
-/// `ν = 0` (log-normal, `μ·e^{σ²/2}` to `O(σ²)`). `μ` is the median, not the mean;
-/// the approximation depends on `z`'s distribution only through its first two
-/// moments (mean 0, variance 1), so it is identical whether `z` is normal,
-/// Student-t, or power-exponential.
+/// `E[Y] ≈ μ·(1 + ½σ²(1−ν))`, exact at `ν = 1` (symmetric, mean = μ) and
+/// matching the log-normal mean `μ·e^{σ²/2}` to `O(σ²)` at `ν = 0`. `μ` is the
+/// median, not the mean. The same formula is used for all three families, which
+/// treats `z` as unit-variance; that holds for BCCG and BCPE (whose power
+/// exponential is variance-standardized) but not for BCT, where
+/// `Var(z) = τ/(τ−2)`.
 pub(super) fn boxcox_expected_value(
     mu: &Array1<f64>,
     sigma: &Array1<f64>,

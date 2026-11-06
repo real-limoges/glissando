@@ -36,8 +36,9 @@ const MIN_PROB: f64 = 1e-10;
 
 /// Ordered-categorical GAMLSS distribution with `R` levels.
 ///
-/// Parameters: `Param::Mu` (latent linear predictor, identity link) plus `Param::Delta1` …
-/// `"delta_{R-1}"` (threshold / increment parameters).
+/// Parameters: `Param::Mu` (latent linear predictor, identity link) plus the
+/// `R − 1` threshold / increment parameters `Param::Delta1` … `Param::Delta4`
+/// (only the first `R − 1` are used).
 #[derive(Debug, Clone)]
 pub struct Ocat {
     n_categories: usize,
@@ -48,14 +49,26 @@ impl Ocat {
     ///
     /// # Panics
     ///
-    /// Panics if `n_categories < 2` or `n_categories > 5`.
+    /// Panics if `n_categories < 2` or `n_categories > 5`. Use [`Ocat::try_new`]
+    /// when the count comes from untrusted input.
     pub fn new(n_categories: usize) -> Self {
-        assert!(
-            (2..=5).contains(&n_categories),
-            "Ocat: n_categories must be 2–5, got {}",
-            n_categories
-        );
-        Self { n_categories }
+        Self::try_new(n_categories).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Fallible [`Ocat::new`]: the constructor for counts read from JSON or a
+    /// binding, where a bad value must surface as an error rather than a panic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GamlssError::Input`] if `n_categories` is outside `2..=5`.
+    pub fn try_new(n_categories: usize) -> Result<Self, GamlssError> {
+        if (2..=5).contains(&n_categories) {
+            Ok(Self { n_categories })
+        } else {
+            Err(GamlssError::Input(format!(
+                "Ocat: n_categories must be 2-5, got {n_categories}"
+            )))
+        }
     }
 
     /// Number of ordered response levels.

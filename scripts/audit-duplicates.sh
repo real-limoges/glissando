@@ -25,8 +25,8 @@ cd "$repo_root"
 # Platform-conditional entries only appear on Linux CI runners (not on the macOS
 # dev tree), pulled in via dev/test infrastructure crates outside this repo's
 # control:
-#   - `rustix`: used by `tempfile`, `is-terminal`, `cargo-llvm-cov`, and other
-#     coverage/test scaffolding. Long-standing dual-version coexistence in the
+#   - `rustix`: used by `tempfile`, `is-terminal`, and other test
+#     scaffolding. Long-standing dual-version coexistence in the
 #     Rust ecosystem; benign here.
 ALLOWLIST=(
   getrandom

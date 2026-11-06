@@ -62,13 +62,13 @@ Build arrays through the re-exported `glissando::ndarray`; a different `ndarray`
 
 ## Documentation
 
-- [Quickstart](docs/reference/cookbook-quickstart.md): one model end to end in Rust, Python, and JavaScript.
-- [Distribution gallery](docs/reference/cookbook-families.md): every family, the structural wrappers, and mixtures.
-- [Rust API](docs/reference/rust-api.md): terms, configuration, prediction, diagnostics, selection, and errors.
-- [Serialization and bindings](docs/reference/bindings.md): saving models, the JSON facade for FFI, and Python.
+- [Quickstart](docs/reference/internal/cookbook-quickstart.md): one model end to end in Rust, Python, and JavaScript.
+- [Distribution gallery](docs/reference/internal/cookbook-families.md): every family, the structural wrappers, and mixtures.
+- [Rust API](docs/reference/internal/rust-api.md): terms, configuration, prediction, diagnostics, selection, and errors.
+- [Serialization and bindings](docs/reference/internal/bindings.md): saving models, the JSON facade for FFI, and Python.
 - [WASM/npm package](pkg/README.md): fitting and predicting in the browser.
-- [Migrating from R](docs/reference/cookbook-mgcv-migration.md): `mgcv` and `gamlss` equivalents and current gaps.
-- [Mathematics](docs/reference/mathematics.md): per-family likelihoods, scores, and the fitting algorithm.
+- [Migrating from R](docs/reference/internal/cookbook-mgcv-migration.md): `mgcv` and `gamlss` equivalents and current gaps.
+- [Mathematics](docs/reference/internal/mathematics.md): per-family likelihoods, scores, and the fitting algorithm.
 
 Runnable examples are under `examples/` (`cargo run --example quickstart`).
 [`benchmark/`](benchmark/README.md) validates fits against R's `mgcv` and `gamlss` across 25 scenarios.
