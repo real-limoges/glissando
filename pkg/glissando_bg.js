@@ -1,9 +1,8 @@
 /**
  * WASM wrapper for GAMLSS models.
  *
- * Two ways in: fit a fresh model in the browser, or load one someone already fit
- * and serialized with `GamlssModel::to_json()`. Either way you get the same
- * object back.
+ * Created either by fitting a model in the browser or by loading one serialized
+ * with `GamlssModel::to_json()`; both produce the same object.
  */
 export class WasmGamlssModel {
     static __wrap(ptr) {
@@ -156,8 +155,7 @@ export class WasmGamlssModel {
      * Fit a GAMLSS model. The wire formats live on [`crate::json`].
      *
      * `weights_json` is an optional JSON array of per-observation prior weights,
-     * e.g. `"[0.5, 1.0, 1.5]"`. Leave it `null` / `undefined` and you get an
-     * unweighted fit.
+     * e.g. `"[0.5, 1.0, 1.5]"`. `null` / `undefined` gives an unweighted fit.
      * @param {string} y_json
      * @param {string} data_json
      * @param {string} formula_json
@@ -183,7 +181,7 @@ export class WasmGamlssModel {
         return WasmGamlssModel.__wrap(ret[0]);
     }
     /**
-     * Fit with an explicit config JSON. Past the usual algorithm knobs,
+     * Fit with an explicit config JSON. Besides the algorithm settings,
      * `config_json` also takes `"links"` to override a parameter's link by name,
      * e.g. `{"links": {"mu": "probit"}}` (the accepted names are listed on
      * [`crate::json`]).

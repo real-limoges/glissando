@@ -84,9 +84,9 @@ pub(crate) fn finite_range(x: &Array1<f64>) -> (f64, f64) {
 /// A difference penalty (`create_penalty_matrix`) only approximates a roughness
 /// penalty on the fitted function when the knots are **equally spaced**, so the
 /// P-spline penalty and the basis have to share that assumption. This places
-/// `safe_n_splines + degree + 1` uniform knots with spacing
-/// `dx = (max − min) / (safe_n_splines − degree)` such that `t[degree] = min` and
-/// `t[safe_n_splines] = max`, leaving `degree` knots beyond each end. Over the
+/// `n_splines + degree + 1` uniform knots with spacing
+/// `dx = (max − min) / (n_splines − degree)` such that `t[degree] = min` and
+/// `t[n_splines] = max`, leaving `degree` knots beyond each end. Over the
 /// anchoring range the B-spline basis is then full-support (partition-of-unity
 /// holds), which keeps the sum-to-zero reparameterization valid. This matches
 /// mgcv's `bs="ps"` construction.
@@ -101,15 +101,16 @@ fn select_knots(
         None => finite_range(x),
     };
 
-    let safe_n_splines = n_splines.max(degree + 1);
-    let num_total_knots = safe_n_splines + degree + 1;
+    // The only caller returns early when `n_splines <= degree`, so the spacing
+    // denominator below is at least 1.
+    debug_assert!(n_splines > degree, "select_knots needs n_splines > degree");
+    let num_total_knots = n_splines + degree + 1;
 
-    // `safe_n_splines > degree` always holds, so the denominator is ≥ 1.
     // Degenerate constant-x input (or non-finite) falls back to unit spacing, so the
     // basis stays finite instead of dividing by a zero range.
     let range = max_val - min_val;
     let (origin, dx) = if range.is_finite() && range > 0.0 {
-        (min_val, range / (safe_n_splines - degree) as f64)
+        (min_val, range / (n_splines - degree) as f64)
     } else {
         let origin = if min_val.is_finite() { min_val } else { 0.0 };
         (origin, 1.0)

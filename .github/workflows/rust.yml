@@ -44,7 +44,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   audit-duplicates:
     # Fails if `cargo tree --duplicates` lists a crate not on the documented
@@ -98,7 +98,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo test --no-default-features --features pure-rust --verbose
+      # `serialization` too: pure-rust + serialization is the combination the
+      # wasm build uses, and it runs the serde-gated tests natively.
+      - run: cargo test --no-default-features --features pure-rust,serialization --verbose
 
   check-wasm:
     runs-on: ubuntu-latest
@@ -127,7 +129,7 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: 'v0.14.0'
+          version: 'v0.15.0'
 
       - run: wasm-pack test --node --no-default-features --features wasm --test wasm
 
@@ -223,7 +225,7 @@ jobs:
           fail_ci_if_error: false
 
   bench-regression:
-    # Comment-only perf signal. Runs on main pushes (so we always have a fresh baseline)
+    # Log-only perf signal (nothing is posted). Runs on main pushes (so we always have a fresh baseline)
     # and manual dispatch. Skipped on PRs to keep latency low — the noise floor on hosted
     # runners makes hard thresholds flaky, so this is a non-blocking advisory.
     # Uses --noise-threshold 0.10 because the baseline and the current run land on
@@ -252,7 +254,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target/criterion
-          key: criterion-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          # Keyed per commit: actions/cache never overwrites an existing key, so a
+          # lockfile-only key would freeze the first baseline forever. restore-keys
+          # picks up the most recent one.
+          key: criterion-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             criterion-${{ runner.os }}-
 

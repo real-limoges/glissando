@@ -66,9 +66,10 @@ The `--ignored` test is gated because it needs R to have just produced the data;
 
 ### Fixture cadence
 
-`benchmark/output/` is gitignored except for one allowlisted file, `comparison_summary.json`, which is the fixture the per-commit gate reads.
-The nightly `r-parity` workflow is the source of truth: it installs R + mgcv + gamlss, regenerates the summary, asserts parity, and uploads the regenerated `comparison_summary.json` as a build artifact.
-When families or scenarios change, download that artifact and commit it to refresh the fixture.
+`benchmark/output/` is gitignored except for one allowlisted file, `comparison_summary.json.gz`, which is the fixture the per-commit gate reads.
+It is the gzipped copy of `comparison_summary.json` that `run_comparison.sh` writes alongside it; the plain JSON (about 130 MB at 25 replicates) is over GitHub's 100 MB file limit, while the gzipped copy is about 17 MB.
+The nightly `r-parity` workflow is the source of truth: it installs R + mgcv + gamlss, regenerates the summary, asserts parity, and uploads the regenerated `comparison_summary.json.gz` as a build artifact.
+When families or scenarios change, download that artifact (or run `run_comparison.sh` locally) and commit the `.gz` to refresh the fixture.
 Machines and CI jobs without the fixture skip the per-commit gate, so a fresh clone stays green.
 
 ## Commands
@@ -151,8 +152,6 @@ uv run python ocat_benchmark.py --output-dir /tmp/ocat_bench
 - `gen_ocat_spike.py` generates the train/test parquets.
 - `src/bin/fit_ocat.rs` (`fit_ocat`) is the glissando side; `--intercept-only` selects the log-likelihood cross-check mode.
 - `fit_ocat_mgcv.R` is the mgcv side.
-- `src/bin/spike_ocat.rs` (`spike_ocat`) and `spike_ocat_report.py` are the original Phase 0 spike: three independent Binomial cumulative-logit fits, kept as a baseline that shows why a joint Ocat model is needed (the independent fits can violate monotonicity).
-
 ## Output Files
 
 All paths are under `output/`, and every per-fit file is suffixed with its replicate index.
@@ -179,7 +178,7 @@ Speedup = R time / Rust time (typically 2-10x on large data).
 ## Dependencies
 
 ### Python
-- numpy, polars, pyarrow (managed by uv)
+- numpy, polars (managed by uv)
 
 ### Rust
 - glissando (path dependency, built with its default `openblas` + `parallel` features)

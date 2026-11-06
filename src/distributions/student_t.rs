@@ -15,7 +15,7 @@ use statrs::function::gamma::ln_gamma;
 use std::collections::HashMap;
 
 /// Lower bound on the degrees-of-freedom `ν`, enforced via [`FlooredLogLink`].
-/// Keeps `ν > 2` so the variance `σ²·ν/(ν−2)` stays finite while the optimizer
+/// Keeps `ν ≥ 2` so the variance `σ²·ν/(ν−2)` stays finite while the optimizer
 /// explores the heavy-tail region. Never binds when the true `ν` is well above 2.
 const NU_FLOOR: f64 = 2.0;
 

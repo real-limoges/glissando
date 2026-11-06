@@ -219,3 +219,161 @@ fn json_roundtrip_preserves_predictions() {
         );
     }
 }
+
+// ── Inputs that used to panic or misfit silently ───────────────────────────────
+
+mod rejected_inputs {
+    use glissando::distributions::{Binomial, CensorStatus, Censored, FamilyDescriptor, Gaussian};
+    use glissando::{
+        fit_mixture, DataSet, FitConfig, Formula, GamlssError, GamlssModel, Param, Smooth, Term,
+    };
+    use ndarray::Array1;
+
+    fn line(n: usize) -> (DataSet, Array1<f64>) {
+        let x: Vec<f64> = (0..n).map(|i| i as f64 / n as f64).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .map(|&xi| 1.0 + 2.0 * xi + (7.0 * xi).sin())
+            .collect();
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::from_vec(x));
+        (data, Array1::from_vec(y))
+    }
+
+    fn mu_terms(terms: Vec<Term>) -> Formula {
+        Formula::new()
+            .with_terms(Param::Mu, terms)
+            .with_terms(Param::Sigma, vec![Term::Intercept])
+    }
+
+    fn assert_input_error(result: Result<GamlssModel, GamlssError>, what: &str) {
+        match result {
+            Err(GamlssError::Input(_)) => {}
+            other => panic!("{what}: expected GamlssError::Input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_shorter_than_response_is_an_input_error() {
+        let (data, _) = line(10);
+        let y = Array1::from_elem(12, 1.0);
+        let formula = mu_terms(vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".into(),
+            },
+        ]);
+        assert_input_error(
+            GamlssModel::fit(&data, &y, &formula, &Gaussian::new()),
+            "short column",
+        );
+    }
+
+    #[test]
+    fn data_longer_than_response_is_an_input_error() {
+        let (data, _) = line(12);
+        let y = Array1::from_elem(10, 1.0);
+        let formula = mu_terms(vec![
+            Term::Intercept,
+            Term::Linear {
+                col_name: "x".into(),
+            },
+        ]);
+        assert_input_error(
+            GamlssModel::fit(&data, &y, &formula, &Gaussian::new()),
+            "long column",
+        );
+    }
+
+    #[test]
+    fn pspline_with_too_few_basis_functions_is_an_input_error() {
+        let (data, y) = line(50);
+        for k in [0, 3] {
+            let formula = mu_terms(vec![
+                Term::Intercept,
+                Term::Smooth(Smooth::ps("x").n_splines(k)),
+            ]);
+            assert_input_error(
+                GamlssModel::fit(&data, &y, &formula, &Gaussian::new()),
+                &format!("n_splines = {k}"),
+            );
+        }
+    }
+
+    #[test]
+    fn cr_spline_with_one_knot_is_an_input_error() {
+        let (data, y) = line(50);
+        let formula = mu_terms(vec![Term::Intercept, Term::Smooth(Smooth::cr("x").k(1))]);
+        assert_input_error(
+            GamlssModel::fit(&data, &y, &formula, &Gaussian::new()),
+            "cr k = 1",
+        );
+    }
+
+    #[test]
+    fn ocat_descriptor_out_of_range_is_an_input_error() {
+        for n in [0, 1, 6] {
+            let err = FamilyDescriptor::Ocat { n_categories: n }
+                .build()
+                .expect_err("an out-of-range Ocat count must not build");
+            assert!(matches!(err, GamlssError::Input(_)), "n = {n}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn censored_upper_length_mismatch_is_an_input_error() {
+        let (data, y) = line(20);
+        let status = Array1::from_elem(20, CensorStatus::Interval);
+        let upper = Array1::from_elem(19, 10.0);
+        let family = Censored::with_upper(Box::new(Gaussian::new()), status, upper);
+        let formula = mu_terms(vec![Term::Intercept]);
+        assert_input_error(
+            GamlssModel::fit(&data, &y, &formula, &family),
+            "Censored upper",
+        );
+    }
+
+    #[test]
+    fn binomial_trials_length_mismatch_is_an_input_error() {
+        let n = 20;
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::linspace(0.0, 1.0, n));
+        let y = Array1::from_elem(n, 2.0);
+        let family = Binomial::with_trials(Array1::from_elem(n - 1, 5.0));
+        let formula = Formula::new().with_terms(Param::Mu, vec![Term::Intercept]);
+        assert_input_error(GamlssModel::fit(&data, &y, &formula, &family), "n_trials");
+    }
+
+    #[test]
+    fn zero_max_iterations_is_an_input_error() {
+        let (data, y) = line(20);
+        let formula = mu_terms(vec![Term::Intercept]);
+        let config = FitConfig {
+            max_iterations: 0,
+            ..FitConfig::default()
+        };
+        assert_input_error(
+            GamlssModel::fit_with_config(&data, &y, None, &formula, &Gaussian::new(), config),
+            "max_iterations = 0",
+        );
+    }
+
+    #[test]
+    fn mixture_on_empty_response_is_empty_data() {
+        let mut data = DataSet::new();
+        data.insert_column("x", Array1::<f64>::zeros(0));
+        let y = Array1::<f64>::zeros(0);
+        let formula = mu_terms(vec![Term::Intercept]);
+        let err = fit_mixture(
+            &data,
+            &y,
+            &formula,
+            &Gaussian::new(),
+            2,
+            &FitConfig::default(),
+            Some(1),
+        )
+        .expect_err("an empty response must not fit");
+        assert!(matches!(err, GamlssError::EmptyData), "{err:?}");
+    }
+}

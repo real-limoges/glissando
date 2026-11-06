@@ -101,14 +101,14 @@ impl FromStr for Param {
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 impl serde::Serialize for Param {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 impl<'de> serde::Deserialize<'de> for Param {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let name = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
@@ -146,7 +146,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     #[test]
     fn serde_uses_the_string_names_as_keys_and_values() {
         use std::collections::BTreeMap;

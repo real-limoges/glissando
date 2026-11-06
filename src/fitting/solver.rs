@@ -1,8 +1,10 @@
-//! Penalized weighted least squares (PWLS) solver and GCV smoothing-parameter optimization.
+//! Penalized weighted least squares (PWLS) solver and smoothing-parameter optimization.
 //!
-//! Cholesky decomposition solves the PWLS system, and a hand-rolled L-BFGS with a strong-Wolfe
-//! line search adjusts the smoothing parameters (lambda) to minimize the GCV/REML score. Most of
-//! the rest of the file caches intermediate quantities so that those two stay cheap.
+//! The PWLS system is solved by LU with an eigendecomposition fallback (`solve_robust`). A
+//! hand-rolled L-BFGS with a strong-Wolfe line search chooses the smoothing parameters (lambda)
+//! to minimize the GCV or REML score, and a multiplicative fixed-point iteration does the same
+//! for Fellner-Schall. Most of the rest of the file caches intermediate quantities so that the
+//! solves stay cheap.
 
 use super::{
     Coefficients, CovarianceMatrix, GamlssError, ModelMatrix, PenaltyMatrix, SmoothingCriterion,
@@ -676,7 +678,6 @@ pub(crate) fn run_optimization(
 ///
 /// What differs from the GCV path:
 /// - the cold start uses `initial_log_lambda` (the mgcv-style heuristic) instead of zeros;
-/// - no `target_cost` early exit, because `−V_r` is not bounded below by zero;
 /// - the returned log λ is clamped to `[-LOG_LAMBDA_CLAMP, LOG_LAMBDA_CLAMP]`
 ///   before exponentiation, so a runaway L-BFGS step cannot return a non-finite λ.
 ///

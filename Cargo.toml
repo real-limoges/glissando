@@ -22,7 +22,7 @@ openblas = ["ndarray-linalg"]
 pure-rust = ["nalgebra"]
 
 # Serialization support (serde + ndarray/serde)
-serialization = ["serde", "serde_json", "ndarray/serde", "indexmap/serde"]
+serialization = ["dep:serde", "dep:serde_json", "ndarray/serde", "indexmap/serde"]
 
 # WASM target (implies pure-rust + serialization, no parallel)
 wasm = ["pure-rust", "serialization", "wasm-bindgen", "getrandom_02", "getrandom"]
@@ -32,10 +32,6 @@ python = ["pyo3", "numpy", "serialization", "openblas", "parallel"]
 
 # Parallelism (incompatible with WASM)
 parallel = ["rayon"]
-
-# Test-only: enables Rust-side unit tests of the PyO3 bindings, which need an
-# embedded interpreter (`auto-initialize`).
-test-python = ["python", "pyo3/auto-initialize"]
 
 [dependencies]
 indexmap = { version = "2" }
@@ -76,7 +72,7 @@ getrandom = { version = "0.4", optional = true, default-features = false, featur
 
 # Optional: PyO3
 # No `extension-module` feature: it is deprecated in PyO3 0.28 and, because it stops
-# PyO3 linking libpython, it broke `cargo test --features test-python` on macOS (the
+# PyO3 linking libpython, it broke `cargo test --features python` on macOS (the
 # cdylib had undefined Python symbols). maturin sets `PYO3_BUILD_EXTENSION_MODULE`
 # itself, which has the same effect for wheel builds only.
 pyo3 = { version = "0.28.0", optional = true }
@@ -91,6 +87,8 @@ serde_json = { version = "1.0", features = ["float_roundtrip"] }
 # Scope both to non-wasm targets so wasm-pack test can build the test crate.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = "0.8"
+# Reads the gzipped mgcv parity fixture in tests/mgcv_reference.rs.
+flate2 = "1"
 insta = { version = "1.40", features = ["yaml"] }
 proptest = "1.5"
 

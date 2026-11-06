@@ -7,13 +7,16 @@
 /// A single term in a model formula: intercept, linear effect, smooth, offset,
 /// factor, or interaction.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum Term {
     Intercept,
     Linear {
         col_name: String,
     },
-    /// P-spline, tensor product, or random effect.
+    /// P-spline, cubic regression spline, tensor product, or random effect.
     Smooth(Smooth),
     /// A known per-row term that drops into the linear predictor `η` additively
     /// with a fixed coefficient of 1 (e.g. `log(exposure)` in a rate model). It
@@ -31,12 +34,12 @@ pub enum Term {
         col_name: String,
         contrast: Contrast,
         /// Sorted distinct numeric level codes, length `L`. Empty until resolved.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         levels: Vec<f64>,
         /// Optional human-readable level labels aligned with `levels`, used for
         /// readable `col[label]` coefficient naming. Empty ⇒ fall back to the
         /// numeric code in the label.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         labels: Vec<String>,
     },
     /// Row-wise product of two terms' design columns (e.g. `x:z`). There is one
@@ -50,8 +53,11 @@ pub enum Term {
 /// columns so a factor sharing its parameter with an [`Term::Intercept`] stays
 /// identifiable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(rename_all = "snake_case"))]
 pub enum Contrast {
     /// Treatment (dummy) coding against the first level as baseline: R's
     /// default `contr.treatment`. Column `j` indicates level `j + 1`.
@@ -188,7 +194,10 @@ impl std::fmt::Display for Term {
 /// effective degrees of freedom near the term's null-space dimension means the
 /// curve collapsed, and a plain `Linear` term describes it more directly.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum Smooth {
     /// 1D P-spline smooth.
     PSpline1D {
@@ -204,7 +213,7 @@ pub enum Smooth {
         /// training data at fit time and stored here, so prediction reuses the
         /// same basis. Re-deriving knots from the *prediction* data's range would
         /// give wrong values for any out-of-range or subset prediction.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         range: Option<(f64, f64)>,
     },
     /// 2D tensor product of two P-spline bases: f(x₁, x₂).
@@ -222,9 +231,9 @@ pub enum Smooth {
 
         /// Training ranges of the two margins; same fit-time resolution
         /// contract as [`Smooth::PSpline1D`]'s `range`.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         range_1: Option<(f64, f64)>,
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         range_2: Option<(f64, f64)>,
     },
     /// 1D natural cubic regression spline (mgcv `bs = "cr"`).
@@ -240,15 +249,15 @@ pub enum Smooth {
         col_name: String,
         /// glissando default: 6 (mgcv's own bs="cr" default is k = 10).
         k: usize,
-        /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` for
-        /// concessions dollars). When set, replaces the sum-to-zero centering
+        /// Optional point constraint: pin `f(pc) = 0` (e.g. `pc = 0` so the
+        /// smooth is zero at a zero dose). When set, replaces the sum-to-zero centering
         /// used for identifiability when an intercept is also present.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         pc: Option<f64>,
         /// Quantile knot positions, length `k`. **Leave empty when building a
         /// formula.** They resolve once from the training data at fit time and get
         /// stored here, so prediction reuses the identical basis.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         knots: Vec<f64>,
     },
     /// Random intercept term indexed by a grouping variable.
@@ -261,7 +270,7 @@ pub enum Smooth {
         /// a formula.** A prediction row carrying a level that never showed up in
         /// training is an error, as in mgcv's factor semantics; no coefficient is
         /// invented for an unseen group.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serialization", serde(default))]
         levels: Vec<String>,
     },
 }
@@ -290,8 +299,9 @@ impl Smooth {
         }
     }
 
-    /// 1D natural cubic regression spline on `col_name` with the mgcv-default knot
-    /// count. Knots resolve from training data at fit time, so they start empty:
+    /// 1D natural cubic regression spline on `col_name` with
+    /// [`Smooth::DEFAULT_CR_K`] knots (6; mgcv's own `bs="cr"` default is 10).
+    /// Knots resolve from training data at fit time, so they start empty:
     /// override the count with [`Smooth::k`] and pin a point constraint with
     /// [`Smooth::pc`].
     pub fn cr(col_name: impl Into<String>) -> Self {
@@ -550,13 +560,6 @@ pub(crate) mod py_parse {
     use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyTuple};
 
-    /// Defaults sourced from the native constructors ([`Smooth::ps`]/[`Smooth::cr`]),
-    /// re-aliased here so the Python FFI and the Rust API share one source of truth.
-    const DEFAULT_N_SPLINES: usize = Smooth::DEFAULT_N_SPLINES;
-    const DEFAULT_DEGREE: usize = Smooth::DEFAULT_DEGREE;
-    const DEFAULT_PENALTY_ORDER: usize = Smooth::DEFAULT_PENALTY_ORDER;
-    const DEFAULT_CR_K: usize = Smooth::DEFAULT_CR_K;
-
     /// Parse a Python list of term tuples into `Vec<Term>`.
     pub fn parse_terms(term_list: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term>> {
         term_list
@@ -632,12 +635,37 @@ pub(crate) mod py_parse {
             "ps".to_string()
         };
 
+        // Reject keys this basis does not read, as the formula-string parser does,
+        // so a typo or a key meant for the other basis is not silently ignored.
+        let allowed: &[&str] = match bs.as_str() {
+            "cr" => &["bs", "k", "pc"],
+            "ps" => &["bs", "n_splines", "degree", "penalty_order"],
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown smooth basis bs={other:?}; use \"ps\" or \"cr\""
+                )))
+            }
+        };
+        if let Some(kw) = kwargs {
+            for key in kw.keys() {
+                let key: String = key.extract()?;
+                if !allowed.contains(&key.as_str()) {
+                    return Err(PyValueError::new_err(format!(
+                        "Unknown option {key:?} for a bs={bs:?} smooth; expected one of {allowed:?}"
+                    )));
+                }
+            }
+        }
+
         match bs.as_str() {
             "cr" => {
                 let (k, pc) = if let Some(kw) = kwargs {
-                    (kwarg_or(kw, "k", DEFAULT_CR_K)?, kwarg_opt_f64(kw, "pc")?)
+                    (
+                        kwarg_or(kw, "k", Smooth::DEFAULT_CR_K)?,
+                        kwarg_opt_f64(kw, "pc")?,
+                    )
                 } else {
-                    (DEFAULT_CR_K, None)
+                    (Smooth::DEFAULT_CR_K, None)
                 };
                 Ok(Term::Smooth(Smooth::CrSpline1D {
                     col_name,
@@ -649,12 +677,16 @@ pub(crate) mod py_parse {
             _ => {
                 let (n_splines, degree, penalty_order) = if let Some(kw) = kwargs {
                     (
-                        kwarg_or(kw, "n_splines", DEFAULT_N_SPLINES)?,
-                        kwarg_or(kw, "degree", DEFAULT_DEGREE)?,
-                        kwarg_or(kw, "penalty_order", DEFAULT_PENALTY_ORDER)?,
+                        kwarg_or(kw, "n_splines", Smooth::DEFAULT_N_SPLINES)?,
+                        kwarg_or(kw, "degree", Smooth::DEFAULT_DEGREE)?,
+                        kwarg_or(kw, "penalty_order", Smooth::DEFAULT_PENALTY_ORDER)?,
                     )
                 } else {
-                    (DEFAULT_N_SPLINES, DEFAULT_DEGREE, DEFAULT_PENALTY_ORDER)
+                    (
+                        Smooth::DEFAULT_N_SPLINES,
+                        Smooth::DEFAULT_DEGREE,
+                        Smooth::DEFAULT_PENALTY_ORDER,
+                    )
                 };
                 Ok(Term::Smooth(Smooth::PSpline1D {
                     col_name,

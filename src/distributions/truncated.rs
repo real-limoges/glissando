@@ -67,7 +67,7 @@ impl Truncated {
     /// `F` at a bound array that may contain `±∞`, without the per-parameter
     /// gradients `cdf_and_grads_at` also computes; cheaper, for the call sites
     /// that only need `F` (`loglik_pointwise`, `cdf`, `quantile`; only
-    /// `theta_derivatives` needs the gradients). Infinite rows saturate to the limit
+    /// `eta_derivatives` needs the gradients). Infinite rows saturate to the limit
     /// (`+∞ → F=1`, `−∞ → F=0`) without ever passing `±∞` into the base family.
     fn cdf_at(
         &self,

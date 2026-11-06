@@ -22,7 +22,7 @@ fn main() -> Result<(), GamlssError> {
     let formula = Formula::new()
         .with_terms(
             Param::Mu,
-            vec![Term::Intercept, Term::smooth(Smooth::ps("x").n_splines(20))],
+            vec![Term::Intercept, Term::smooth(Smooth::ps("x"))],
         )
         .with_terms(Param::Sigma, vec![Term::Intercept, Term::linear("x")]);
 

@@ -16,16 +16,18 @@ use std::collections::HashSet;
 /// filtered response, referenced columns, and (optional) prior weights.
 type CompleteFrame = (DataSet, Array1<f64>, Option<Array1<f64>>);
 
-/// Drop every row that carries a missing (non-finite) value in `y`, a
-/// formula-referenced column, or (when present) its prior weight, and return
-/// owned, row-aligned copies of the response, the referenced columns, and the
-/// weights (`NaAction::DropRows`). This is R's `na.omit` over the model
-/// frame: only the variables the formula references count toward completeness,
-/// so missing values in an unrelated column drop no rows.
+/// Drop every row that carries a missing (non-finite) value in `y` or a
+/// formula-referenced column, and return owned, row-aligned copies of the
+/// response, the referenced columns, and the weights (`NaAction::DropRows`).
+/// This is R's `na.omit` over the model frame: only the variables the formula
+/// references count toward completeness, so missing values in an unrelated
+/// column drop no rows. Prior weights never drop a row; a bad weight is
+/// rejected by [`validate_inputs`] instead.
 ///
 /// The returned `DataSet` carries only the referenced columns, the only ones the
-/// fitter reads. Errors
-/// with [`GamlssError::EmptyData`] if nothing complete survives.
+/// fitter reads. Errors with [`GamlssError::Input`] if the dataset and `y`
+/// differ in length, and with [`GamlssError::EmptyData`] if nothing complete
+/// survives.
 pub fn drop_incomplete_rows(
     y: &Array1<f64>,
     data: &DataSet,
@@ -47,6 +49,17 @@ pub fn drop_incomplete_rows(
     // user error, not missing data, so `validate_inputs` rejects it outright
     // instead of dropping the row and hiding the mistake.
     let n = y.len();
+    // Row filtering indexes every column by row, so a length mismatch must be
+    // caught here: a short column would panic and a long one would be silently
+    // truncated to `y`, passing `validate_inputs` afterwards.
+    if let Some(data_n_obs) = data.n_obs() {
+        if data_n_obs != n {
+            return Err(GamlssError::Input(format!(
+                "Dataset has {} observations but response has {}",
+                data_n_obs, n,
+            )));
+        }
+    }
     let mut keep = vec![true; n];
     for (i, &yi) in y.iter().enumerate() {
         if !yi.is_finite() {
@@ -56,7 +69,7 @@ pub fn drop_incomplete_rows(
     for col in &referenced {
         if let Some(arr) = data.get(*col) {
             for (i, &v) in arr.iter().enumerate() {
-                if i < n && !v.is_finite() {
+                if !v.is_finite() {
                     keep[i] = false;
                 }
             }
@@ -91,7 +104,6 @@ pub fn drop_incomplete_rows(
 ///
 /// Checks that:
 /// - Dataset is not empty
-/// - Response variable exists
 /// - Response variable contains only finite values
 /// - All parameters in the distribution have formulas
 /// - All variables referenced in formulas exist in the data

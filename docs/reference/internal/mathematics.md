@@ -2,7 +2,7 @@
 
 This document works through the mathematics behind the GAMLSS implementation in `glissando`: the distribution-specific derivatives, the special functions, the numerical algorithms, and the convergence theory.
 
-> Generated PDF: run `bash docs/reference/build-math-pdf.sh` to produce `docs/reference/mathematics.pdf` (numbered, hyperlinked, with a table of contents).
+> Generated PDF: run `bash docs/reference/internal/build-math-pdf.sh` to produce `docs/reference/internal/mathematics.pdf` (numbered, hyperlinked, with a table of contents).
 > The PDF build uses pandoc + xelatex; see the script header for details.
 
 ## Corrections
@@ -30,7 +30,7 @@ These quantities drive the penalized iteratively reweighted least squares (P-IRL
 For each distribution we derive these quantities, then carry them through the link function with the chain rule.
 
 > **Which scale the code returns.** Each subsection below derives the natural-scale pair $(\partial\ell/\partial\theta,\; i_\theta)$ and then folds in the family's **default** link to reach $(u, w)$.
-> `Distribution::derivatives` returns only the first of those; the fold is applied generically, once, against the link the caller selected.
+> `Distribution::theta_derivatives` returns only the first of those; the fold is applied generically, once, against the link the caller selected.
 > See [CHAIN-GENERIC] in §7 for the rule, for why the $\mathrm{MIN\_WEIGHT}$ floor lives downstream of it, and for the two parameters that refuse a link override.
 > Where an $\eta$-scale $u$ or $w$ appears below, it is the value the generic rule yields under the default link.
 
@@ -2175,10 +2175,10 @@ A reverse index from each mathematical concept to the code that implements it, f
 | --- | --- |
 | Backfitting outer loop with per-parameter convergence ([BACKFIT]) | `src/fitting.rs` (`fit_gamlss`) |
 | P-IRLS inner step ([PIRLS-INNER]) | `src/fitting/scoring.rs` (`step`) |
-| `MIN_WEIGHT`, `MAX_STEP` ([INNER-SAFEGUARDS]) | `src/fitting/scoring.rs:28,32` |
+| `MIN_WEIGHT`, `MAX_STEP` ([INNER-SAFEGUARDS]) | `src/distributions.rs` (`MIN_WEIGHT`), `src/fitting/scoring.rs` (`MAX_STEP`) |
 | Prior / observation weights ([PRIOR-WEIGHTS]) | `src/fitting/scoring.rs` (`step`) |
-| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` ([INNER-SAFEGUARDS]) | `src/distributions/links.rs:8-12` |
-| `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs:24-59` |
+| `MAX_ETA`, `MIN_ETA`, `MIN_POSITIVE` ([INNER-SAFEGUARDS]) | `src/distributions/links.rs` |
+| `IdentityLink`, `LogLink`, `LogitLink` (§7) | `src/distributions/links.rs` |
 | Gaussian derivatives ([GAUSSIAN]) | `src/distributions/gaussian.rs` |
 | Student-t derivatives ([STUDENT-T]) | `src/distributions/student_t.rs` |
 | Poisson derivatives ([POISSON]) | `src/distributions/poisson.rs` |

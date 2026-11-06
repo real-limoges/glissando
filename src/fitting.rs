@@ -56,8 +56,11 @@ const EDF_COLLAPSE_SLACK: f64 = 0.5;
 /// REML is the default because at moderate sample sizes it is less likely than GCV to
 /// settle in a local minimum or undersmooth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(rename_all = "snake_case"))]
 pub enum SmoothingCriterion {
     Gcv,
     #[default]
@@ -89,8 +92,11 @@ impl SmoothingCriterion {
 /// What the fitter does with a row that carries a missing (non-finite) value in
 /// the response or any formula-referenced column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(rename_all = "snake_case"))]
 pub enum NaAction {
     /// Drop any row with a missing value in `y` or a referenced column before
     /// fitting (R's `na.omit`), and the default. Weights and every model column
@@ -104,30 +110,49 @@ pub enum NaAction {
     Fail,
 }
 
+impl NaAction {
+    /// Parse an action from its name (`"drop_rows"` or `"fail"`, case-insensitive),
+    /// plus the aliases `"drop"` / `"omit"` and `"error"` that the Python binding
+    /// has always accepted. JSON uses serde's snake_case names only.
+    pub fn from_name(name: &str) -> Result<NaAction, GamlssError> {
+        match name.to_ascii_lowercase().as_str() {
+            "drop_rows" | "drop" | "omit" => Ok(NaAction::DropRows),
+            "fail" | "error" => Ok(NaAction::Fail),
+            other => Err(GamlssError::Input(format!(
+                "Unknown na_action '{other}', expected 'drop_rows' or 'fail'"
+            ))),
+        }
+    }
+}
+
 /// Configuration options for the GAMLSS fitting algorithm.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct FitConfig {
     /// Maximum number of RS algorithm iterations (default: 200).
-    #[cfg_attr(feature = "serde", serde(default = "default_max_iter"))]
+    #[cfg_attr(feature = "serialization", serde(default = "default_max_iter"))]
     pub max_iterations: usize,
-    /// Convergence tolerance for relative coefficient changes (default: 1e-3).
-    #[cfg_attr(feature = "serde", serde(default = "default_tolerance"))]
+    /// Convergence tolerance on the relative change in each linear predictor,
+    /// max |Δη| / max(1, max |η|), per cycle (default: 1e-3).
+    #[cfg_attr(feature = "serialization", serde(default = "default_tolerance"))]
     pub tolerance: f64,
     /// Smoothing-parameter selection criterion (default: REML).
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub criterion: SmoothingCriterion,
     /// Whether to step-halve (line-search on the global deviance) each accepted
     /// Fisher-scoring update so every cycle is a monotone descent.
     /// On by default, matching R `gamlss`'s RS loop. Turning it off restores the
     /// raw, unguarded full step, which is faster per cycle but can overshoot.
-    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    #[cfg_attr(feature = "serialization", serde(default = "default_true"))]
     pub step_halving: bool,
     /// Absolute tolerance on the global-deviance change between cycles,
     /// in deviance units: the same convention as R gamlss's `c.crit`.
-    /// Convergence requires *both* this and the Δβ `tolerance` test to pass.
+    /// Convergence requires *both* this and the relative-Δη `tolerance` test to pass.
     /// Default: 1e-3.
-    #[cfg_attr(feature = "serde", serde(default = "default_gd_tolerance"))]
+    #[cfg_attr(feature = "serialization", serde(default = "default_gd_tolerance"))]
     pub gd_tolerance: f64,
     /// Per-parameter link overrides, keyed by distribution parameter
     /// (e.g. `Param::Mu → "probit"`; serialized as `{"mu": "probit"}`). Empty (the default) uses each family's
@@ -148,12 +173,12 @@ pub struct FitConfig {
     /// logit link on a Poisson μ pins the mean into `(0, 1)`, and a `sqrt` or
     /// `inverse_square` link on a Gaussian μ cannot represent a negative mean. The
     /// caller is responsible for choosing a link that suits the parameter.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub links: IndexMap<Param, String>,
     /// How to treat rows with a missing (non-finite) value in `y` or a referenced
     /// column. Default: [`NaAction::DropRows`] (R's `na.omit`). Set to
     /// [`NaAction::Fail`] to reject such inputs instead.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub na_action: NaAction,
 }
 
@@ -186,19 +211,19 @@ impl FitConfig {
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 fn default_max_iter() -> usize {
     DEFAULT_MAX_ITER
 }
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 fn default_tolerance() -> f64 {
     DEFAULT_TOLERANCE
 }
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 fn default_true() -> bool {
     true
 }
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 fn default_gd_tolerance() -> f64 {
     DEFAULT_GD_TOLERANCE
 }
@@ -219,37 +244,44 @@ impl Default for FitConfig {
 
 /// Diagnostic information from the model fitting process.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct FitDiagnostics {
     /// Whether the algorithm converged within the maximum iterations.
     pub converged: bool,
     /// Number of RS algorithm iterations performed.
     pub iterations: usize,
-    /// Maximum coefficient change in the final iteration.
+    /// Largest |Δβ| proposed by the full (undamped) Fisher-scoring step in the
+    /// final cycle, across all parameters.
     pub final_change: f64,
-    /// Maximum gradient at convergence (if computed).
+    /// Reserved: always `None`. Kept so serialized models keep their shape.
     pub max_gradient: Option<f64>,
     /// Per-parameter diagnostic information, ordered by `family.parameters()`.
     pub param_diagnostics: IndexMap<Param, ParamDiagnostic>,
     /// Non-fatal fit-quality warnings (e.g. a smooth term that collapsed onto
     /// its penalty null space). Empty on a clean fit. Serialized with the model
     /// so JSON/FFI consumers can surface fit health.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub warnings: Vec<String>,
-    /// Global deviance `−2·ℓ̂` at the final cycle. `None` only if no
-    /// cycle ran (e.g. `max_iterations == 0`).
-    #[cfg_attr(feature = "serde", serde(default))]
+    /// Global deviance `−2·ℓ̂` at the final cycle. `None` only on models
+    /// deserialized from JSON written before this field existed.
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub final_deviance: Option<f64>,
     /// Absolute global-deviance change at the final cycle,
     /// `|GD_{c−1} − GD_c|` (same units as gamlss's `c.crit`). `None` on
     /// the first cycle (no previous deviance) or if no cycle ran.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub final_deviance_change: Option<f64>,
 }
 
 /// Diagnostic information for a single distribution parameter.
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ParamDiagnostic {
     pub final_eta_change: f64,
     pub final_lambda_change: f64,
@@ -261,13 +293,16 @@ pub struct ParamDiagnostic {
     /// Number of global-deviance step-halvings applied to this parameter on the
     /// final cycle. Zero when the full Fisher step was accepted as-is or
     /// when `step_halving` is disabled.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub step_halving_hits: usize,
 }
 
 /// Fitted results for a single distribution parameter (e.g., mu, sigma).
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct FittedParameter {
     pub coefficients: Coefficients,
     pub covariance: CovarianceMatrix,
@@ -277,7 +312,7 @@ pub struct FittedParameter {
     pub fitted_values: Array1<f64>,
     /// Total EDF, always populated as `term_edf.iter().sum()` at construction
     /// time. Kept as its own stored field, rather than a computed method like
-    /// `FittingParameter::edf`, because this type round-trips through
+    /// `scoring::Update::edf`, because this type round-trips through
     /// `to_json`/`from_json` and other FFI surfaces: removing the field would
     /// break wire compatibility for existing consumers.
     pub edf: f64,
@@ -287,13 +322,13 @@ pub struct FittedParameter {
     pub term_edf: Vec<f64>,
     /// `(term_name, first_col, last_col_exclusive)` per term, aligned with
     /// `terms`. Column order matches `coefficients` and the design matrix.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub term_blocks: Vec<(String, usize, usize)>,
     /// Canonical name of an *overridden* link (see
     /// [`FitConfig::links`]), or `None` when the family default was used. `None`
     /// re-derives the link via `default_link()` at predict time, so models fitted
     /// before this field existed deserialize unchanged.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub link: Option<String>,
 }
 
@@ -464,6 +499,13 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
 ) -> Result<(IndexMap<Param, FittedParameter>, FitDiagnostics), GamlssError> {
     validate_formula_params(family, formula)?;
     validate_link_overrides(family, config)?;
+    // With no cycle there is no covariance or deviance to report, so a zero
+    // budget is a configuration error rather than an empty fit.
+    if config.max_iterations == 0 {
+        return Err(GamlssError::Input(
+            "max_iterations must be at least 1".to_string(),
+        ));
+    }
 
     let n_obs = y.len();
     // `IndexMap` keeps insertion order = `family.parameters()` order, so
@@ -688,7 +730,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
         }
 
         // Global-deviance change after the full sweep. Convergence requires
-        // *both* the Δβ test and the GD test to pass.
+        // *both* the relative-Δη test and the GD test to pass.
         //
         // Measured in ABSOLUTE deviance units, matching R gamlss's `c.crit`
         // (default 0.001). A relative test (|ΔGD|/|GD|) was used before, but its
@@ -765,7 +807,7 @@ pub(crate) fn fit_gamlss<D: Distribution + ?Sized>(
             terms: model.terms,
             lambdas: model.lambdas,
             eta: model.eta,
-            // `mu` is kept in sync with `eta` throughout fitting (see C.5 cache).
+            // `mu` is kept in sync with `eta` throughout fitting.
             fitted_values: model.mu,
             // Summed from `term_edf` rather than stored separately, so the two
             // cannot drift apart.

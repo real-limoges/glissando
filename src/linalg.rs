@@ -6,9 +6,10 @@
 //! - `pure-rust`: `nalgebra`, no system dependencies, and it builds for WASM.
 //!
 //! Both backend modules expose the identical set of functions (`solve`, `inv`,
-//! `cholesky_lower`, `log_det_via_cholesky`, `symmetric_eigh`), and the file-level
-//! `pub use` exports whichever one is active, so the rest of the crate does not
-//! depend on which is underneath.
+//! `cholesky_lower`, `symmetric_eigh`), and the file-level `pub use` exports
+//! whichever one is active, so the rest of the crate does not depend on which is
+//! underneath. Helpers built only on those (`log_det_via_cholesky`, the robust
+//! variants) live at file level and are shared.
 
 // Both `openblas` and `pure-rust` define `mod backend { … }` behind `#[cfg]`
 // gates, each assuming it's the only one active. Cargo's feature-unification
@@ -50,17 +51,6 @@ mod backend {
 
     pub fn cholesky_lower(a: &Array2<f64>) -> Result<Array2<f64>> {
         a.cholesky(UPLO::Lower).map_err(lin)
-    }
-
-    /// log|A| via Cholesky: 2·Σ log diag(L) where L = chol(A, lower).
-    /// Returns an error if A is not positive definite.
-    pub fn log_det_via_cholesky(a: &Array2<f64>) -> Result<f64> {
-        let l = cholesky_lower(a)?;
-        let mut acc = 0.0;
-        for i in 0..l.nrows() {
-            acc += l[[i, i]].ln();
-        }
-        Ok(2.0 * acc)
     }
 
     /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
@@ -173,23 +163,9 @@ mod backend {
             }
         }
 
-        // Sort eigenvalues ascending, dragging their eigenvectors along, to match
-        // `*syev`'s contract.
+        // Sort ascending to match `*syev`'s contract.
         let eigvals_unsorted: Vec<f64> = (0..n).map(|i| d[[i, i]]).collect();
-        let mut idx: Vec<usize> = (0..n).collect();
-        idx.sort_by(|&i, &j| {
-            eigvals_unsorted[i]
-                .partial_cmp(&eigvals_unsorted[j])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let eigvals = Array1::from_iter(idx.iter().map(|&i| eigvals_unsorted[i]));
-        let mut eigvecs = Array2::<f64>::zeros((n, n));
-        for (new_col, &old_col) in idx.iter().enumerate() {
-            for row in 0..n {
-                eigvecs[[row, new_col]] = v[[row, old_col]];
-            }
-        }
-        Ok((eigvals, eigvecs))
+        Ok(super::sort_eigenpairs(&eigvals_unsorted, &v))
     }
 
     #[cfg(test)]
@@ -317,48 +293,54 @@ mod backend {
         Ok(from_dmatrix(&chol.l()))
     }
 
-    /// log|A| via Cholesky: 2·Σ log diag(L) where L = chol(A, lower).
-    /// Returns an error if A is not positive definite.
-    pub fn log_det_via_cholesky(a: &Array2<f64>) -> Result<f64> {
-        let l = cholesky_lower(a)?;
-        let mut acc = 0.0;
-        for i in 0..l.nrows() {
-            acc += l[[i, i]].ln();
-        }
-        Ok(2.0 * acc)
-    }
-
     /// Symmetric eigendecomposition. Returns `(eigvals_ascending, eigvecs_as_columns)`
     /// such that `A = Q · diag(d) · Qᵀ`.
     pub fn symmetric_eigh(a: &Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
         let a_na = to_dmatrix(a);
         let eig = SymmetricEigen::new(a_na);
-        // nalgebra hands eigenvalues back in no particular order, so sort them
-        // ascending and drag the eigenvectors along by the same permutation.
-        let n = eig.eigenvalues.len();
-        let mut idx: Vec<usize> = (0..n).collect();
-        idx.sort_by(|&a, &b| {
-            eig.eigenvalues[a]
-                .partial_cmp(&eig.eigenvalues[b])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let eigvals = Array1::from_iter(idx.iter().map(|&i| eig.eigenvalues[i]));
-        let mut eigvecs = Array2::<f64>::zeros((n, n));
-        for (new_col, &old_col) in idx.iter().enumerate() {
-            for row in 0..n {
-                eigvecs[[row, new_col]] = eig.eigenvectors[(row, old_col)];
-            }
-        }
-        Ok((eigvals, eigvecs))
+        // nalgebra hands eigenvalues back in no particular order.
+        let eigvals_unsorted: Vec<f64> = eig.eigenvalues.iter().copied().collect();
+        Ok(super::sort_eigenpairs(
+            &eigvals_unsorted,
+            &from_dmatrix(&eig.eigenvectors),
+        ))
     }
 }
 
-pub use backend::{cholesky_lower, inv, log_det_via_cholesky, solve, symmetric_eigh};
+pub use backend::{cholesky_lower, inv, solve, symmetric_eigh};
+
+/// Sort eigenvalues ascending and permute the eigenvector columns to match.
+/// Shared by both backends so `symmetric_eigh` has one ordering contract.
+fn sort_eigenpairs(
+    eigvals: &[f64],
+    eigvecs: &ndarray::Array2<f64>,
+) -> (ndarray::Array1<f64>, ndarray::Array2<f64>) {
+    let mut idx: Vec<usize> = (0..eigvals.len()).collect();
+    idx.sort_by(|&i, &j| {
+        eigvals[i]
+            .partial_cmp(&eigvals[j])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let sorted_vals = ndarray::Array1::from_iter(idx.iter().map(|&i| eigvals[i]));
+    let sorted_vecs = eigvecs.select(ndarray::Axis(1), &idx);
+    (sorted_vals, sorted_vecs)
+}
+
+/// log|A| via Cholesky: 2·Σ log diag(L) where L = chol(A, lower).
+/// Returns an error if A is not positive definite.
+pub fn log_det_via_cholesky(a: &ndarray::Array2<f64>) -> Result<f64> {
+    let l = cholesky_lower(a)?;
+    let mut acc = 0.0;
+    for i in 0..l.nrows() {
+        acc += l[[i, i]].ln();
+    }
+    Ok(2.0 * acc)
+}
 
 /// Numerically stable log-determinant via symmetric eigendecomposition.
 ///
-/// This uses LAPACK `dsyev` (the symmetric eigensolver) rather than
-/// Cholesky. That keeps it consistent with the analytic REML gradient, which
+/// Tries Cholesky first and, when that fails, falls back to LAPACK `dsyev`
+/// (the symmetric eigensolver). Either way the result keeps it consistent with the analytic REML gradient, which
 /// carries the term `tr(V·S_j)` for `V = (H+S_λ)⁻¹`: the gradient of `log|H+S_λ|`
 /// w.r.t. `log λ_j` is `λ_j·tr(V·S_j)` no matter whether V came out of LU or
 /// Cholesky. `dsyev` also succeeds where Cholesky fails, on near-PD matrices

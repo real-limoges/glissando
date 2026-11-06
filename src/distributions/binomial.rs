@@ -1,5 +1,6 @@
 //! Binomial distribution: counts of successes out of `n` trials.
 
+use super::structural::check_state_len;
 use super::{
     discrete_quantile, require, DerivativeMap, Distribution, GamlssError, Link, LogitLink, Natural,
     ScoreInfo, DENOM_FLOOR, MIN_POSITIVE,
@@ -34,12 +35,14 @@ impl Binomial {
         Self { n_trials }
     }
 
-    /// Returns trials broadcast to `n_obs`. Borrows when length already matches; otherwise allocates.
-    fn trials(&self, n_obs: usize) -> Cow<'_, Array1<f64>> {
+    /// Returns trials broadcast to `n_obs`: a length-1 vector is broadcast (an
+    /// allocation); a per-observation vector is borrowed and must match `n_obs`.
+    fn trials(&self, n_obs: usize) -> Result<Cow<'_, Array1<f64>>, GamlssError> {
         if self.n_trials.len() == 1 {
-            Cow::Owned(Array1::from_elem(n_obs, self.n_trials[0]))
+            Ok(Cow::Owned(Array1::from_elem(n_obs, self.n_trials[0])))
         } else {
-            Cow::Borrowed(&self.n_trials)
+            check_state_len("Binomial: n_trials", self.n_trials.len(), n_obs)?;
+            Ok(Cow::Borrowed(&self.n_trials))
         }
     }
 }
@@ -78,7 +81,7 @@ impl Distribution for Binomial {
         // `DENOM_FLOOR` sits far below anything any link produces, so it only
         // prevents a division by exactly zero.
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(y.len());
+        let n = self.trials(y.len())?;
 
         let var_unit = mu.mapv(|m| (m * (1.0 - m)).max(DENOM_FLOOR));
         let u_mu = par_zip3_map(y, n.as_ref(), mu, |yi, ni, mi| yi - ni * mi) / &var_unit;
@@ -93,7 +96,7 @@ impl Distribution for Binomial {
         params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(y.len());
+        let n = self.trials(y.len())?;
         Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
             let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
             ln_gamma(ni + 1.0) - ln_gamma(yi + 1.0) - ln_gamma(ni - yi + 1.0)
@@ -104,7 +107,7 @@ impl Distribution for Binomial {
 
     fn variance(&self, params: &HashMap<Param, &Array1<f64>>) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(mu.len());
+        let n = self.trials(mu.len())?;
         Ok(par_zip_map(n.as_ref(), mu, |ni, mi| {
             let m = mi.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
             ni * m * (1.0 - m)
@@ -116,7 +119,7 @@ impl Distribution for Binomial {
         params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(mu.len());
+        let n = self.trials(mu.len())?;
         Ok(n.as_ref() * mu)
     }
 
@@ -131,7 +134,7 @@ impl Distribution for Binomial {
     ) -> Result<Array1<f64>, GamlssError> {
         // F(⌊y⌋ | n, μ) = I_{1−μ}(n−⌊y⌋, ⌊y⌋+1) = beta_reg(n−⌊y⌋, ⌊y⌋+1, 1−μ).
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(y.len());
+        let n = self.trials(y.len())?;
         Ok(par_zip3_map(y, mu, n.as_ref(), |yi, mui, ni| {
             if yi < 0.0 {
                 return 0.0;
@@ -151,7 +154,7 @@ impl Distribution for Binomial {
         params: &HashMap<Param, &Array1<f64>>,
     ) -> Result<Array1<f64>, GamlssError> {
         let mu = require(self, params, Param::Mu)?;
-        let n = self.trials(p.len());
+        let n = self.trials(p.len())?;
         Ok(par_zip3_map(p, mu, n.as_ref(), |pi, mui, ni| {
             let m = mui.clamp(MIN_POSITIVE, 1.0 - MIN_POSITIVE);
             let nmax = ni;

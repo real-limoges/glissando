@@ -57,6 +57,11 @@ gam_converged <- function(m) {
   if (!is.null(m$converged)) return(isTRUE(m$converged))
   if (!is.null(m$outer.info))
     return(grepl("full conv", m$outer.info$conv, ignore.case = TRUE))
+  # An extended family with no smoothing parameters (e.g. a fully parametric
+  # gaulss fit) skips outer optimization, and mgcv 1.9.x then sets neither flag.
+  # Its Newton fit converged if it stopped before the iteration cap.
+  if (length(m$sp) == 0 && !is.null(m$iter) && !is.null(m$control$maxit))
+    return(m$iter < m$control$maxit)
   # Fail closed: a fit with no convergence flag is treated as non-converged.
   fam <- tryCatch(m$family$family, error = function(e) "unknown")
   message(sprintf("gam_converged: no convergence flag for family '%s'; treating as non-converged", fam))

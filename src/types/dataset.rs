@@ -11,9 +11,12 @@ use crate::error::GamlssError;
 /// A dataset of named columns. Every column is guaranteed the same length; that
 /// invariant is enforced by [`DataSet::insert_column`] and the [`TryFrom`] impl.
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
-    feature = "serde",
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(
+    feature = "serialization",
     serde(
         try_from = "HashMap<String, Array1<f64>>",
         into = "HashMap<String, Array1<f64>>"
@@ -215,7 +218,7 @@ mod tests {
         assert_eq!(d.n_columns(), 0);
     }
 
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     #[test]
     fn dataset_json_round_trip() {
         let mut d = DataSet::new();

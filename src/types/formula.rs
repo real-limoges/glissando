@@ -11,12 +11,15 @@ use crate::Param;
 
 /// A model formula mapping parameters to term vectors, wrapping
 /// `HashMap<Param, Vec<Term>>`. The inner field is crate-private; go through the
-/// builder methods or `Deref` for read access.
+/// builder methods, or `Deref` / `DerefMut` for direct map access.
 ///
 /// Serialized, it is an object keyed by the parameter names (`{"mu": [...]}`).
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[cfg_attr(feature = "serialization", serde(transparent))]
 pub struct Formula(pub(crate) HashMap<Param, Vec<Term>>);
 
 impl Formula {

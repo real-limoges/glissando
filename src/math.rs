@@ -26,6 +26,9 @@ pub(crate) fn par_zip_map<F>(a: &Array1<f64>, b: &Array1<f64>, f: F) -> Array1<f
 where
     F: Fn(f64, f64) -> f64 + Send + Sync,
 {
+    // Rayon zip truncates to the shorter input while ndarray Zip panics; assert
+    // here so both paths fail the same way on a length mismatch.
+    assert_eq!(a.len(), b.len(), "par_zip_map: input lengths differ");
     #[cfg(feature = "parallel")]
     {
         if a.len() >= PARALLEL_THRESHOLD {
@@ -71,6 +74,11 @@ pub(crate) fn par_zip3_map<F>(
 where
     F: Fn(f64, f64, f64) -> f64 + Send + Sync,
 {
+    // See `par_zip_map`: keep the parallel and sequential paths in agreement.
+    assert!(
+        a.len() == b.len() && a.len() == c.len(),
+        "par_zip3_map: input lengths differ"
+    );
     #[cfg(feature = "parallel")]
     {
         if a.len() >= PARALLEL_THRESHOLD {

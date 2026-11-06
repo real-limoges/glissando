@@ -44,20 +44,21 @@ use std::collections::HashMap;
 /// (weight pinned at the MIN_WEIGHT floor with an O(1) score, say a quasi-separated
 /// binomial observation) injects a huge pseudo-residual that distorts λ selection:
 /// an exposure accepted at 1e6, whose proper fix is a REML criterion on the true
-/// likelihood rather than the working (z, w) model. Applies only when
-/// step-halving is on; see `MAX_STEP_NO_HALVING` for the off case.
+/// likelihood rather than the working (z, w) model. Applies on every step; with
+/// step-halving off the caller adds the tighter `MAX_STEP_NO_HALVING` cap.
 const MAX_STEP: f64 = 1e6;
 
 /// Fallback safety cap on the per-element accepted η-change when
 /// `FitConfig::step_halving` is `false`. With step-halving on, `MAX_STEP` above
 /// can be this loose because the deviance-guarded line search controls overshoot.
-/// With it off, nothing else bounds the step, so the caller (`fitting::mod`) scales
+/// With it off, nothing else bounds the step, so the caller (`fit_gamlss` in `fitting.rs`) scales
 /// the raw Fisher step back to this bound instead. It restores the pre-widening
 /// `MAX_STEP` value (20) as the only safety net that path has.
 pub(super) const MAX_STEP_NO_HALVING: f64 = 20.0;
 
-/// Backtracking floor for step-halving: `2^-10`. Below this the damped
-/// step is accepted regardless so the loop always makes progress.
+/// Backtracking floor for step-halving: `2^-10`. A step still uphill at this
+/// size is rejected outright (the block keeps its previous state for the cycle)
+/// rather than forced through, so every accepted step is a descent.
 pub(super) const MIN_STEP_ALPHA: f64 = 1.0 / 1024.0;
 
 /// New state plus per-step diagnostics produced by [`step`].

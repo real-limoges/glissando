@@ -8,7 +8,8 @@ name: R parity (nightly)
 # arrow / mgcv / gamlss is slow, so it runs on a nightly schedule (and on demand via
 # the "Run workflow" button). It regenerates the reference data with
 # `benchmark/run_comparison.sh`, then runs the otherwise-`#[ignore]`d parity test that
-# reads `benchmark/output/comparison_summary.json`.
+# reads `benchmark/output/comparison_summary.json` (and writes the gzipped copy
+# that the per-commit gate reads).
 
 on:
   schedule:
@@ -60,8 +61,10 @@ jobs:
         # rust.yml's suite) checks the *committed* copy of this file. When families
         # or scenarios change, download this artifact and commit it to refresh that
         # guardrail. Uploaded on success so only parity-passing data gets promoted.
+        # The gzipped copy is the one to commit; the plain JSON is over GitHub's
+        # 100 MB file limit.
         uses: actions/upload-artifact@v4
         with:
           name: comparison-summary
-          path: benchmark/output/comparison_summary.json
+          path: benchmark/output/comparison_summary.json.gz
           if-no-files-found: error

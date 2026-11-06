@@ -2,7 +2,7 @@
 
 glissando ships three surfaces (the typed Rust API, a WASM/npm package, and a Python extension) that share one JSON wire format.
 This page covers persisting models, the JSON facade for embedding the crate behind another boundary, and the Python API.
-The WASM package is documented in [`pkg/README.md`](../../pkg/README.md).
+The WASM package is documented in [`pkg/README.md`](../../../pkg/README.md).
 
 ## Saving and Loading Models
 
@@ -15,7 +15,7 @@ let family = descriptor.build()?;   // Box<dyn Distribution>
 ```
 
 The JSON carries a `FamilyDescriptor`, so stateful families (`Binomial`, `Ocat`) and the structural wrappers rebuild correctly, not just families named by a string.
-`MixtureModel::to_json` works the same way.
+`MixtureModel` serializes too, with a different signature: `to_json(&self)` takes no family, because the mixture already stores its `FamilyDescriptor` in its `family` field, and `MixtureModel::from_json` returns the model alone rather than a `(model, descriptor)` pair.
 
 ## Embedding Behind Your Own FFI
 
@@ -50,7 +50,7 @@ The parsing and serialization helpers (`parse_data`, `parse_formula`, `serialize
 ## Python
 
 Build with [maturin](https://github.com/PyO3/maturin): `maturin develop --release` installs into the current virtual environment, and `maturin build --release` writes a wheel under `target/wheels/`.
-Runnable scripts are in [`examples/python/`](../../examples/python/).
+Runnable scripts are in [`examples/python/`](../../../examples/python/).
 
 ```python
 import numpy as np

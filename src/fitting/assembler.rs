@@ -125,10 +125,54 @@ pub(crate) fn resolve_terms(terms: &[Term], data: &DataSet) -> Result<Vec<Term>,
     terms.iter().map(|term| resolve_term(term, data)).collect()
 }
 
+/// Reject smooth sizes that cannot build a basis. A B-spline with
+/// `n_splines <= degree` has no interior support (the basis comes back all
+/// zeros, and `n_splines == 0` makes an empty penalty block), and a cubic
+/// regression spline needs at least two knots.
+fn check_smooth_size(smooth: &Smooth) -> Result<(), GamlssError> {
+    let bspline_margin = |col: &str, n_splines: usize, degree: usize| {
+        if n_splines <= degree {
+            Err(GamlssError::Input(format!(
+                "smooth on '{col}' needs more basis functions than its degree \
+                 (got n_splines = {n_splines}, degree = {degree})"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    match smooth {
+        Smooth::PSpline1D {
+            col_name,
+            n_splines,
+            degree,
+            ..
+        } => bspline_margin(col_name, *n_splines, *degree),
+        Smooth::TensorProduct {
+            col_name_1,
+            n_splines_1,
+            col_name_2,
+            n_splines_2,
+            degree,
+            ..
+        } => {
+            bspline_margin(col_name_1, *n_splines_1, *degree)?;
+            bspline_margin(col_name_2, *n_splines_2, *degree)
+        }
+        Smooth::CrSpline1D { col_name, k, .. } if *k < 2 => Err(GamlssError::Input(format!(
+            "cubic regression spline on '{col_name}' needs k >= 2 (got k = {k})"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Resolve a single term's data-dependent state from the training columns:
-/// `CrSpline1D` knots and `Factor` levels. Recurses into `Interaction` operands.
-/// All other terms are cloned unchanged.
+/// CR-spline knots, P-spline and tensor knot ranges, random-effect levels, and
+/// `Factor` levels. Recurses into `Interaction` operands. All other terms are
+/// cloned unchanged. Smooth sizes are checked first (see [`check_smooth_size`]).
 fn resolve_term(term: &Term, data: &DataSet) -> Result<Term, GamlssError> {
+    if let Term::Smooth(smooth) = term {
+        check_smooth_size(smooth)?;
+    }
     match term {
         Term::Smooth(Smooth::CrSpline1D {
             col_name,

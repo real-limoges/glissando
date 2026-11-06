@@ -14,7 +14,10 @@ use ndarray::Array1;
 
 /// A reconstructable description of a [`Distribution`].
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum FamilyDescriptor {
     /// A stateless family addressed by name (see [`from_name`](super::from_name)).
     Named(String),
@@ -45,14 +48,15 @@ impl FamilyDescriptor {
     /// # Errors
     ///
     /// Returns [`GamlssError::Input`] if a [`Named`](FamilyDescriptor::Named)
-    /// variant names an unknown stateless family.
+    /// variant names an unknown stateless family, or if an
+    /// [`Ocat`](FamilyDescriptor::Ocat) count is outside `2..=5`.
     pub fn build(&self) -> Result<Box<dyn Distribution>, GamlssError> {
         Ok(match self {
             FamilyDescriptor::Named(name) => from_name(name)?,
             FamilyDescriptor::Binomial { n_trials } => {
                 Box::new(Binomial::with_trials(Array1::from_vec(n_trials.clone())))
             }
-            FamilyDescriptor::Ocat { n_categories } => Box::new(Ocat::new(*n_categories)),
+            FamilyDescriptor::Ocat { n_categories } => Box::new(Ocat::try_new(*n_categories)?),
             FamilyDescriptor::Censored {
                 base,
                 status,

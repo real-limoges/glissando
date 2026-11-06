@@ -7,9 +7,11 @@
 //      glissando / mgcv / gamlss fits per scenario, one entry per replicate.
 //   2. Run `cargo test --test mgcv_reference -- --ignored` to validate.
 //
-// The test is `#[ignore]` because the comparison output is gitignored and
-// regenerated locally; CI without R cannot run it (see r-parity.yml for the
-// nightly job that does).
+// Two tests read the summary. The `#[ignore]`d one validates a freshly
+// regenerated `comparison_summary.json` and needs R, so CI only runs it in the
+// nightly r-parity.yml job. `glissando_matches_committed_mgcv_fixture` runs in
+// the normal suite against the committed gzipped copy
+// (`comparison_summary.json.gz`) and skips if it is absent.
 //
 // Rather than compare a single realized dataset, the harness draws many
 // replicates per scenario and gates the *distribution* of drift across them:
@@ -211,20 +213,28 @@ impl Acc {
     }
 }
 
+/// The summary `run_comparison.sh` writes on each run; gitignored.
 const SUMMARY_PATH: &str = "benchmark/output/comparison_summary.json";
 
-fn load_summary() -> Option<ComparisonSummary> {
-    let path = Path::new(SUMMARY_PATH);
-    if !path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(path).ok()?;
+/// The committed fixture: the same summary, gzipped (the plain JSON is over
+/// GitHub's 100 MB file limit). `run_comparison.sh` writes it next to the JSON.
+const FIXTURE_PATH: &str = "benchmark/output/comparison_summary.json.gz";
+
+/// Load a summary from `path`, decompressing when it ends in `.gz`. `None` when
+/// the file is absent.
+fn load_summary(path: &str) -> Option<ComparisonSummary> {
+    let file = std::fs::File::open(Path::new(path)).ok()?;
+    let reader: Box<dyn std::io::Read> = if path.ends_with(".gz") {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
     // Surface parse errors instead of silently mapping them to "file missing":
     // a malformed field otherwise reads as "run run_comparison.sh first", which
     // sends the investigation the wrong way.
-    match serde_json::from_str(&content) {
+    match serde_json::from_reader(std::io::BufReader::new(reader)) {
         Ok(summary) => Some(summary),
-        Err(e) => panic!("comparison_summary.json exists but failed to parse: {e}"),
+        Err(e) => panic!("{path} exists but failed to parse: {e}"),
     }
 }
 
@@ -560,7 +570,7 @@ fn assert_parity(summary: &ComparisonSummary) {
 #[test]
 #[ignore = "requires benchmark/output/comparison_summary.json (run benchmark/run_comparison.sh)"]
 fn glissando_matches_mgcv_within_tolerance() {
-    let summary = load_summary()
+    let summary = load_summary(SUMMARY_PATH)
         .expect("failed to load comparison_summary.json; run benchmark/run_comparison.sh first");
     assert_parity(&summary);
 }
@@ -573,10 +583,10 @@ fn glissando_matches_mgcv_within_tolerance() {
 /// the committed copy. Not `#[ignore]`d, so it runs in the normal suite.
 #[test]
 fn glissando_matches_committed_mgcv_fixture() {
-    match load_summary() {
+    match load_summary(FIXTURE_PATH) {
         Some(summary) => assert_parity(&summary),
         None => eprintln!(
-            "skipping mgcv parity: {SUMMARY_PATH} not present. \
+            "skipping mgcv parity: {FIXTURE_PATH} not present. \
              The nightly r-parity job regenerates it; commit that fixture to \
              enforce parity on every commit."
         ),
@@ -585,7 +595,8 @@ fn glissando_matches_committed_mgcv_fixture() {
 
 #[test]
 fn comparison_summary_path_documented_in_benchmark_readme() {
-    // Sanity: the path the test reads stays consistent with what run_comparison.sh writes.
+    // Sanity: the benchmark README still names run_comparison.sh as the script that
+    // produces the summary these tests read. (It does not check the path itself.)
     let readme = std::fs::read_to_string("benchmark/README.md").unwrap_or_default();
     assert!(
         readme.contains("run_comparison.sh"),

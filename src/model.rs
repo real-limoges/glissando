@@ -15,7 +15,10 @@ use std::fmt;
 
 /// A fitted GAMLSS model: the per-parameter results plus the convergence diagnostics that say how it got there.
 #[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct GamlssModel {
     /// Fitted results keyed by parameter name, in `family.parameters()` order.
     /// It is an `IndexMap` so insertion order is preserved: iterating `models` (and
@@ -29,7 +32,7 @@ pub struct GamlssModel {
     /// deserialized before this field existed; those carry nothing to check
     /// against, so the check is skipped, the same way `FittedParameter::link`
     /// handles its own missing-field case.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serialization", serde(default))]
     pub family: Option<distributions::FamilyDescriptor>,
 }
 
@@ -136,8 +139,6 @@ impl GamlssModel {
     /// - [`GamlssError::EmptyData`] / [`GamlssError::NonFiniteValues`] /
     ///   [`GamlssError::MissingVariable`] / [`GamlssError::MissingFormula`] /
     ///   [`GamlssError::Input`]: input validation failures
-    /// - [`GamlssError::Convergence`]: RS outer loop did not converge in
-    ///   `FitConfig::max_iterations`
     /// - [`GamlssError::Linalg`]: singular `X'WX + Σλ·S`, Cholesky failure, etc.
     /// - [`GamlssError::Optimization`]: L-BFGS smoothing-parameter search failed
     /// - [`GamlssError::UnknownParameter`]: formula names a parameter the family
@@ -271,6 +272,24 @@ impl GamlssModel {
             })
     }
 
+    /// The fitted block for a parameter given by name, for the bindings. A string
+    /// that is no parameter name at all and a parameter this model lacks get the
+    /// same message, which lists the parameters that are available. Each binding
+    /// wraps the message in its own error type.
+    #[cfg(any(feature = "python", feature = "wasm"))]
+    pub(crate) fn fitted_param_by_name(
+        &self,
+        name: &str,
+    ) -> Result<&fitting::FittedParameter, String> {
+        name.parse::<Param>()
+            .ok()
+            .and_then(|p| self.models.get(&p))
+            .ok_or_else(|| {
+                let available: Vec<&str> = self.models.keys().map(|p| p.as_str()).collect();
+                format!("Parameter '{name}' not found. Available: {available:?}")
+            })
+    }
+
     /// Returns the term → coefficient column block map for the named distribution parameter.
     ///
     /// Each entry is `(term_name, first_col, last_col_exclusive)`. Column order matches
@@ -298,7 +317,7 @@ impl GamlssModel {
     /// # Errors
     ///
     /// Returns `GamlssError::Input` if serialization fails.
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     pub fn to_json<D: Distribution + ?Sized>(&self, family: &D) -> Result<String, GamlssError> {
         let wrapper = SerializedModel {
             distribution: family.descriptor(),
@@ -316,7 +335,7 @@ impl GamlssModel {
     /// # Errors
     ///
     /// Returns `GamlssError::Input` if deserialization fails.
-    #[cfg(feature = "serde")]
+    #[cfg(feature = "serialization")]
     pub fn from_json(json: &str) -> Result<(Self, distributions::FamilyDescriptor), GamlssError> {
         let wrapper: OwnedSerializedModel =
             serde_json::from_str(json).map_err(|e| GamlssError::Input(e.to_string()))?;
@@ -703,7 +722,10 @@ impl GamlssModel {
 
 /// Prediction output containing fitted values, linear predictor, and standard errors.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct PredictionResult {
     /// Response-scale: link⁻¹(eta).
     pub fitted: Array1<f64>,
@@ -749,14 +771,14 @@ impl fmt::Display for GamlssModel {
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 #[derive(serde::Serialize)]
 struct SerializedModel<'a> {
     distribution: distributions::FamilyDescriptor,
     model: &'a GamlssModel,
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialization")]
 #[derive(serde::Deserialize)]
 struct OwnedSerializedModel {
     distribution: distributions::FamilyDescriptor,
